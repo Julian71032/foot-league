@@ -8,13 +8,14 @@ export default function App() {
   const [teams, setTeams] = useState([]);
   const [matches, setMatches] = useState([]);
   const [journeeFilter, setJourneeFilter] = useState(1);
+  const [notification, setNotification] = useState('');
 
   // Formulaires Admin
   const [newTeam, setNewTeam] = useState({ nom: '', logo_url: '' });
+  const [newPlayer, setNewPlayer] = useState({ nom: '', equipe_id: '', general: 75, valeur: 10000000, age: 22 });
   const [newMatch, setNewMatch] = useState({ dom_id: '', ext_id: '', journee: 1 });
 
   useEffect(() => {
-    // Injecter Tailwind CDN dynamiquement
     if (!document.getElementById('tailwind-cdn')) {
       const script = document.createElement('script');
       script.id = 'tailwind-cdn';
@@ -23,6 +24,11 @@ export default function App() {
     }
     fetchData();
   }, []);
+
+  function showNotif(msg) {
+    setNotification(msg);
+    setTimeout(() => setNotification(''), 4000);
+  }
 
   async function fetchData() {
     const { data: dataClassement } = await supabase
@@ -37,7 +43,7 @@ export default function App() {
       .order('valeur_marchande', { ascending: false });
     if (dataButeurs) setButeurs(dataButeurs);
 
-    const { data: dataTeams } = await supabase.from('teams').select('*');
+    const { data: dataTeams } = await supabase.from('teams').select('*').order('nom');
     if (dataTeams) setTeams(dataTeams);
 
     const { data: dataMatches } = await supabase
@@ -46,41 +52,87 @@ export default function App() {
     if (dataMatches) setMatches(dataMatches);
   }
 
-  // Ajouter Équipe
+  // 1. Ajouter Équipe
   async function handleAddTeam(e) {
     e.preventDefault();
     if (!newTeam.nom) return;
-    await supabase.from('teams').insert([{ nom: newTeam.nom, logo_url: newTeam.logo_url }]);
-    setNewTeam({ nom: '', logo_url: '' });
-    fetchData();
+
+    const { error } = await supabase.from('teams').insert([{
+      nom: newTeam.nom,
+      logo_url: newTeam.logo_url
+    }]);
+
+    if (error) {
+      showNotif(`Erreur: ${error.message}`);
+    } else {
+      showNotif(`Équipe "${newTeam.nom}" ajoutée avec succès !`);
+      setNewTeam({ nom: '', logo_url: '' });
+      fetchData();
+    }
   }
 
-  // Créer un Match
+  // 2. Ajouter un Joueur
+  async function handleAddPlayer(e) {
+    e.preventDefault();
+    if (!newPlayer.nom || !newPlayer.equipe_id) {
+      showNotif("Veuillez sélectionner une équipe et entrer le nom du joueur.");
+      return;
+    }
+
+    const { error } = await supabase.from('players').insert([{
+      nom: newPlayer.nom,
+      equipe_id: newPlayer.equipe_id,
+      general: parseInt(newPlayer.general),
+      valeur_marchande: parseInt(newPlayer.valeur),
+      age: parseInt(newPlayer.age)
+    }]);
+
+    if (error) {
+      showNotif(`Erreur lors de l'ajout du joueur: ${error.message}`);
+    } else {
+      showNotif(`Joueur "${newPlayer.nom}" ajouté à l'équipe !`);
+      setNewPlayer({ nom: '', equipe_id: newPlayer.equipe_id, general: 75, valeur: 10000000, age: 22 });
+      fetchData();
+    }
+  }
+
+  // 3. Créer un Match
   async function handleAddMatch(e) {
     e.preventDefault();
     if (!newMatch.dom_id || !newMatch.ext_id) return;
-    await supabase.from('matches').insert([{
+
+    const { error } = await supabase.from('matches').insert([{
       equipe_domicile_id: newMatch.dom_id,
       equipe_exterieur_id: newMatch.ext_id,
       journee: parseInt(newMatch.journee),
       statut: 'à venir'
     }]);
-    fetchData();
+
+    if (error) {
+      showNotif(`Erreur: ${error.message}`);
+    } else {
+      showNotif("Match programmé !");
+      fetchData();
+    }
   }
 
-  // Valider le score d'un match (Admin)
+  // 4. Valider le score
   async function handleUpdateScore(matchId, scoreDom, scoreExt) {
-    await supabase.from('matches').update({
+    const { error } = await supabase.from('matches').update({
       score_domicile: parseInt(scoreDom),
       score_exterieur: parseInt(scoreExt),
       statut: 'terminé'
     }).eq('id', matchId);
-    fetchData();
+
+    if (!error) {
+      showNotif("Résultat enregistré et classement mis à jour !");
+      fetchData();
+    }
   }
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 font-sans pb-12">
-      {/* Header / Banner */}
+      {/* Header */}
       <header className="bg-slate-900 border-b border-slate-800 sticky top-0 z-50">
         <div className="max-w-6xl mx-auto px-4 py-4 flex flex-col sm:flex-row items-center justify-between gap-4">
           <div className="flex items-center gap-3">
@@ -89,11 +141,10 @@ export default function App() {
             </div>
             <div>
               <h1 className="text-xl font-extrabold tracking-tight text-white">LIGUE DE FOOTBALL</h1>
-              <p className="text-xs text-slate-400 font-medium">Saison Officielle & Stats</p>
+              <p className="text-xs text-slate-400 font-medium">Saison Officielle & Live Stats</p>
             </div>
           </div>
 
-          {/* Navigation */}
           <nav className="flex items-center bg-slate-950/60 p-1.5 rounded-xl border border-slate-800/80">
             {[
               { id: 'classement', label: '🏆 Classement' },
@@ -116,6 +167,15 @@ export default function App() {
           </nav>
         </div>
       </header>
+
+      {/* Notification Toast */}
+      {notification && (
+        <div className="max-w-md mx-auto mt-4 px-4">
+          <div className="bg-indigo-600 text-white text-xs font-semibold px-4 py-3 rounded-xl shadow-xl text-center border border-indigo-400">
+            {notification}
+          </div>
+        </div>
+      )}
 
       {/* Main Content */}
       <main className="max-w-6xl mx-auto px-4 mt-8">
@@ -166,7 +226,7 @@ export default function App() {
           </div>
         )}
 
-        {/* 2. MATCHS PAR JOURNÉE */}
+        {/* 2. MATCHS */}
         {tab === 'matchs' && (
           <div className="space-y-6">
             <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl flex flex-col sm:flex-row items-center justify-between gap-4">
@@ -195,7 +255,6 @@ export default function App() {
                 .filter((m) => m.journee === parseInt(journeeFilter))
                 .map((m) => (
                   <div key={m.id} className="bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-lg flex items-center justify-between">
-                    {/* Domicile */}
                     <div className="flex items-center gap-3 w-5/12">
                       {m.dom?.logo_url ? (
                         <img src={m.dom.logo_url} className="w-8 h-8 object-contain" alt="" />
@@ -205,7 +264,6 @@ export default function App() {
                       <span className="font-semibold text-sm truncate text-white">{m.dom?.nom}</span>
                     </div>
 
-                    {/* Score / VS */}
                     <div className="w-2/12 text-center">
                       {m.statut === 'terminé' ? (
                         <div className="bg-slate-950 px-3 py-1.5 rounded-lg font-mono font-bold text-indigo-400 text-sm border border-slate-800">
@@ -216,7 +274,6 @@ export default function App() {
                       )}
                     </div>
 
-                    {/* Extérieur */}
                     <div className="flex items-center gap-3 w-5/12 justify-end text-right">
                       <span className="font-semibold text-sm truncate text-white">{m.ext?.nom}</span>
                       {m.ext?.logo_url ? (
@@ -235,7 +292,7 @@ export default function App() {
         {tab === 'buteurs' && (
           <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl">
             <h2 className="text-xl font-bold mb-6 text-white flex items-center gap-2">
-              <span>👟</span> Liste des Joueurs
+              <span>👟</span> Base des Joueurs
             </h2>
             <div className="overflow-x-auto">
               <table className="w-full text-left border-collapse">
@@ -243,6 +300,7 @@ export default function App() {
                   <tr className="border-b border-slate-800 text-slate-400 text-xs font-semibold uppercase tracking-wider">
                     <th className="py-3 px-4">Joueur</th>
                     <th className="py-3 px-4">Équipe</th>
+                    <th className="py-3 px-4 text-center">Âge</th>
                     <th className="py-3 px-4 text-center">Général</th>
                     <th className="py-3 px-4 text-right">Valeur</th>
                   </tr>
@@ -251,7 +309,13 @@ export default function App() {
                   {buteurs.map((j) => (
                     <tr key={j.id} className="hover:bg-slate-800/30 transition-colors">
                       <td className="py-4 px-4 font-semibold text-white">{j.nom}</td>
-                      <td className="py-4 px-4 text-slate-300">{j.teams?.nom || 'Sans club'}</td>
+                      <td className="py-4 px-4 text-slate-300">
+                        <div className="flex items-center gap-2">
+                          {j.teams?.logo_url && <img src={j.teams.logo_url} alt="" className="w-5 h-5 object-contain" />}
+                          <span>{j.teams?.nom || 'Sans club'}</span>
+                        </div>
+                      </td>
+                      <td className="py-4 px-4 text-center text-slate-400 font-mono">{j.age || '-'} ans</td>
                       <td className="py-4 px-4 text-center">
                         <span className="bg-slate-800 text-amber-400 font-bold px-2.5 py-1 rounded-md text-xs border border-amber-500/20">
                           {j.general}
@@ -271,12 +335,12 @@ export default function App() {
         {/* 4. ADMIN */}
         {tab === 'admin' && (
           <div className="space-y-6">
-            <h2 className="text-2xl font-extrabold text-white">⚙️ Administration</h2>
+            <h2 className="text-2xl font-extrabold text-white">⚙️ Panneau d'Administration</h2>
 
             <div className="grid gap-6 md:grid-cols-2">
               {/* Ajouter Équipe */}
               <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl">
-                <h3 className="text-lg font-bold text-white mb-4">1. Ajouter une Équipe</h3>
+                <h3 className="text-lg font-bold text-white mb-4">1. Créer une Équipe</h3>
                 <form onSubmit={handleAddTeam} className="space-y-4">
                   <div>
                     <label className="block text-xs font-medium text-slate-400 mb-1">Nom de l'équipe</label>
@@ -290,7 +354,7 @@ export default function App() {
                     />
                   </div>
                   <div>
-                    <label className="block text-xs font-medium text-slate-400 mb-1">URL du Logo (Lien Image)</label>
+                    <label className="block text-xs font-medium text-slate-400 mb-1">URL du Logo (Lien Web Image)</label>
                     <input
                       type="url"
                       placeholder="https://..."
@@ -300,64 +364,126 @@ export default function App() {
                     />
                   </div>
                   <button type="submit" className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-semibold py-2.5 rounded-xl text-sm transition-all shadow-lg shadow-indigo-600/20">
-                    Ajouter l'équipe
+                    + Ajouter l'équipe
                   </button>
                 </form>
               </div>
 
-              {/* Créer un Match */}
+              {/* Ajouter un Joueur */}
               <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl">
-                <h3 className="text-lg font-bold text-white mb-4">2. Programmer un Match</h3>
-                <form onSubmit={handleAddMatch} className="space-y-4">
+                <h3 className="text-lg font-bold text-white mb-4">2. Ajouter un Joueur</h3>
+                <form onSubmit={handleAddPlayer} className="space-y-3">
                   <div>
-                    <label className="block text-xs font-medium text-slate-400 mb-1">Journée</label>
+                    <label className="block text-xs font-medium text-slate-400 mb-1">Équipe</label>
+                    <select
+                      value={newPlayer.equipe_id}
+                      onChange={(e) => setNewPlayer({ ...newPlayer, equipe_id: e.target.value })}
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-indigo-500"
+                      required
+                    >
+                      <option value="">-- Choisir l'équipe --</option>
+                      {teams.map((t) => <option key={t.id} value={t.id}>{t.nom}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-slate-400 mb-1">Nom du joueur</label>
                     <input
-                      type="number"
-                      value={newMatch.journee}
-                      onChange={(e) => setNewMatch({ ...newMatch, journee: e.target.value })}
-                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-indigo-500"
+                      type="text"
+                      placeholder="Ex: Bukayo Saka"
+                      value={newPlayer.nom}
+                      onChange={(e) => setNewPlayer({ ...newPlayer, nom: e.target.value })}
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2 text-sm text-white focus:outline-none focus:border-indigo-500"
                       required
                     />
                   </div>
-                  <div className="grid grid-cols-2 gap-3">
+                  <div className="grid grid-cols-3 gap-2">
                     <div>
-                      <label className="block text-xs font-medium text-slate-400 mb-1">Domicile</label>
-                      <select
-                        onChange={(e) => setNewMatch({ ...newMatch, dom_id: e.target.value })}
-                        className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2.5 text-xs text-white focus:outline-none focus:border-indigo-500"
-                        required
-                      >
-                        <option value="">Sélectionner</option>
-                        {teams.map((t) => <option key={t.id} value={t.id}>{t.nom}</option>)}
-                      </select>
+                      <label className="block text-xs font-medium text-slate-400 mb-1">Âge</label>
+                      <input
+                        type="number"
+                        value={newPlayer.age}
+                        onChange={(e) => setNewPlayer({ ...newPlayer, age: e.target.value })}
+                        className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-indigo-500"
+                      />
                     </div>
                     <div>
-                      <label className="block text-xs font-medium text-slate-400 mb-1">Extérieur</label>
-                      <select
-                        onChange={(e) => setNewMatch({ ...newMatch, ext_id: e.target.value })}
-                        className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2.5 text-xs text-white focus:outline-none focus:border-indigo-500"
-                        required
-                      >
-                        <option value="">Sélectionner</option>
-                        {teams.map((t) => <option key={t.id} value={t.id}>{t.nom}</option>)}
-                      </select>
+                      <label className="block text-xs font-medium text-slate-400 mb-1">Général</label>
+                      <input
+                        type="number"
+                        value={newPlayer.general}
+                        onChange={(e) => setNewPlayer({ ...newPlayer, general: e.target.value })}
+                        className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-indigo-500"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-slate-400 mb-1">Valeur (€)</label>
+                      <input
+                        type="number"
+                        value={newPlayer.valeur}
+                        onChange={(e) => setNewPlayer({ ...newPlayer, valeur: e.target.value })}
+                        className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-indigo-500"
+                      />
                     </div>
                   </div>
-                  <button type="submit" className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-semibold py-2.5 rounded-xl text-sm transition-all shadow-lg shadow-indigo-600/20">
-                    Enregistrer le match
+                  <button type="submit" className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-semibold py-2.5 rounded-xl text-sm transition-all shadow-lg shadow-emerald-600/20 mt-2">
+                    + Ajouter le joueur
                   </button>
                 </form>
               </div>
             </div>
 
+            {/* Programmer Match */}
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl">
+              <h3 className="text-lg font-bold text-white mb-4">3. Programmer une Rencontre</h3>
+              <form onSubmit={handleAddMatch} className="grid grid-cols-1 sm:grid-cols-4 gap-3">
+                <div>
+                  <label className="block text-xs font-medium text-slate-400 mb-1">Journée</label>
+                  <input
+                    type="number"
+                    value={newMatch.journee}
+                    onChange={(e) => setNewMatch({ ...newMatch, journee: e.target.value })}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2 text-sm text-white focus:outline-none focus:border-indigo-500"
+                    required
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-slate-400 mb-1">Domicile</label>
+                  <select
+                    onChange={(e) => setNewMatch({ ...newMatch, dom_id: e.target.value })}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-indigo-500"
+                    required
+                  >
+                    <option value="">Sélectionner</option>
+                    {teams.map((t) => <option key={t.id} value={t.id}>{t.nom}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-slate-400 mb-1">Extérieur</label>
+                  <select
+                    onChange={(e) => setNewMatch({ ...newMatch, ext_id: e.target.value })}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-indigo-500"
+                    required
+                  >
+                    <option value="">Sélectionner</option>
+                    {teams.map((t) => <option key={t.id} value={t.id}>{t.nom}</option>)}
+                  </select>
+                </div>
+                <div className="flex items-end">
+                  <button type="submit" className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-semibold py-2 rounded-xl text-sm transition-all">
+                    Programmer
+                  </button>
+                </div>
+              </form>
+            </div>
+
             {/* Saisir Score */}
             <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl">
-              <h3 className="text-lg font-bold text-white mb-4">3. Valider les Résultats</h3>
+              <h3 className="text-lg font-bold text-white mb-4">4. Valider les Résultats</h3>
               <div className="space-y-3">
                 {matches.filter((m) => m.statut !== 'terminé').map((m) => (
                   <div key={m.id} className="bg-slate-950 p-4 rounded-xl border border-slate-800 flex flex-col sm:flex-row items-center justify-between gap-3">
                     <span className="text-sm font-semibold text-slate-300">
-                      J{m.journee} : {m.dom?.nom} vs {m.ext?.nom}
+                      Journée {m.journee} : <strong className="text-white">{m.dom?.nom}</strong> vs <strong className="text-white">{m.ext?.nom}</strong>
                     </span>
                     <div className="flex items-center gap-2">
                       <input type="number" id={`dom-${m.id}`} defaultValue="0" className="w-12 bg-slate-900 border border-slate-700 rounded-lg py-1 px-2 text-center text-sm text-white" />
