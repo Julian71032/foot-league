@@ -180,7 +180,7 @@ export default function App() {
     const { data: dataPlayers } = await supabase.from('players').select('*, teams(nom, logo_url)');
     if (dataPlayers) setPlayers(dataPlayers);
 
-    // Récupération complète des matchs
+    // Récupération complète des matchs de l'utilisateur
     let { data: userMatches } = await supabase
       .from('matches')
       .select('*, dom:teams!equipe_domicile_id(*), ext:teams!equipe_exterieur_id(*)')
@@ -207,7 +207,6 @@ export default function App() {
     const list = [...allTeams].sort(() => Math.random() - 0.5);
 
     let n = list.length;
-    // Si nombre impair, ajout d'une équipe 'exempte'
     if (n % 2 !== 0) {
       list.push(null);
       n++;
@@ -225,7 +224,6 @@ export default function App() {
         const t2 = list[n - 1 - i];
 
         if (t1 !== null && t2 !== null) {
-          // Alternance Domicile / Extérieur
           let home = (round + i) % 2 === 0 ? t1 : t2;
           let away = (round + i) % 2 === 0 ? t2 : t1;
 
@@ -252,7 +250,7 @@ export default function App() {
       list.splice(0, list.length, fixed, ...rest);
     }
 
-    // 2. Phase RETOUR (inversion stricte des terrains)
+    // 2. Phase RETOUR
     const retourMatches = allerMatches.map(m => ({
       equipe_domicile_id: m.equipe_exterieur_id,
       equipe_exterieur_id: m.equipe_domicile_id,
@@ -264,27 +262,28 @@ export default function App() {
     return [...allerMatches, ...retourMatches];
   }
 
+  // Fonction accessible par TOUS les utilisateurs pour démarrer une nouvelle saison
   async function handleGenerateSchedule() {
     if (!teams || teams.length < 2) {
-      showNotif("Vous devez avoir au moins 2 équipes créées pour générer un calendrier.");
+      showNotif("Il doit y avoir au moins 2 équipes créées pour lancer une saison.");
       return;
     }
 
     const totalJournees = (teams.length % 2 === 0 ? teams.length - 1 : teams.length) * 2;
     const totalMatchs = teams.length * (teams.length - 1);
 
-    if (!window.confirm(`Voulez-vous générer automatiquement le calendrier Aller-Retour ?\n\n- ${teams.length} Équipes\n- ${totalJournees} Journées complètes\n- ${totalMatchs} Matchs programmés\n\nAttention : Cela remplacera le calendrier actuel.`)) {
+    if (!window.confirm(`Voulez-vous démarrer une NOUVELLE SAISON ?\n\n- ${teams.length} Équipes en compétition\n- ${totalJournees} Journées Aller-Retour\n- ${totalMatchs} Matchs programmés\n\nCela va réinitialiser vos scores et générer un calendrier tout neuf.`)) {
       return;
     }
 
     setGeneratingSchedule(true);
 
     try {
-      // 1. Supprimer les anciens événements et matchs de l'utilisateur
+      // 1. Supprimer les anciens événements et matchs propres à cet utilisateur
       await supabase.from('match_events').delete().eq('user_id', session.user.id);
       await supabase.from('matches').delete().eq('user_id', session.user.id);
 
-      // 2. Générer le nouveau calendrier
+      // 2. Générer le calendrier
       const fixtures = buildRoundRobinFixtures(teams, session.user.id);
 
       // 3. Insérer dans Supabase
@@ -293,7 +292,7 @@ export default function App() {
       if (error) {
         showNotif(`Erreur : ${error.message}`);
       } else {
-        showNotif(`Calendrier complet généré avec succès (${totalJournees} Journées, ${totalMatchs} Matchs) !`);
+        showNotif(`Nouvelle saison lancée ! ${totalJournees} Journées générées.`);
         setJourneeFilter(1);
         await fetchData();
       }
@@ -718,6 +717,7 @@ export default function App() {
     buildLineupForFormation(allCombined, newFmt);
   }
 
+  // --- SAUVEGARDE DÉFINITIVE DANS SUPABASE ---
   async function handleSaveLineup() {
     if (!selectedLineupTeam) return;
 
@@ -805,7 +805,6 @@ export default function App() {
     ? playersWithStats.filter(p => p.equipe_id === selectedMatch.equipe_domicile_id || p.equipe_id === selectedMatch.equipe_exterieur_id)
     : [];
 
-  // Nombre total de journées dans le calendrier actuel
   const maxJourneesCount = matches.length > 0
     ? Math.max(...matches.map(m => m.journee || 1))
     : (teams.length >= 2 ? (teams.length % 2 === 0 ? teams.length - 1 : teams.length) * 2 : 38);
@@ -1051,38 +1050,50 @@ export default function App() {
         {/* 2. MATCHS */}
         {tab === 'matchs' && (
           <div className="space-y-6">
-            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl flex flex-col sm:flex-row items-center justify-between gap-4">
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
               <div>
                 <h2 className="text-xl font-bold text-white flex items-center gap-2">📅 Calendrier des Rencontres</h2>
                 <p className="text-xs text-slate-400 mt-1">💡 Clique sur le logo ou nom d'une équipe pour <strong>modifier et sauvegarder son 11</strong></p>
               </div>
 
-              <div className="flex items-center gap-3 bg-slate-950 p-2 rounded-xl border border-slate-800">
-                <span className="text-sm text-slate-400 font-medium pl-2">Journée</span>
-                <input
-                  type="number"
-                  min="1"
-                  max={maxJourneesCount}
-                  value={journeeFilter}
-                  onChange={(e) => setJourneeFilter(e.target.value)}
-                  className="bg-slate-800 text-white font-bold w-16 px-3 py-1.5 rounded-lg border border-slate-700 focus:outline-none focus:border-indigo-500 text-center"
-                />
-                <span className="text-xs text-slate-500 pr-2">/ {maxJourneesCount}</span>
+              <div className="flex flex-wrap items-center gap-3 w-full md:w-auto justify-between md:justify-end">
+                {/* BOUTON NOUVELLE SAISON ACCESSIBLE PAR TOUS LES USERS */}
+                <button
+                  type="button"
+                  onClick={handleGenerateSchedule}
+                  disabled={generatingSchedule || teams.length < 2}
+                  className="bg-indigo-600/30 hover:bg-indigo-600 text-indigo-300 hover:text-white border border-indigo-500/40 text-xs font-bold px-3.5 py-2 rounded-xl transition-all shadow-md flex items-center gap-1.5 cursor-pointer active:scale-95"
+                  title="Génère un calendrier complet Aller-Retour pour votre carrière"
+                >
+                  <span>🎲</span> {generatingSchedule ? 'Génération...' : 'Nouvelle Saison'}
+                </button>
+
+                <div className="flex items-center gap-2 bg-slate-950 p-1.5 rounded-xl border border-slate-800">
+                  <span className="text-xs text-slate-400 font-medium pl-2">Journée</span>
+                  <input
+                    type="number"
+                    min="1"
+                    max={maxJourneesCount}
+                    value={journeeFilter}
+                    onChange={(e) => setJourneeFilter(e.target.value)}
+                    className="bg-slate-800 text-white font-bold w-14 px-2 py-1 rounded-lg border border-slate-700 focus:outline-none focus:border-indigo-500 text-center text-xs"
+                  />
+                  <span className="text-[11px] text-slate-500 pr-2">/ {maxJourneesCount}</span>
+                </div>
               </div>
             </div>
 
             <div className="grid gap-4 sm:grid-cols-1">
               {matches.filter((m) => m.journee === parseInt(journeeFilter)).length === 0 ? (
                 <div className="bg-slate-900 border border-slate-800 rounded-2xl p-12 text-center">
-                  <p className="text-slate-400 font-medium text-sm mb-4">Aucun match programmé pour cette journée.</p>
-                  {userProfile?.is_admin && (
-                    <button
-                      onClick={() => setTab('admin')}
-                      className="bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold px-4 py-2.5 rounded-xl transition-all"
-                    >
-                      Aller dans l'onglet Admin pour générer le calendrier 🎲
-                    </button>
-                  )}
+                  <p className="text-slate-400 font-medium text-sm mb-4">Aucun match programmé pour le moment.</p>
+                  <button
+                    onClick={handleGenerateSchedule}
+                    disabled={generatingSchedule || teams.length < 2}
+                    className="bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold px-5 py-3 rounded-xl transition-all shadow-lg shadow-indigo-600/30 cursor-pointer"
+                  >
+                    🎲 Lancer une Nouvelle Saison (Générer le Calendrier)
+                  </button>
                 </div>
               ) : (
                 matches
@@ -1221,7 +1232,6 @@ export default function App() {
                   <table className="w-full text-left border-collapse">
                     <thead>
                       <tr className="border-b border-slate-800 text-slate-400 text-xs font-semibold uppercase">
-                        <th className="py-3 px-2">#</th>
                         <th className="py-3 px-4">Joueur</th>
                         <th className="py-3 px-4 text-right">Passes D.</th>
                       </tr>
@@ -1533,15 +1543,15 @@ export default function App() {
               </div>
             </div>
 
-            {/* SECTION 3 : GÉNÉRATEUR AUTOMATIQUE DE CALENDRIER COMPLET */}
+            {/* SECTION 3 : GÉNÉRATEUR AUTOMATIQUE */}
             <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl">
               <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
                 <div>
                   <h3 className="text-lg font-bold text-white flex items-center gap-2">
-                    <span>🎲</span> 3. Générateur Automatique de Calendrier (Aller-Retour)
+                    <span>🎲</span> 3. Générateur de Calendrier (Aller-Retour)
                   </h3>
                   <p className="text-xs text-slate-400 mt-1 max-w-xl">
-                    Génère instantanément un calendrier officiel de championnat avec tirage aléatoire des journées. Chaque équipe jouera exactement 1 match aller et 1 match retour contre tous les clubs.
+                    Génère un calendrier officiel de championnat avec tirage aléatoire des journées.
                   </p>
                   <div className="flex items-center gap-4 mt-3 text-xs font-semibold text-slate-400">
                     <span>🛡️ Équipes : <strong className="text-indigo-400">{teams.length}</strong></span>
@@ -1556,7 +1566,7 @@ export default function App() {
                   disabled={generatingSchedule || teams.length < 2}
                   className="bg-indigo-600 hover:bg-indigo-500 active:scale-95 disabled:bg-slate-800 disabled:text-slate-600 text-white font-extrabold px-6 py-3.5 rounded-xl text-sm transition-all shadow-lg shadow-indigo-600/30 flex items-center gap-2 cursor-pointer whitespace-nowrap"
                 >
-                  <span>🎲</span> {generatingSchedule ? 'Génération en cours...' : 'Générer le Calendrier Complet'}
+                  <span>🎲</span> {generatingSchedule ? 'Génération...' : 'Lancer une Nouvelle Saison'}
                 </button>
               </div>
             </div>
