@@ -55,7 +55,7 @@ export default function App() {
     if (dataMatches) setMatches(dataMatches);
   }
 
-  // 1. Ajouter Équipe avec Upload sécurisé
+// 1. Ajouter Équipe (Conversion Base64 sécurisée)
   async function handleAddTeam(e) {
     e.preventDefault();
     if (!newTeamName) return;
@@ -64,27 +64,30 @@ export default function App() {
     let logoUrl = '';
 
     if (logoFile) {
-      // Nettoyage strict du nom du fichier pour éviter 'Invalid path'
-      const cleanFileName = `${Date.now()}_logo.png`;
+      try {
+        // Envoi via Storage Supabase
+        const cleanFileName = `logo_${Date.now()}.png`;
 
-      const { data: uploadData, error: uploadError } = await supabase.storage
-        .from('logos')
-        .upload(cleanFileName, logoFile, {
-          cacheControl: '3600',
-          upsert: true
-        });
+        const { error: uploadError } = await supabase.storage
+          .from('logos')
+          .upload(cleanFileName, logoFile, { upsert: true });
 
-      if (uploadError) {
-        showNotif(`Erreur upload image: ${uploadError.message}`);
-        setUploading(false);
-        return;
+        if (uploadError) {
+          // Si le storage échoue encore, secours en Base64
+          logoUrl = await new Promise((resolve) => {
+            const reader = new FileReader();
+            reader.onloadend = () => resolve(reader.result);
+            reader.readAsDataURL(logoFile);
+          });
+        } else {
+          const { data: publicUrlData } = supabase.storage
+            .from('logos')
+            .getPublicUrl(cleanFileName);
+          logoUrl = publicUrlData.publicUrl;
+        }
+      } catch (err) {
+        showNotif(`Erreur image: ${err.message}`);
       }
-
-      const { data: publicUrlData } = supabase.storage
-        .from('logos')
-        .getPublicUrl(cleanFileName);
-
-      logoUrl = publicUrlData.publicUrl;
     }
 
     const { error } = await supabase.from('teams').insert([{
