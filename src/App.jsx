@@ -2,6 +2,16 @@ import React, { useState, useEffect } from 'react';
 import { supabase } from './supabaseClient';
 
 export default function App() {
+  // --- AUTHENTIFICATION ---
+  const [session, setSession] = useState(null);
+  const [userProfile, setUserProfile] = useState(null);
+  const [authMode, setAuthMode] = useState('login'); // 'login' ou 'signup'
+  const [authEmail, setAuthEmail] = useState('');
+  const [authPassword, setAuthPassword] = useState('');
+  const [authPseudo, setAuthPseudo] = useState('');
+  const [authLoading, setAuthLoading] = useState(false);
+
+  // --- APP STATE ---
   const [tab, setTab] = useState('classement');
   const [classement, setClassement] = useState([]);
   const [players, setPlayers] = useState([]);
@@ -10,25 +20,22 @@ export default function App() {
   const [journeeFilter, setJourneeFilter] = useState(1);
   const [notification, setNotification] = useState('');
 
-  // Modale Détails Match
+  // Modales
   const [selectedMatch, setSelectedMatch] = useState(null);
   const [matchEvents, setMatchEvents] = useState([]);
   const [eventPlayerId, setEventPlayerId] = useState('');
   const [eventType, setEventType] = useState('but');
-
-  // Modale Détails Équipe (Effectif)
   const [selectedTeam, setSelectedTeam] = useState(null);
 
-  // Scores saisis
+  // Formulaires
   const [scoresInput, setScoresInput] = useState({});
-
-  // Formulaires Admin
   const [newTeamName, setNewTeamName] = useState('');
   const [logoFile, setLogoFile] = useState(null);
   const [uploading, setUploading] = useState(false);
   const [newPlayer, setNewPlayer] = useState({ nom: '', equipe_id: '', general: 75, valeur: 10000000, age: 22 });
   const [newMatch, setNewMatch] = useState({ dom_id: '', ext_id: '', journee: 1 });
 
+  // 1. Détection de la session au démarrage
   useEffect(() => {
     if (!document.getElementById('tailwind-cdn')) {
       const script = document.createElement('script');
@@ -36,14 +43,71 @@ export default function App() {
       script.src = 'https://cdn.tailwindcss.com';
       document.head.appendChild(script);
     }
-    fetchData();
+
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setSession(session);
+      if (session) fetchUserProfile(session.user.id);
+    });
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setSession(session);
+      if (session) {
+        fetchUserProfile(session.user.id);
+        fetchData();
+      } else {
+        setUserProfile(null);
+      }
+    });
+
+    return () => subscription.unsubscribe();
   }, []);
+
+  useEffect(() => {
+    if (session) {
+      fetchData();
+    }
+  }, [session]);
 
   function showNotif(msg) {
     setNotification(msg);
     setTimeout(() => setNotification(''), 4000);
   }
 
+  // --- GESTION COMPTE ---
+  async function fetchUserProfile(userId) {
+    const { data } = await supabase.from('profiles').select('*').eq('id', userId).single();
+    if (data) setUserProfile(data);
+  }
+
+  async function handleAuth(e) {
+    e.preventDefault();
+    setAuthLoading(true);
+
+    if (authMode === 'signup') {
+      const { data, error } = await supabase.auth.signUp({
+        email: authEmail,
+        password: authPassword,
+        options: { data: { pseudo: authPseudo } }
+      });
+      if (error) showNotif(`Erreur : ${error.message}`);
+      else showNotif("Compte créé ! Connexion en cours...");
+    } else {
+      const { error } = await supabase.auth.signInWithPassword({
+        email: authEmail,
+        password: authPassword,
+      });
+      if (error) showNotif(`Erreur : ${error.message}`);
+      else showNotif("Bon retour parmi nous !");
+    }
+    setAuthLoading(false);
+  }
+
+  async function handleLogout() {
+    await supabase.auth.signOut();
+    showNotif("Déconnexion réussie.");
+  }
+
+  // --- CHARGEMENT DES DONNÉES (FILTRÉES PAR USER VIA RLS) ---
   async function fetchData() {
     // 1. Équipes
     const { data: dataTeams } = await supabase
@@ -68,17 +132,14 @@ export default function App() {
     if (dataMatches) setMatches(dataMatches);
   }
 
-  // --- DÉTAILS MATCH ---
+  // --- MATCH EVENTS & SCORES ---
   async function openMatchDetails(match) {
     setSelectedMatch(match);
     fetchMatchEvents(match.id);
   }
 
   async function fetchMatchEvents(matchId) {
-    const { data } = await supabase
-      .from('match_events')
-      .select('*, players(nom, equipe_id)')
-      .eq('match_id', matchId);
+    const { data } = await supabase.from('match_events').select('*, players(nom, equipe_id)').eq('match_id', matchId);
     if (data) setMatchEvents(data);
   }
 
@@ -89,51 +150,41 @@ export default function App() {
     const { error } = await supabase.from('match_events').insert([{
       match_id: selectedMatch.id,
       player_id: eventPlayerId,
-      type: eventType
+      type: eventType,
+      user_id: session.user.id
     }]);
 
-    if (error) {
-      showNotif(`Erreur : ${error.message}`);
-      return;
-    }
+    if (error) { showNotif(`Erreur : ${error.message}`); return; }
 
     const player = players.find(p => p.id === eventPlayerId);
     if (player) {
       const updateData = eventType === 'but'
         ? { buts: (player.buts || 0) + 1 }
         : { passes_decisives: (player.passes_decisives || 0) + 1 };
-
       await supabase.from('players').update(updateData).eq('id', eventPlayerId);
     }
 
-    showNotif(`${eventType === 'but' ? '⚽ But' : '🎯 Passe'} enregistré !`);
+    showNotif("Action enregistrée !");
     fetchMatchEvents(selectedMatch.id);
     fetchData();
   }
 
   async function handleDeleteMatchEvent(event) {
     await supabase.from('match_events').delete().eq('id', event.id);
-
     const player = players.find(p => p.id === event.player_id);
     if (player) {
       const updateData = event.type === 'but'
         ? { buts: Math.max(0, (player.buts || 0) - 1) }
         : { passes_decisives: Math.max(0, (player.passes_decisives || 0) - 1) };
-
       await supabase.from('players').update(updateData).eq('id', event.player_id);
     }
-
     showNotif("Événement retiré.");
     fetchMatchEvents(selectedMatch.id);
     fetchData();
   }
 
-  // --- SCORES & POINTS ---
   function handleScoreInputChange(matchId, teamType, val) {
-    setScoresInput(prev => ({
-      ...prev,
-      [matchId]: { ...prev[matchId], [teamType]: val }
-    }));
+    setScoresInput(prev => ({ ...prev, [matchId]: { ...prev[matchId], [teamType]: val } }));
   }
 
   async function handleSaveMatchScore(match) {
@@ -141,37 +192,25 @@ export default function App() {
     const scoreDom = parseInt(matchScores.dom !== undefined ? matchScores.dom : match.score_domicile);
     const scoreExt = parseInt(matchScores.ext !== undefined ? matchScores.ext : match.score_exterieur);
 
-    if (isNaN(scoreDom) || isNaN(scoreExt)) {
-      showNotif("Veuillez saisir un score valide.");
-      return;
-    }
+    if (isNaN(scoreDom) || isNaN(scoreExt)) { showNotif("Saisissez un score valide."); return; }
 
     let ptsDom = 0, ptsExt = 0;
-    if (scoreDom > scoreExt) { ptsDom = 3; }
-    else if (scoreDom < scoreExt) { ptsExt = 3; }
+    if (scoreDom > scoreExt) ptsDom = 3;
+    else if (scoreDom < scoreExt) ptsExt = 3;
     else { ptsDom = 1; ptsExt = 1; }
 
     const teamDom = teams.find(t => t.id === match.equipe_domicile_id);
     const teamExt = teams.find(t => t.id === match.equipe_exterieur_id);
 
-    await supabase.from('matches').update({
-      score_domicile: scoreDom,
-      score_exterieur: scoreExt,
-      statut: 'terminé'
-    }).eq('id', match.id);
+    await supabase.from('matches').update({ score_domicile: scoreDom, score_exterieur: scoreExt, statut: 'terminé' }).eq('id', match.id);
+    if (teamDom) await supabase.from('teams').update({ points: (teamDom.points || 0) + ptsDom }).eq('id', teamDom.id);
+    if (teamExt) await supabase.from('teams').update({ points: (teamExt.points || 0) + ptsExt }).eq('id', teamExt.id);
 
-    if (teamDom) {
-      await supabase.from('teams').update({ points: (teamDom.points || 0) + ptsDom }).eq('id', teamDom.id);
-    }
-    if (teamExt) {
-      await supabase.from('teams').update({ points: (teamExt.points || 0) + ptsExt }).eq('id', teamExt.id);
-    }
-
-    showNotif(`Score enregistré (${scoreDom} - ${scoreExt}). Points mis à jour !`);
+    showNotif("Score enregistré et points mis à jour !");
     fetchData();
   }
 
-  // --- ADMIN HANDLERS ---
+  // --- ADMIN ACTIONS ---
   async function handleAddTeam(e) {
     e.preventDefault();
     if (!newTeamName) return;
@@ -193,16 +232,18 @@ export default function App() {
       }
     }
 
-    const { error } = await supabase.from('teams').insert([{ nom: newTeamName, logo_url: logoUrl, points: 0 }]);
+    const { error } = await supabase.from('teams').insert([{
+      nom: newTeamName,
+      logo_url: logoUrl,
+      points: 0,
+      user_id: session.user.id
+    }]);
     setUploading(false);
 
-    if (error) {
-      showNotif(`Erreur : ${error.message}`);
-    } else {
+    if (error) showNotif(`Erreur : ${error.message}`);
+    else {
       showNotif(`Équipe "${newTeamName}" créée !`);
-      setNewTeamName('');
-      setLogoFile(null);
-      fetchData();
+      setNewTeamName(''); setLogoFile(null); fetchData();
     }
   }
 
@@ -217,7 +258,8 @@ export default function App() {
       valeur_marchande: parseInt(newPlayer.valeur),
       age: parseInt(newPlayer.age),
       buts: 0,
-      passes_decisives: 0
+      passes_decisives: 0,
+      user_id: session.user.id
     }]);
 
     if (error) showNotif(`Erreur : ${error.message}`);
@@ -236,14 +278,12 @@ export default function App() {
       equipe_domicile_id: newMatch.dom_id,
       equipe_exterieur_id: newMatch.ext_id,
       journee: parseInt(newMatch.journee),
-      statut: 'à venir'
+      statut: 'à venir',
+      user_id: session.user.id
     }]);
 
     if (error) showNotif(`Erreur : ${error.message}`);
-    else {
-      showNotif("Match programmé !");
-      fetchData();
-    }
+    else { showNotif("Match programmé !"); fetchData(); }
   }
 
   function formatMoney(amount) {
@@ -257,11 +297,89 @@ export default function App() {
 
   const topButeurs = [...players].sort((a, b) => (b.buts || 0) - (a.buts || 0));
   const topPasseurs = [...players].sort((a, b) => (b.passes_decisives || 0) - (a.passes_decisives || 0));
-
   const matchPlayers = selectedMatch
     ? players.filter(p => p.equipe_id === selectedMatch.equipe_domicile_id || p.equipe_id === selectedMatch.equipe_exterieur_id)
     : [];
 
+  // --- ÉCRAN DE CONNEXION S'IL N'Y A PAS DE SESSION ---
+  if (!session) {
+    return (
+      <div className="min-h-screen bg-slate-950 text-slate-100 flex items-center justify-center p-4 font-sans">
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-8 max-w-md w-full shadow-2xl">
+          <div className="text-center mb-8">
+            <div className="inline-block bg-indigo-600 text-white p-3 rounded-2xl shadow-lg shadow-indigo-500/30 mb-3 text-2xl">⚽</div>
+            <h1 className="text-2xl font-black text-white tracking-tight">LIGUE DE FOOTBALL</h1>
+            <p className="text-xs text-slate-400 mt-1">Connectez-vous pour retrouver votre carrière sauvegardée</p>
+          </div>
+
+          {notification && (
+            <div className="bg-indigo-600/30 border border-indigo-500 text-indigo-200 text-xs p-3 rounded-xl mb-6 text-center font-semibold">
+              {notification}
+            </div>
+          )}
+
+          <form onSubmit={handleAuth} className="space-y-4">
+            {authMode === 'signup' && (
+              <div>
+                <label className="block text-xs font-semibold text-slate-400 mb-1">Pseudo</label>
+                <input
+                  type="text"
+                  placeholder="Ex: CoachManager"
+                  value={authPseudo}
+                  onChange={(e) => setAuthPseudo(e.target.value)}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-indigo-500"
+                  required
+                />
+              </div>
+            )}
+
+            <div>
+              <label className="block text-xs font-semibold text-slate-400 mb-1">Email</label>
+              <input
+                type="email"
+                placeholder="votre@email.com"
+                value={authEmail}
+                onChange={(e) => setAuthEmail(e.target.value)}
+                className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-indigo-500"
+                required
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-slate-400 mb-1">Mot de passe</label>
+              <input
+                type="password"
+                placeholder="••••••••"
+                value={authPassword}
+                onChange={(e) => setAuthPassword(e.target.value)}
+                className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-indigo-500"
+                required
+              />
+            </div>
+
+            <button
+              type="submit"
+              disabled={authLoading}
+              className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-3 rounded-xl text-sm transition-all shadow-lg shadow-indigo-600/30"
+            >
+              {authLoading ? 'Chargement...' : authMode === 'login' ? 'Se connecter' : 'Créer un compte'}
+            </button>
+          </form>
+
+          <div className="mt-6 text-center">
+            <button
+              onClick={() => setAuthMode(authMode === 'login' ? 'signup' : 'login')}
+              className="text-xs text-indigo-400 hover:underline font-semibold"
+            >
+              {authMode === 'login' ? "Pas de compte ? Inscrivez-vous" : "Déjà un compte ? Connectez-vous"}
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // --- APPLICATION PRINCIPALE UNE FOIS CONNECTÉ ---
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 font-sans pb-12">
       {/* Header */}
@@ -271,29 +389,42 @@ export default function App() {
             <div className="bg-indigo-600 text-white p-2.5 rounded-xl shadow-lg shadow-indigo-500/20">⚽</div>
             <div>
               <h1 className="text-xl font-extrabold tracking-tight text-white">LIGUE DE FOOTBALL</h1>
-              <p className="text-xs text-slate-400 font-medium">Saison Officielle & Live Stats</p>
+              <p className="text-xs text-slate-400 font-medium">
+                Joueur : <span className="text-indigo-400 font-bold">{userProfile?.pseudo || session.user.email}</span>
+                {userProfile?.is_admin && <span className="ml-2 bg-amber-500/20 text-amber-400 border border-amber-500/30 text-[10px] px-2 py-0.5 rounded-full font-bold">ADMIN</span>}
+              </p>
             </div>
           </div>
 
-          <nav className="flex items-center bg-slate-950/60 p-1.5 rounded-xl border border-slate-800/80">
-            {[
-              { id: 'classement', label: '🏆 Classement' },
-              { id: 'matchs', label: '📅 Matchs' },
-              { id: 'buteurs', label: '👟 Stats Joueurs' },
-              { id: 'admin', label: '⚙️ Admin' },
-            ].map((item) => (
-              <button
-                key={item.id}
-                onClick={() => setTab(item.id)}
-                className={`px-4 py-2 rounded-lg text-sm font-semibold transition-all duration-200 ${
-                  tab === item.id
-                    ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/30'
-                    : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50'
-                }`}
-              >
-                {item.label}
-              </button>
-            ))}
+          <nav className="flex items-center gap-2">
+            <div className="flex items-center bg-slate-950/60 p-1.5 rounded-xl border border-slate-800/80">
+              {[
+                { id: 'classement', label: '🏆 Classement' },
+                { id: 'matchs', label: '📅 Matchs' },
+                { id: 'buteurs', label: '👟 Stats Joueurs' },
+                ...(userProfile?.is_admin ? [{ id: 'admin', label: '⚙️ Admin' }] : []),
+              ].map((item) => (
+                <button
+                  key={item.id}
+                  onClick={() => setTab(item.id)}
+                  className={`px-4 py-2 rounded-lg text-sm font-semibold transition-all duration-200 ${
+                    tab === item.id
+                      ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/30'
+                      : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50'
+                  }`}
+                >
+                  {item.label}
+                </button>
+              ))}
+            </div>
+
+            <button
+              onClick={handleLogout}
+              className="bg-rose-600/20 hover:bg-rose-600 text-rose-300 hover:text-white border border-rose-500/30 text-xs font-bold px-3 py-2.5 rounded-xl transition-all"
+              title="Déconnexion"
+            >
+              🚪
+            </button>
           </nav>
         </div>
       </header>
@@ -513,13 +644,13 @@ export default function App() {
           </div>
         )}
 
-        {/* 4. ADMIN */}
-        {tab === 'admin' && (
+        {/* 4. ADMIN (RÉSERVÉ AUX COMPTES ADMIN) */}
+        {tab === 'admin' && userProfile?.is_admin && (
           <div className="space-y-6">
             <h2 className="text-2xl font-extrabold text-white">⚙️ Panneau d'Administration</h2>
 
             <div className="grid gap-6 md:grid-cols-2">
-              {/* Création Équipe */}
+              {/* Équipe */}
               <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl">
                 <h3 className="text-lg font-bold text-white mb-4">1. Créer une Équipe</h3>
                 <form onSubmit={handleAddTeam} className="space-y-4">
@@ -549,7 +680,7 @@ export default function App() {
                 </form>
               </div>
 
-              {/* Création Joueur (AVEC NOTE, ÂGE, ET VALEUR) */}
+              {/* Joueur */}
               <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl">
                 <h3 className="text-lg font-bold text-white mb-4">2. Ajouter un Joueur</h3>
                 <form onSubmit={handleAddPlayer} className="space-y-3">
@@ -577,7 +708,6 @@ export default function App() {
                     />
                   </div>
 
-                  {/* Champs Générale / Âge / Valeur */}
                   <div className="grid grid-cols-3 gap-2">
                     <div>
                       <label className="block text-xs font-medium text-slate-400 mb-1">Général</label>
@@ -620,7 +750,7 @@ export default function App() {
               </div>
             </div>
 
-            {/* Programer Match */}
+            {/* Match */}
             <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl">
               <h3 className="text-lg font-bold text-white mb-4">3. Programmer une Rencontre</h3>
               <form onSubmit={handleAddMatch} className="grid grid-cols-1 sm:grid-cols-4 gap-3">
@@ -667,7 +797,7 @@ export default function App() {
         )}
       </main>
 
-      {/* --- MODALE DÉTAILS D'UNE ÉQUIPE (EFFECTIF) --- */}
+      {/* --- MODALE DÉTAILS D'UNE ÉQUIPE --- */}
       {selectedTeam && (
         <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-2xl w-full p-6 shadow-2xl relative">
