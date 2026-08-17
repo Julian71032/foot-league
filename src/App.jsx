@@ -11,7 +11,10 @@ export default function App() {
   const [notification, setNotification] = useState('');
 
   // Formulaires Admin
-  const [newTeam, setNewTeam] = useState({ nom: '', logo_url: '' });
+  const [newTeamName, setNewTeamName] = useState('');
+  const [logoFile, setLogoFile] = useState(null);
+  const [uploading, setUploading] = useState(false);
+
   const [newPlayer, setNewPlayer] = useState({ nom: '', equipe_id: '', general: 75, valeur: 10000000, age: 22 });
   const [newMatch, setNewMatch] = useState({ dom_id: '', ext_id: '', journee: 1 });
 
@@ -52,21 +55,51 @@ export default function App() {
     if (dataMatches) setMatches(dataMatches);
   }
 
-  // 1. Ajouter Équipe
+  // 1. Ajouter Équipe avec Upload de Fichier Logo
   async function handleAddTeam(e) {
     e.preventDefault();
-    if (!newTeam.nom) return;
+    if (!newTeamName) return;
 
+    setUploading(true);
+    let logoUrl = '';
+
+    // Si une image a été sélectionnée
+    if (logoFile) {
+      const fileExt = logoFile.name.split('.').pop();
+      const fileName = `${Date.now()}_${Math.random().toString(36).substring(7)}.${fileExt}`;
+
+      const { data: uploadData, error: uploadError } = await supabase.storage
+        .from('logos')
+        .upload(fileName, logoFile);
+
+      if (uploadError) {
+        showNotif(`Erreur upload image: ${uploadError.message}`);
+        setUploading(false);
+        return;
+      }
+
+      // Récupération de l'URL publique de l'image
+      const { data: publicUrlData } = supabase.storage
+        .from('logos')
+        .getPublicUrl(fileName);
+
+      logoUrl = publicUrlData.publicUrl;
+    }
+
+    // Insertion de l'équipe dans la base de données
     const { error } = await supabase.from('teams').insert([{
-      nom: newTeam.nom,
-      logo_url: newTeam.logo_url
+      nom: newTeamName,
+      logo_url: logoUrl
     }]);
 
+    setUploading(false);
+
     if (error) {
-      showNotif(`Erreur: ${error.message}`);
+      showNotif(`Erreur lors de la création de l'équipe: ${error.message}`);
     } else {
-      showNotif(`Équipe "${newTeam.nom}" ajoutée avec succès !`);
-      setNewTeam({ nom: '', logo_url: '' });
+      showNotif(`Équipe "${newTeamName}" créée avec succès !`);
+      setNewTeamName('');
+      setLogoFile(null);
       fetchData();
     }
   }
@@ -88,9 +121,9 @@ export default function App() {
     }]);
 
     if (error) {
-      showNotif(`Erreur lors de l'ajout du joueur: ${error.message}`);
+      showNotif(`Erreur: ${error.message}`);
     } else {
-      showNotif(`Joueur "${newPlayer.nom}" ajouté à l'équipe !`);
+      showNotif(`Joueur "${newPlayer.nom}" ajouté !`);
       setNewPlayer({ nom: '', equipe_id: newPlayer.equipe_id, general: 75, valeur: 10000000, age: 22 });
       fetchData();
     }
@@ -338,7 +371,7 @@ export default function App() {
             <h2 className="text-2xl font-extrabold text-white">⚙️ Panneau d'Administration</h2>
 
             <div className="grid gap-6 md:grid-cols-2">
-              {/* Ajouter Équipe */}
+              {/* Ajouter Équipe avec Import Image */}
               <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl">
                 <h3 className="text-lg font-bold text-white mb-4">1. Créer une Équipe</h3>
                 <form onSubmit={handleAddTeam} className="space-y-4">
@@ -347,24 +380,27 @@ export default function App() {
                     <input
                       type="text"
                       placeholder="Ex: Arsenal"
-                      value={newTeam.nom}
-                      onChange={(e) => setNewTeam({ ...newTeam, nom: e.target.value })}
+                      value={newTeamName}
+                      onChange={(e) => setNewTeamName(e.target.value)}
                       className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-indigo-500"
                       required
                     />
                   </div>
                   <div>
-                    <label className="block text-xs font-medium text-slate-400 mb-1">URL du Logo (Lien Web Image)</label>
+                    <label className="block text-xs font-medium text-slate-400 mb-1">Fichier Logo (PNG, JPG, SVG)</label>
                     <input
-                      type="url"
-                      placeholder="https://..."
-                      value={newTeam.logo_url}
-                      onChange={(e) => setNewTeam({ ...newTeam, logo_url: e.target.value })}
-                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-indigo-500"
+                      type="file"
+                      accept="image/*"
+                      onChange={(e) => setLogoFile(e.target.files[0])}
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2 text-xs text-slate-300 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-indigo-600 file:text-white hover:file:bg-indigo-500 cursor-pointer"
                     />
                   </div>
-                  <button type="submit" className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-semibold py-2.5 rounded-xl text-sm transition-all shadow-lg shadow-indigo-600/20">
-                    + Ajouter l'équipe
+                  <button
+                    type="submit"
+                    disabled={uploading}
+                    className="w-full bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-700 text-white font-semibold py-2.5 rounded-xl text-sm transition-all shadow-lg shadow-indigo-600/20"
+                  >
+                    {uploading ? 'Envoi du logo en cours...' : '+ Ajouter l\'équipe'}
                   </button>
                 </form>
               </div>
