@@ -38,7 +38,7 @@ function getPositionRank(posteStr) {
   return POSITION_ORDER[code] ?? 99;
 }
 
-// Dispositifs tactiques disponibles (slots : [DEF, MID, ATT])
+// Dispositifs tactiques : Défenseurs, Milieux, Attaquants
 const FORMATIONS = {
   '4-3-3': { name: '4-3-3 (Classique)', def: 4, mid: 3, att: 3 },
   '4-4-2': { name: '4-4-2 (Équilibré)', def: 4, mid: 4, att: 2 },
@@ -76,14 +76,14 @@ export default function App() {
   const [selectedTeam, setSelectedTeam] = useState(null);
   const [editingPlayer, setEditingPlayer] = useState(null);
 
-  // ÉTAT TACTIQUE / COMPOSITION EN DIRECT
+  // ÉTAT TACTIQUE / 11 DE DÉPART INTERACTIF
   const [selectedLineupTeam, setSelectedLineupTeam] = useState(null);
   const [currentFormation, setCurrentFormation] = useState('4-3-3');
-  const [teamLineupPlayers, setTeamLineupPlayers] = useState([]); // [0] = GK, [1..def] = DEF, etc.
+  const [teamLineupPlayers, setTeamLineupPlayers] = useState([]);
   const [teamBenchPlayers, setTeamBenchPlayers] = useState([]);
-  const [draggedPlayer, setDraggedPlayer] = useState(null); // Pour le drag & drop
+  const [selectedSlot, setSelectedSlot] = useState(null); // { type: 'pitch'|'bench', index: number }
 
-  // Formulaires Admin, Scores & Transferts
+  // Formulaires Admin & Scores
   const [scoresInput, setScoresInput] = useState({});
   const [newTeamName, setNewTeamName] = useState('');
   const [logoFile, setLogoFile] = useState(null);
@@ -232,7 +232,7 @@ export default function App() {
         } else if (m.equipe_exterieur_id === team.id) {
           joues++;
           if (m.score_exterieur > m.score_domicile) points += 3;
-          else if (m.score_domicile === m.score_exterieur) points += 1;
+          else if (m.score_exterieur === m.score_domicile) points += 1;
         }
       }
     });
@@ -525,70 +525,103 @@ export default function App() {
 
   const teamRoster = selectedTeam ? getSortedTeamPlayers(selectedTeam.id) : [];
 
-  // --- INITIALISATION DU TERRAIN TACTIQUE QUAND ON CLIQUE SUR UNE ÉQUIPE ---
+  // --- INITIALISATION TACTIQUE QUAND ON OUVRE UNE ÉQUIPE DE MATCH ---
   function openTeamLineup(team) {
     setSelectedLineupTeam(team);
+    setSelectedSlot(null);
     const sorted = getSortedTeamPlayers(team.id);
-    setTeamLineupPlayers(sorted.slice(0, 11)); // 11 premiers titulaires
-    setTeamBenchPlayers(sorted.slice(11));     // Reste sur le banc
+    buildLineupForFormation(sorted, '4-3-3');
   }
 
-  // --- GESTION DU DRAG & DROP & ÉCHANGE DE JOUEURS ---
-  function handleDragStart(e, player, source, index) {
-    setDraggedPlayer({ player, source, index });
-    e.dataTransfer.setData('text/plain', JSON.stringify({ player, source, index }));
-  }
+  // Organise les 11 meilleurs joueurs selon la formation choisie
+  function buildLineupForFormation(allPlayers, formationKey) {
+    const config = FORMATIONS[formationKey] || FORMATIONS['4-3-3'];
+    setCurrentFormation(formationKey);
 
-  function handleDragOver(e) {
-    e.preventDefault();
-  }
+    const gks = allPlayers.filter(p => p.poste === 'G');
+    const defs = allPlayers.filter(p => ['DC', 'DD', 'DG', 'DLD', 'DLG'].includes(p.poste));
+    const mids = allPlayers.filter(p => ['MDC', 'MC', 'MOC', 'MD', 'MG'].includes(p.poste));
+    const atts = allPlayers.filter(p => ['BU', 'AT', 'AD', 'AG', 'SA'].includes(p.poste));
 
-  function handleDropOnPitchSlot(targetIndex) {
-    if (!draggedPlayer) return;
+    const selectedGK = gks.slice(0, 1);
+    const selectedDEF = defs.slice(0, config.def);
+    const selectedMID = mids.slice(0, config.mid);
+    const selectedATT = atts.slice(0, config.att);
 
-    if (draggedPlayer.source === 'pitch') {
-      // Échange entre deux slots du terrain
-      const updated = [...teamLineupPlayers];
-      const temp = updated[targetIndex];
-      updated[targetIndex] = draggedPlayer.player;
-      updated[draggedPlayer.index] = temp;
-      setTeamLineupPlayers(updated);
-    } else if (draggedPlayer.source === 'bench') {
-      // Remplacement d'un joueur du terrain par un remplaçant du banc
-      const updatedPitch = [...teamLineupPlayers];
-      const updatedBench = [...teamBenchPlayers];
+    const startersSet = new Set([...selectedGK, ...selectedDEF, ...selectedMID, ...selectedATT].map(p => p.id));
+    const remaining = allPlayers.filter(p => !startersSet.has(p.id));
 
-      const outgoing = updatedPitch[targetIndex];
-      updatedPitch[targetIndex] = draggedPlayer.player;
-
-      // On remplace dans le banc
-      updatedBench[draggedPlayer.index] = outgoing;
-
-      setTeamLineupPlayers(updatedPitch);
-      setTeamBenchPlayers(updatedBench);
+    // Si on manque de joueurs spécifiques, on comble pour avoir 11 titulaires
+    while (selectedGK.length + selectedDEF.length + selectedMID.length + selectedATT.length < 11 && remaining.length > 0) {
+      const nextP = remaining.shift();
+      if (selectedGK.length === 0) selectedGK.push(nextP);
+      else if (selectedDEF.length < config.def) selectedDEF.push(nextP);
+      else if (selectedMID.length < config.mid) selectedMID.push(nextP);
+      else selectedATT.push(nextP);
+      startersSet.add(nextP.id);
     }
-    setDraggedPlayer(null);
+
+    const finalStarters = [...selectedGK, ...selectedDEF, ...selectedMID, ...selectedATT];
+    const finalBench = allPlayers.filter(p => !startersSet.has(p.id));
+
+    setTeamLineupPlayers(finalStarters);
+    setTeamBenchPlayers(finalBench);
   }
 
-  function handleDropOnBench(targetBenchIndex) {
-    if (!draggedPlayer || draggedPlayer.source === 'bench') return;
+  // Changement de formation via le sélecteur
+  function handleFormationChange(newFmt) {
+    const allCombined = [...teamLineupPlayers, ...teamBenchPlayers];
+    buildLineupForFormation(allCombined, newFmt);
+  }
 
-    // Envoi du joueur du terrain vers le banc
+  // --- ÉCHANGE / REMPLACEMENT DE JOUEURS EN 1 CLIC OU DRAG ---
+  function handleSelectSlot(type, index) {
+    // Si aucun joueur n'était sélectionné : on sélectionne
+    if (!selectedSlot) {
+      setSelectedSlot({ type, index });
+      return;
+    }
+
+    // Si on clique sur le même : on annule
+    if (selectedSlot.type === type && selectedSlot.index === index) {
+      setSelectedSlot(null);
+      return;
+    }
+
+    // Exécution de la permutation
     const updatedPitch = [...teamLineupPlayers];
     const updatedBench = [...teamBenchPlayers];
 
-    const pitchPlayer = draggedPlayer.player;
-    const benchPlayer = updatedBench[targetBenchIndex];
+    if (selectedSlot.type === 'pitch' && type === 'pitch') {
+      // 1. Échange entre 2 joueurs du terrain
+      const temp = updatedPitch[selectedSlot.index];
+      updatedPitch[selectedSlot.index] = updatedPitch[index];
+      updatedPitch[index] = temp;
+      setTeamLineupPlayers(updatedPitch);
+      showNotif("Postes échangés sur le terrain !");
+    } else if (selectedSlot.type === 'bench' && type === 'pitch') {
+      // 2. Banc -> Terrain
+      const benchP = updatedBench[selectedSlot.index];
+      const pitchP = updatedPitch[index];
+      updatedPitch[index] = benchP;
+      updatedBench[selectedSlot.index] = pitchP;
+      setTeamLineupPlayers(updatedPitch);
+      setTeamBenchPlayers(updatedBench);
+      showNotif(`Changement : ${benchP.nom} entre à la place de ${pitchP.nom}`);
+    } else if (selectedSlot.type === 'pitch' && type === 'bench') {
+      // 3. Terrain -> Banc
+      const pitchP = updatedPitch[selectedSlot.index];
+      const benchP = updatedBench[index];
+      updatedPitch[selectedSlot.index] = benchP;
+      updatedBench[index] = pitchP;
+      setTeamLineupPlayers(updatedPitch);
+      setTeamBenchPlayers(updatedBench);
+      showNotif(`Changement : ${benchP.nom} entre à la place de ${pitchP.nom}`);
+    }
 
-    updatedPitch[draggedPlayer.index] = benchPlayer;
-    updatedBench[targetBenchIndex] = pitchPlayer;
-
-    setTeamLineupPlayers(updatedPitch);
-    setTeamBenchPlayers(updatedBench);
-    setDraggedPlayer(null);
+    setSelectedSlot(null);
   }
 
-  // Découpage du 11 en fonction du dispositif sélectionné
   const formationConfig = FORMATIONS[currentFormation] || FORMATIONS['4-3-3'];
   const pitchGK = teamLineupPlayers.slice(0, 1);
   const pitchDEF = teamLineupPlayers.slice(1, 1 + formationConfig.def);
@@ -603,31 +636,34 @@ export default function App() {
     ? playersWithStats.filter(p => p.equipe_id === selectedMatch.equipe_domicile_id || p.equipe_id === selectedMatch.equipe_exterieur_id)
     : [];
 
-  // Carte Joueur Draggable sur le terrain
-  const PitchPlayerItem = ({ player, globalIndex }) => {
+  // Carte Joueur sur le terrain
+  const PitchPlayerSlot = ({ player, globalIndex }) => {
+    const isSelected = selectedSlot?.type === 'pitch' && selectedSlot?.index === globalIndex;
+
     if (!player) {
       return (
         <div 
-          onDragOver={handleDragOver}
-          onDrop={() => handleDropOnPitchSlot(globalIndex)}
-          className="w-12 h-12 rounded-full border-2 border-dashed border-white/40 flex items-center justify-center text-white/60 text-xs font-bold bg-black/20"
+          onClick={() => handleSelectSlot('pitch', globalIndex)}
+          className="w-12 h-12 rounded-full border-2 border-dashed border-white/40 flex items-center justify-center text-white/60 text-xs font-bold bg-black/20 cursor-pointer"
         >
-          Slot
+          +
         </div>
       );
     }
 
     return (
       <div
-        draggable
-        onDragStart={(e) => handleDragStart(e, player, 'pitch', globalIndex)}
-        onDragOver={handleDragOver}
-        onDrop={() => handleDropOnPitchSlot(globalIndex)}
-        className="flex flex-col items-center group cursor-grab active:cursor-grabbing transition-transform hover:scale-110 select-none"
-        title="Glisse pour échanger de poste ou remplacer par un remplaçant"
+        onClick={() => handleSelectSlot('pitch', globalIndex)}
+        className={`flex flex-col items-center group cursor-pointer transition-all duration-200 ${
+          isSelected ? 'scale-125 z-20' : 'hover:scale-110'
+        }`}
       >
         <div className="relative">
-          <div className="w-10 h-10 sm:w-12 sm:h-12 rounded-full bg-slate-900 border-2 border-white/95 shadow-xl flex items-center justify-center text-white text-xs font-black ring-2 ring-emerald-500/50 overflow-hidden">
+          <div className={`w-10 h-10 sm:w-12 sm:h-12 rounded-full bg-slate-900 border-2 shadow-xl flex items-center justify-center text-white text-xs font-black ring-2 overflow-hidden transition-all ${
+            isSelected 
+              ? 'border-amber-400 ring-amber-400 ring-4 animate-pulse' 
+              : 'border-white/95 ring-emerald-500/50'
+          }`}>
             {player.nom.split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase()}
           </div>
           <span className="absolute -top-1 -right-1 bg-amber-400 text-slate-950 font-black text-[9px] w-4 h-4 rounded-full flex items-center justify-center shadow-md">
@@ -637,7 +673,9 @@ export default function App() {
             {player.poste || 'MC'}
           </span>
         </div>
-        <span className="text-[10px] sm:text-xs font-bold text-white mt-1 bg-black/80 backdrop-blur-xs px-2 py-0.5 rounded-full shadow text-center max-w-[85px] truncate">
+        <span className={`text-[10px] sm:text-xs font-bold mt-1 px-2 py-0.5 rounded-full shadow text-center max-w-[85px] truncate transition-colors ${
+          isSelected ? 'bg-amber-400 text-slate-950' : 'bg-black/80 text-white'
+        }`}>
           {player.nom.split(' ').pop()}
         </span>
       </div>
@@ -838,7 +876,7 @@ export default function App() {
             <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl flex flex-col sm:flex-row items-center justify-between gap-4">
               <div>
                 <h2 className="text-xl font-bold text-white flex items-center gap-2">📅 Calendrier des Rencontres</h2>
-                <p className="text-xs text-slate-400 mt-1">💡 Clique sur le logo ou nom d'une équipe pour <strong>modifier sa composition (glisser-déposer)</strong></p>
+                <p className="text-xs text-slate-400 mt-1">💡 Clique sur le logo ou nom d'une équipe pour <strong>modifier sa composition et son 11</strong></p>
               </div>
 
               <div className="flex items-center gap-3 bg-slate-950 p-2 rounded-xl border border-slate-800">
@@ -864,7 +902,7 @@ export default function App() {
                   return (
                     <div key={m.id} className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-lg flex flex-col sm:flex-row items-center justify-between gap-4">
                       
-                      {/* ÉQUIPE DOMICILE (CLIQUABLE) */}
+                      {/* ÉQUIPE DOMICILE */}
                       <div 
                         onClick={() => openTeamLineup(m.dom)}
                         className="flex items-center gap-3 sm:w-3/12 justify-start w-full cursor-pointer group"
@@ -905,7 +943,7 @@ export default function App() {
                         />
                       </div>
 
-                      {/* ÉQUIPE EXTÉRIEURE (CLIQUABLE) */}
+                      {/* ÉQUIPE EXTÉRIEURE */}
                       <div className="flex items-center gap-2 sm:w-5/12 justify-end w-full">
                         <div 
                           onClick={() => openTeamLineup(m.ext)}
@@ -924,14 +962,14 @@ export default function App() {
 
                         <button
                           onClick={() => handleSaveMatchScore(m)}
-                          className="bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold px-3 py-2.5 rounded-xl transition-all shadow-md shadow-emerald-600/20 active:scale-95"
+                          className="bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold px-3 py-2.5 rounded-xl transition-all shadow-md shadow-emerald-600/20 active:scale-95 cursor-pointer"
                         >
                           Valider
                         </button>
 
                         <button
                           onClick={() => openMatchDetails(m)}
-                          className="bg-slate-800 hover:bg-slate-700 text-indigo-400 border border-slate-700 text-xs font-bold px-3 py-2.5 rounded-xl transition-all active:scale-95"
+                          className="bg-slate-800 hover:bg-slate-700 text-indigo-400 border border-slate-700 text-xs font-bold px-3 py-2.5 rounded-xl transition-all active:scale-95 cursor-pointer"
                         >
                           Détails 📝
                         </button>
@@ -1331,7 +1369,7 @@ export default function App() {
         )}
       </main>
 
-      {/* --- MODALE 1 : TERRAIN TACTIQUE INTERACTIF (DRAG & DROP & SÉLECTEUR DE FORMATION) --- */}
+      {/* --- MODALE 1 : TERRAIN TACTIQUE INTERACTIF (SÉLECTEUR DE COMPOSITION + INTERVERSION PAR CLIC) --- */}
       {selectedLineupTeam && (
         <div className="fixed inset-0 bg-black/85 backdrop-blur-md z-50 flex items-center justify-center p-2 sm:p-4">
           <div className="bg-slate-900 border border-slate-800 rounded-3xl max-w-lg w-full p-4 sm:p-6 shadow-2xl relative max-h-[96vh] flex flex-col overflow-y-auto">
@@ -1353,7 +1391,7 @@ export default function App() {
                 )}
                 <div>
                   <h3 className="text-base sm:text-lg font-black text-white">{selectedLineupTeam.nom}</h3>
-                  <p className="text-[10px] text-slate-400">Glissez-déposez les joueurs pour changer les postes</p>
+                  <p className="text-[10px] text-slate-400">Cliquez sur 2 joueurs pour les échanger</p>
                 </div>
               </div>
 
@@ -1368,11 +1406,11 @@ export default function App() {
             {/* SÉLECTEUR DE COMPOSITION TACTIQUE */}
             <div className="mb-3 flex items-center justify-between bg-slate-950 p-2.5 rounded-xl border border-slate-800">
               <span className="text-xs font-extrabold text-indigo-400 uppercase tracking-wider flex items-center gap-1">
-                <span>📋</span> Dispositif
+                <span>📋</span> Dispositif Tactique
               </span>
               <select
                 value={currentFormation}
-                onChange={(e) => setCurrentFormation(e.target.value)}
+                onChange={(e) => handleFormationChange(e.target.value)}
                 className="bg-slate-900 border border-slate-700 text-white font-bold text-xs rounded-lg px-3 py-1.5 focus:outline-none focus:border-indigo-500 cursor-pointer"
               >
                 {Object.keys(FORMATIONS).map(fmt => (
@@ -1381,7 +1419,7 @@ export default function App() {
               </select>
             </div>
 
-            {/* TERRAIN DE FOOTBALL VERT AVEC DRAG & DROP */}
+            {/* TERRAIN DE FOOTBALL VERT */}
             <div className="relative w-full rounded-2xl overflow-hidden shadow-2xl border border-emerald-600/40 bg-gradient-to-b from-emerald-700 via-emerald-600 to-emerald-800 p-4 min-h-[470px] flex flex-col justify-between select-none">
               
               {/* Lignes du terrain de football */}
@@ -1400,7 +1438,7 @@ export default function App() {
               {/* 1. LIGNE D'ATTAQUE (Haut) */}
               <div className="relative z-10 flex justify-around items-center pt-2">
                 {pitchATT.map((p, idx) => (
-                  <PitchPlayerItem 
+                  <PitchPlayerSlot 
                     key={p?.id || idx} 
                     player={p} 
                     globalIndex={1 + formationConfig.def + formationConfig.mid + idx} 
@@ -1411,7 +1449,7 @@ export default function App() {
               {/* 2. LIGNE DE MILIEU */}
               <div className="relative z-10 flex justify-around items-center py-2">
                 {pitchMID.map((p, idx) => (
-                  <PitchPlayerItem 
+                  <PitchPlayerSlot 
                     key={p?.id || idx} 
                     player={p} 
                     globalIndex={1 + formationConfig.def + idx} 
@@ -1422,7 +1460,7 @@ export default function App() {
               {/* 3. LIGNE DE DÉFENSE */}
               <div className="relative z-10 flex justify-around items-center py-2">
                 {pitchDEF.map((p, idx) => (
-                  <PitchPlayerItem 
+                  <PitchPlayerSlot 
                     key={p?.id || idx} 
                     player={p} 
                     globalIndex={1 + idx} 
@@ -1433,7 +1471,7 @@ export default function App() {
               {/* 4. GARDIEN DE BUT (Bas) */}
               <div className="relative z-10 flex justify-center items-center pb-2">
                 {pitchGK.map((p) => (
-                  <PitchPlayerItem 
+                  <PitchPlayerSlot 
                     key={p?.id || 'gk'} 
                     player={p} 
                     globalIndex={0} 
@@ -1442,43 +1480,45 @@ export default function App() {
               </div>
             </div>
 
-            {/* BANC DES REMPLAÇANTS (DRAGGABLE & DROPPABLE) */}
-            <div 
-              onDragOver={handleDragOver}
-              className="mt-4 bg-slate-950 p-3 rounded-2xl border border-slate-800"
-            >
+            {/* BANC DES REMPLAÇANTS */}
+            <div className="mt-4 bg-slate-950 p-3 rounded-2xl border border-slate-800">
               <div className="flex items-center justify-between mb-2">
                 <h4 className="text-[11px] font-extrabold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
                   <span>🪑</span> Banc des Remplaçants ({teamBenchPlayers.length})
                 </h4>
-                <span className="text-[10px] text-slate-500 italic">Glissez un remplaçant sur le terrain</span>
+                <span className="text-[10px] text-slate-500 italic">Cliquez pour faire un changement</span>
               </div>
 
               {teamBenchPlayers.length === 0 ? (
                 <p className="text-[11px] text-slate-600">Aucun joueur sur le banc.</p>
               ) : (
                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 max-h-32 overflow-y-auto pr-1">
-                  {teamBenchPlayers.map((j, bIdx) => (
-                    <div
-                      key={j.id}
-                      draggable
-                      onDragStart={(e) => handleDragStart(e, j, 'bench', bIdx)}
-                      onDragOver={handleDragOver}
-                      onDrop={() => handleDropOnBench(bIdx)}
-                      className="bg-slate-900/90 border border-slate-800 hover:border-indigo-500/60 px-2 py-1.5 rounded-xl flex items-center justify-between cursor-grab active:cursor-grabbing transition-all select-none group"
-                      title="Glisse ce joueur sur le terrain pour remplacer un titulaire"
-                    >
-                      <div className="flex items-center gap-1.5 truncate">
-                        <span className="text-[9px] font-bold text-indigo-400 bg-indigo-500/10 px-1.5 py-0.5 rounded">
-                          {j.poste || 'MC'}
+                  {teamBenchPlayers.map((j, bIdx) => {
+                    const isBenchSelected = selectedSlot?.type === 'bench' && selectedSlot?.index === bIdx;
+                    return (
+                      <div
+                        key={j.id}
+                        onClick={() => handleSelectSlot('bench', bIdx)}
+                        className={`px-2 py-1.5 rounded-xl flex items-center justify-between cursor-pointer transition-all select-none border ${
+                          isBenchSelected 
+                            ? 'bg-amber-500/20 border-amber-400 ring-2 ring-amber-400/50' 
+                            : 'bg-slate-900/90 border-slate-800 hover:border-indigo-500/60'
+                        }`}
+                      >
+                        <div className="flex items-center gap-1.5 truncate">
+                          <span className="text-[9px] font-bold text-indigo-400 bg-indigo-500/10 px-1.5 py-0.5 rounded">
+                            {j.poste || 'MC'}
+                          </span>
+                          <span className={`text-xs font-semibold truncate ${isBenchSelected ? 'text-amber-300' : 'text-slate-300'}`}>
+                            {j.nom}
+                          </span>
+                        </div>
+                        <span className="text-[10px] font-extrabold text-emerald-400 font-mono ml-1 bg-emerald-500/10 px-1 rounded">
+                          {j.general || 75}
                         </span>
-                        <span className="text-xs text-slate-300 font-semibold truncate group-hover:text-white">{j.nom}</span>
                       </div>
-                      <span className="text-[10px] font-extrabold text-emerald-400 font-mono ml-1 bg-emerald-500/10 px-1 rounded">
-                        {j.general || 75}
-                      </span>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
             </div>
