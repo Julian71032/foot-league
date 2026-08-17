@@ -36,9 +36,10 @@ export default function App() {
   const [newPlayer, setNewPlayer] = useState({ nom: '', equipe_id: '', general: 75, valeur: 10000000, age: 22 });
   const [newMatch, setNewMatch] = useState({ dom_id: '', ext_id: '', journee: 1 });
 
-  // Formulaire Transfert
+  // Formulaire Transfert (Sélection en cascade : Club origine -> Joueur -> Club destination)
+  const [transferFromTeamId, setTransferFromTeamId] = useState('');
   const [transferPlayerId, setTransferPlayerId] = useState('');
-  const [transferNewTeamId, setTransferNewTeamId] = useState('');
+  const [transferToTeamId, setTransferToTeamId] = useState('');
   const [transferFee, setTransferFee] = useState(10000000);
   const [transferLoading, setTransferLoading] = useState(false);
 
@@ -90,7 +91,7 @@ export default function App() {
     setAuthLoading(true);
 
     if (authMode === 'signup') {
-      const { data, error } = await supabase.auth.signUp({
+      const { error } = await supabase.auth.signUp({
         email: authEmail,
         password: authPassword,
         options: { data: { pseudo: authPseudo } }
@@ -137,7 +138,7 @@ export default function App() {
     const { data: dataEvents } = await supabase.from('match_events').select('*').eq('user_id', session.user.id);
     if (dataEvents) setMatchEvents(dataEvents);
 
-    // 4. Historique des Transferts (S'il existe dans Supabase)
+    // 4. Historique des Transferts
     const { data: dataTransfers } = await supabase
       .from('transfers')
       .select('*, players(nom), old_team:teams!old_team_id(nom), new_team:teams!new_team_id(nom)')
@@ -206,29 +207,56 @@ export default function App() {
     .filter(j => j.passes_decisives > 0)
     .sort((a, b) => b.passes_decisives - a.passes_decisives);
 
+  // --- FILTRES DE TRANSFERT ---
+  // Joueurs appartenant au club de provenance sélectionné
+  const availablePlayersForTransfer = players.filter(p => p.equipe_id === transferFromTeamId);
+
+  // Clubs de destination (exclut le club d'origine)
+  const availableDestinationTeams = teams.filter(t => t.id !== transferFromTeamId);
+
+  // Joueur actuellement sélectionné pour afficher ses infos
+  const selectedTransferPlayer = players.find(p => p.id === transferPlayerId);
+
+  // Quand le club de provenance change, réinitialiser la sélection du joueur
+  function handleFromTeamChange(e) {
+    const newFromTeamId = e.target.value;
+    setTransferFromTeamId(newFromTeamId);
+    setTransferPlayerId('');
+  }
+
+  // Quand le joueur change, suggérer sa valeur actuelle par défaut
+  function handlePlayerSelectChange(e) {
+    const selectedId = e.target.value;
+    setTransferPlayerId(selectedId);
+    const playerObj = players.find(p => p.id === selectedId);
+    if (playerObj && playerObj.valeur_marchande) {
+      setTransferFee(playerObj.valeur_marchande);
+    }
+  }
+
   // --- GESTION DU TRANSFERT DE JOUEUR ---
   async function handleTransferPlayer(e) {
     e.preventDefault();
-    if (!transferPlayerId || !transferNewTeamId) {
-      showNotif("Veuillez choisir un joueur et sa nouvelle équipe.");
+    if (!transferFromTeamId || !transferPlayerId || !transferToTeamId) {
+      showNotif("Veuillez sélectionner le club d'origine, le joueur et le club de destination.");
+      return;
+    }
+
+    if (transferFromTeamId === transferToTeamId) {
+      showNotif("Le club de destination doit être différent du club d'origine !");
       return;
     }
 
     const selectedPlayer = players.find(p => p.id === transferPlayerId);
     if (!selectedPlayer) return;
 
-    if (selectedPlayer.equipe_id === transferNewTeamId) {
-      showNotif("Le joueur est déjà dans cette équipe !");
-      return;
-    }
-
     setTransferLoading(true);
 
-    // 1. Mettre à jour le club du joueur dans la table 'players'
+    // 1. Mettre à jour l'équipe du joueur dans 'players'
     const { error: updateError } = await supabase
       .from('players')
       .update({
-        equipe_id: transferNewTeamId,
+        equipe_id: transferToTeamId,
         valeur_marchande: parseInt(transferFee)
       })
       .eq('id', transferPlayerId);
@@ -239,18 +267,21 @@ export default function App() {
       return;
     }
 
-    // 2. Enregistrer le transfert dans l'historique (Si la table 'transfers' existe)
+    // 2. Enregistrer le transfert dans l'historique
     await supabase.from('transfers').insert([{
       player_id: transferPlayerId,
-      old_team_id: selectedPlayer.equipe_id,
-      new_team_id: transferNewTeamId,
+      old_team_id: transferFromTeamId,
+      new_team_id: transferToTeamId,
       fee: parseInt(transferFee),
       user_id: session.user.id
     }]);
 
     showNotif(`Transfert de ${selectedPlayer.nom} effectué avec succès !`);
+    
+    // Réinitialisation du formulaire
+    setTransferFromTeamId('');
     setTransferPlayerId('');
-    setTransferNewTeamId('');
+    setTransferToTeamId('');
     setTransferFee(10000000);
     setTransferLoading(false);
 
@@ -406,8 +437,6 @@ export default function App() {
   const matchPlayers = selectedMatch
     ? playersWithStats.filter(p => p.equipe_id === selectedMatch.equipe_domicile_id || p.equipe_id === selectedMatch.equipe_exterieur_id)
     : [];
-
-  const selectedTransferPlayer = players.find(p => p.id === transferPlayerId);
 
   // --- ÉCRAN DE CONNEXION ---
   if (!session) {
@@ -769,32 +798,61 @@ export default function App() {
             <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl">
               <h2 className="text-xl font-bold text-white mb-2 flex items-center gap-2">🔄 Marché des Transferts</h2>
               <p className="text-xs text-slate-400 mb-6">
-                Transférez n'importe quel joueur vers un nouveau club et ajustez sa valeur marchande.
+                Sélectionnez le club d'origine, le joueur concerné, puis son club de destination.
               </p>
 
-              <form onSubmit={handleTransferPlayer} className="space-y-4 max-w-2xl">
+              <form onSubmit={handleTransferPlayer} className="space-y-5 max-w-2xl">
+                {/* ÉTAPE 1 : CLUB D'ORIGINE */}
                 <div>
-                  <label className="block text-xs font-semibold text-slate-400 mb-1">Sélectionner le joueur</label>
+                  <label className="block text-xs font-semibold text-amber-400 uppercase tracking-wider mb-1.5">
+                    1. Club de provenance
+                  </label>
                   <select
-                    value={transferPlayerId}
-                    onChange={(e) => setTransferPlayerId(e.target.value)}
+                    value={transferFromTeamId}
+                    onChange={handleFromTeamChange}
                     className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:border-indigo-500"
                     required
                   >
-                    <option value="">-- Choisir un joueur --</option>
-                    {players.map((p) => (
+                    <option value="">-- Choisir l'équipe de départ --</option>
+                    {teams.map((t) => (
+                      <option key={t.id} value={t.id}>{t.nom}</option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* ÉTAPE 2 : JOUEUR (Affiché uniquement si un club d'origine est sélectionné) */}
+                <div>
+                  <label className="block text-xs font-semibold text-indigo-400 uppercase tracking-wider mb-1.5">
+                    2. Joueur à transférer
+                  </label>
+                  <select
+                    value={transferPlayerId}
+                    onChange={handlePlayerSelectChange}
+                    disabled={!transferFromTeamId}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:border-indigo-500 disabled:opacity-40 disabled:cursor-not-allowed"
+                    required
+                  >
+                    <option value="">
+                      {!transferFromTeamId
+                        ? "-- Sélectionnez d'abord un club de provenance --"
+                        : availablePlayersForTransfer.length === 0
+                        ? "-- Aucun joueur dans ce club --"
+                        : "-- Choisir le joueur --"}
+                    </option>
+                    {availablePlayersForTransfer.map((p) => (
                       <option key={p.id} value={p.id}>
-                        {p.nom} ({p.teams?.nom || 'Sans club'}) - GEN: {p.general || 75}
+                        {p.nom} - GEN: {p.general || 75} ({formatMoney(p.valeur_marchande)})
                       </option>
                     ))}
                   </select>
                 </div>
 
+                {/* Fiche récapitulative du joueur sélectionné */}
                 {selectedTransferPlayer && (
                   <div className="bg-slate-950 border border-slate-800/80 p-4 rounded-xl flex items-center justify-between">
                     <div>
-                      <p className="text-xs text-slate-400">Club actuel</p>
-                      <p className="text-sm font-bold text-amber-400">{selectedTransferPlayer.teams?.nom || 'Sans club'}</p>
+                      <p className="text-xs text-slate-400">Joueur</p>
+                      <p className="text-sm font-bold text-white">{selectedTransferPlayer.nom}</p>
                     </div>
                     <div className="text-right">
                       <p className="text-xs text-slate-400">Valeur actuelle</p>
@@ -803,30 +861,37 @@ export default function App() {
                   </div>
                 )}
 
+                {/* ÉTAPE 3 : CLUB DE DESTINATION ET MONTANT */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div>
-                    <label className="block text-xs font-semibold text-slate-400 mb-1">Nouveau club de destination</label>
+                    <label className="block text-xs font-semibold text-emerald-400 uppercase tracking-wider mb-1.5">
+                      3. Club de destination
+                    </label>
                     <select
-                      value={transferNewTeamId}
-                      onChange={(e) => setTransferNewTeamId(e.target.value)}
-                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:border-indigo-500"
+                      value={transferToTeamId}
+                      onChange={(e) => setTransferToTeamId(e.target.value)}
+                      disabled={!transferPlayerId}
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:border-indigo-500 disabled:opacity-40 disabled:cursor-not-allowed"
                       required
                     >
-                      <option value="">-- Choisir le nouveau club --</option>
-                      {teams.map((t) => (
+                      <option value="">-- Choisir la nouvelle équipe --</option>
+                      {availableDestinationTeams.map((t) => (
                         <option key={t.id} value={t.id}>{t.nom}</option>
                       ))}
                     </select>
                   </div>
 
                   <div>
-                    <label className="block text-xs font-semibold text-slate-400 mb-1">Montant du transfert (€)</label>
+                    <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1.5">
+                      Montant du transfert (€)
+                    </label>
                     <input
                       type="number"
                       step="500000"
                       value={transferFee}
                       onChange={(e) => setTransferFee(e.target.value)}
-                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:border-indigo-500"
+                      disabled={!transferPlayerId}
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:border-indigo-500 disabled:opacity-40 disabled:cursor-not-allowed"
                       required
                     />
                   </div>
@@ -834,8 +899,8 @@ export default function App() {
 
                 <button
                   type="submit"
-                  disabled={transferLoading}
-                  className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-3 rounded-xl text-sm transition-all shadow-lg shadow-indigo-600/30 mt-2"
+                  disabled={transferLoading || !transferFromTeamId || !transferPlayerId || !transferToTeamId}
+                  className="w-full bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-800 disabled:text-slate-600 text-white font-bold py-3 rounded-xl text-sm transition-all shadow-lg shadow-indigo-600/30 mt-2"
                 >
                   {transferLoading ? 'Transfert en cours...' : '🤝 Confirmer le Transfert'}
                 </button>
