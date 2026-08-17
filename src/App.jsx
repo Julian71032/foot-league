@@ -51,6 +51,7 @@ export default function App() {
   const [eventPlayerId, setEventPlayerId] = useState('');
   const [eventType, setEventType] = useState('but');
   const [selectedTeam, setSelectedTeam] = useState(null);
+  const [editingPlayer, setEditingPlayer] = useState(null);
 
   // Formulaires Admin, Scores & Transferts
   const [scoresInput, setScoresInput] = useState({});
@@ -302,8 +303,10 @@ export default function App() {
     fetchData();
   }
 
-  // --- SUPPRESSION D'UN JOUEUR ---
+  // --- MODIFICATION & SUPPRESSION ADMIN DE JOUEUR ---
   async function handleDeletePlayer(playerId, playerNom) {
+    if (!userProfile?.is_admin) return;
+
     if (!window.confirm(`Êtes-vous sûr de vouloir supprimer définitivement le joueur "${playerNom}" ?`)) {
       return;
     }
@@ -316,6 +319,30 @@ export default function App() {
       showNotif(`Erreur lors de la suppression : ${error.message}`);
     } else {
       showNotif(`Le joueur "${playerNom}" a été supprimé.`);
+      fetchData();
+    }
+  }
+
+  async function handleUpdatePlayer(e) {
+    e.preventDefault();
+    if (!userProfile?.is_admin || !editingPlayer) return;
+
+    const { error } = await supabase
+      .from('players')
+      .update({
+        nom: editingPlayer.nom,
+        poste: editingPlayer.poste,
+        general: parseInt(editingPlayer.general),
+        age: parseInt(editingPlayer.age),
+        valeur_marchande: parseInt(editingPlayer.valeur_marchande)
+      })
+      .eq('id', editingPlayer.id);
+
+    if (error) {
+      showNotif(`Erreur : ${error.message}`);
+    } else {
+      showNotif(`Joueur "${editingPlayer.nom}" mis à jour !`);
+      setEditingPlayer(null);
       fetchData();
     }
   }
@@ -388,7 +415,7 @@ export default function App() {
   // --- ACTIONS ADMIN ---
   async function handleAddTeam(e) {
     e.preventDefault();
-    if (!newTeamName) return;
+    if (!newTeamName || !userProfile?.is_admin) return;
     setUploading(true);
     let logoUrl = '';
 
@@ -423,7 +450,7 @@ export default function App() {
 
   async function handleAddPlayer(e) {
     e.preventDefault();
-    if (!newPlayer.nom || !newPlayer.equipe_id) return;
+    if (!newPlayer.nom || !newPlayer.equipe_id || !userProfile?.is_admin) return;
 
     const { error } = await supabase.from('players').insert([{
       nom: newPlayer.nom,
@@ -444,7 +471,7 @@ export default function App() {
 
   async function handleAddMatch(e) {
     e.preventDefault();
-    if (!newMatch.dom_id || !newMatch.ext_id) return;
+    if (!newMatch.dom_id || !newMatch.ext_id || !userProfile?.is_admin) return;
 
     const { error } = await supabase.from('matches').insert([{
       equipe_domicile_id: newMatch.dom_id,
@@ -973,7 +1000,7 @@ export default function App() {
           </div>
         )}
 
-        {/* 5. ADMIN (RÉSERVÉ À TON COMPTE ADMIN) */}
+        {/* 5. ADMIN (RÉSERVÉ Á L'ADMINISTRATEUR) */}
         {tab === 'admin' && userProfile?.is_admin && (
           <div className="space-y-6">
             <h2 className="text-2xl font-extrabold text-white">⚙️ Panneau d'Administration (Créateur de Ligue)</h2>
@@ -1180,13 +1207,13 @@ export default function App() {
                     <th className="py-2.5 px-3 text-center">Buts</th>
                     <th className="py-2.5 px-3 text-center">Passes</th>
                     <th className="py-2.5 px-3 text-right">Valeur</th>
-                    {userProfile?.is_admin && <th className="py-2.5 px-3 text-center">Action</th>}
+                    {userProfile?.is_admin && <th className="py-2.5 px-3 text-center">Actions Admin</th>}
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-800/50 text-sm">
                   {teamRoster.length === 0 ? (
                     <tr>
-                      <td colSpan="8" className="py-6 text-center text-slate-500 text-xs">
+                      <td colSpan={userProfile?.is_admin ? "8" : "7"} className="py-6 text-center text-slate-500 text-xs">
                         Aucun joueur enregistré dans cette équipe.
                       </td>
                     </tr>
@@ -1206,15 +1233,25 @@ export default function App() {
                         <td className="py-3 px-3 text-right font-mono text-xs text-slate-300">
                           {formatMoney(j.valeur_marchande)}
                         </td>
+                        {/* SEUL L'ADMIN VOIT CES BOUTONS */}
                         {userProfile?.is_admin && (
                           <td className="py-3 px-3 text-center">
-                            <button
-                              onClick={() => handleDeletePlayer(j.id, j.nom)}
-                              className="bg-rose-500/20 hover:bg-rose-600 text-rose-300 hover:text-white p-1.5 rounded-lg transition-all text-xs"
-                              title="Supprimer ce joueur"
-                            >
-                              🗑️
-                            </button>
+                            <div className="flex items-center justify-center gap-1">
+                              <button
+                                onClick={() => setEditingPlayer(j)}
+                                className="bg-amber-500/20 hover:bg-amber-600 text-amber-300 hover:text-white p-1.5 rounded-lg transition-all text-xs"
+                                title="Modifier ce joueur"
+                              >
+                                ✏️
+                              </button>
+                              <button
+                                onClick={() => handleDeletePlayer(j.id, j.nom)}
+                                className="bg-rose-500/20 hover:bg-rose-600 text-rose-300 hover:text-white p-1.5 rounded-lg transition-all text-xs"
+                                title="Supprimer ce joueur"
+                              >
+                                🗑️
+                              </button>
+                            </div>
                           </td>
                         )}
                       </tr>
@@ -1223,6 +1260,95 @@ export default function App() {
                 </tbody>
               </table>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* --- MODALE ÉDITION DE JOUEUR (ADMIN SEULEMENT) --- */}
+      {editingPlayer && userProfile?.is_admin && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-md w-full p-6 shadow-2xl relative">
+            <button
+              onClick={() => setEditingPlayer(null)}
+              className="absolute top-4 right-4 text-slate-400 hover:text-white font-bold text-xl"
+            >
+              ✕
+            </button>
+
+            <h3 className="text-lg font-bold text-white mb-4">✏️ Modifier {editingPlayer.nom}</h3>
+
+            <form onSubmit={handleUpdatePlayer} className="space-y-3">
+              <div>
+                <label className="block text-xs text-slate-400 mb-1">Nom du joueur</label>
+                <input
+                  type="text"
+                  value={editingPlayer.nom}
+                  onChange={(e) => setEditingPlayer({ ...editingPlayer, nom: e.target.value })}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-indigo-500"
+                  required
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs text-slate-400 mb-1">Poste précis</label>
+                <select
+                  value={editingPlayer.poste || 'MC'}
+                  onChange={(e) => setEditingPlayer({ ...editingPlayer, poste: e.target.value })}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-indigo-500"
+                >
+                  {POSITIONS_LIST.map((pos, idx) => (
+                    pos.disabled ? (
+                      <option key={idx} disabled className="font-bold text-indigo-400 bg-slate-900">
+                        {pos.label}
+                      </option>
+                    ) : (
+                      <option key={pos.value} value={pos.value}>
+                        {pos.label}
+                      </option>
+                    )
+                  ))}
+                </select>
+              </div>
+
+              <div className="grid grid-cols-3 gap-2">
+                <div>
+                  <label className="block text-xs text-slate-400 mb-1">Général</label>
+                  <input
+                    type="number"
+                    min="40"
+                    max="99"
+                    value={editingPlayer.general || 75}
+                    onChange={(e) => setEditingPlayer({ ...editingPlayer, general: e.target.value })}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm text-white"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-slate-400 mb-1">Âge</label>
+                  <input
+                    type="number"
+                    min="15"
+                    max="45"
+                    value={editingPlayer.age || 22}
+                    onChange={(e) => setEditingPlayer({ ...editingPlayer, age: e.target.value })}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm text-white"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-slate-400 mb-1">Valeur (€)</label>
+                  <input
+                    type="number"
+                    step="500000"
+                    value={editingPlayer.valeur_marchande || 10000000}
+                    onChange={(e) => setEditingPlayer({ ...editingPlayer, valeur_marchande: e.target.value })}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm text-white"
+                  />
+                </div>
+              </div>
+
+              <button type="submit" className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-2.5 rounded-xl text-sm mt-2">
+                Enregistrer les modifications
+              </button>
+            </form>
           </div>
         </div>
       )}
