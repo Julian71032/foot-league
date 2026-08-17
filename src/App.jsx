@@ -10,13 +10,16 @@ export default function App() {
   const [journeeFilter, setJourneeFilter] = useState(1);
   const [notification, setNotification] = useState('');
 
-  // Modale Détails du Match
+  // Modale Détails Match
   const [selectedMatch, setSelectedMatch] = useState(null);
   const [matchEvents, setMatchEvents] = useState([]);
   const [eventPlayerId, setEventPlayerId] = useState('');
   const [eventType, setEventType] = useState('but');
 
-  // Stockage temporaire des scores saisis
+  // Modale Détails Équipe (Effectif)
+  const [selectedTeam, setSelectedTeam] = useState(null);
+
+  // Scores saisis
   const [scoresInput, setScoresInput] = useState({});
 
   // Formulaires Admin
@@ -42,7 +45,7 @@ export default function App() {
   }
 
   async function fetchData() {
-    // 1. Équipes / Classement
+    // 1. Équipes
     const { data: dataTeams } = await supabase
       .from('teams')
       .select('*')
@@ -52,7 +55,7 @@ export default function App() {
       setClassement(dataTeams);
     }
 
-    // 2. Joueurs (avec buts et passes)
+    // 2. Joueurs
     const { data: dataPlayers } = await supabase
       .from('players')
       .select('*, teams(nom, logo_url)');
@@ -65,7 +68,7 @@ export default function App() {
     if (dataMatches) setMatches(dataMatches);
   }
 
-  // --- GESTION DE LA MODALE DÉTAILS MATCH ---
+  // --- DÉTAILS MATCH ---
   async function openMatchDetails(match) {
     setSelectedMatch(match);
     fetchMatchEvents(match.id);
@@ -83,7 +86,6 @@ export default function App() {
     e.preventDefault();
     if (!eventPlayerId || !selectedMatch) return;
 
-    // 1. Ajouter l'événement dans match_events
     const { error } = await supabase.from('match_events').insert([{
       match_id: selectedMatch.id,
       player_id: eventPlayerId,
@@ -95,7 +97,6 @@ export default function App() {
       return;
     }
 
-    // 2. Mettre à jour les stats globales du joueur
     const player = players.find(p => p.id === eventPlayerId);
     if (player) {
       const updateData = eventType === 'but'
@@ -111,10 +112,8 @@ export default function App() {
   }
 
   async function handleDeleteMatchEvent(event) {
-    // 1. Supprimer l'événement
     await supabase.from('match_events').delete().eq('id', event.id);
 
-    // 2. Décrémenter le compteur du joueur
     const player = players.find(p => p.id === event.player_id);
     if (player) {
       const updateData = event.type === 'but'
@@ -247,11 +246,18 @@ export default function App() {
     }
   }
 
-  // Listes filtrées pour les classements de joueurs
+  function formatMoney(amount) {
+    if (!amount) return '0 €';
+    return new Intl.NumberFormat('fr-FR', { style: 'currency', currency: 'EUR', maximumFractionDigits: 0 }).format(amount);
+  }
+
+  const teamRoster = selectedTeam
+    ? players.filter(p => p.equipe_id === selectedTeam.id).sort((a, b) => (b.general || 0) - (a.general || 0))
+    : [];
+
   const topButeurs = [...players].sort((a, b) => (b.buts || 0) - (a.buts || 0));
   const topPasseurs = [...players].sort((a, b) => (b.passes_decisives || 0) - (a.passes_decisives || 0));
 
-  // Joueurs des 2 équipes du match sélectionné
   const matchPlayers = selectedMatch
     ? players.filter(p => p.equipe_id === selectedMatch.equipe_domicile_id || p.equipe_id === selectedMatch.equipe_exterieur_id)
     : [];
@@ -306,7 +312,11 @@ export default function App() {
         {/* 1. CLASSEMENT ÉQUIPES */}
         {tab === 'classement' && (
           <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl">
-            <h2 className="text-xl font-bold mb-6 flex items-center gap-2 text-white">🏆 Classement Général</h2>
+            <div className="flex items-center justify-between mb-6">
+              <h2 className="text-xl font-bold flex items-center gap-2 text-white">🏆 Classement Général</h2>
+              <span className="text-xs text-slate-400 bg-slate-800 px-3 py-1 rounded-full border border-slate-700">💡 Clique sur une équipe pour voir son effectif</span>
+            </div>
+
             <div className="overflow-x-auto">
               <table className="w-full text-left border-collapse">
                 <thead>
@@ -318,16 +328,20 @@ export default function App() {
                 </thead>
                 <tbody className="divide-y divide-slate-800/60 text-sm">
                   {classement.map((eq, i) => (
-                    <tr key={eq.id} className="hover:bg-slate-800/30 transition-colors">
-                      <td className="py-4 px-4 font-mono font-bold text-slate-400">{i + 1}</td>
+                    <tr
+                      key={eq.id}
+                      onClick={() => setSelectedTeam(eq)}
+                      className="hover:bg-slate-800/60 transition-colors cursor-pointer group"
+                    >
+                      <td className="py-4 px-4 font-mono font-bold text-slate-400 group-hover:text-indigo-400">{i + 1}</td>
                       <td className="py-4 px-4">
                         <div className="flex items-center gap-3">
                           {eq.logo_url ? (
-                            <img src={eq.logo_url} alt="" className="w-7 h-7 object-contain rounded-full bg-slate-800 p-0.5" />
+                            <img src={eq.logo_url} alt="" className="w-8 h-8 object-contain rounded-full bg-slate-800 p-0.5" />
                           ) : (
-                            <div className="w-7 h-7 bg-slate-800 rounded-full flex items-center justify-center text-xs">🛡️</div>
+                            <div className="w-8 h-8 bg-slate-800 rounded-full flex items-center justify-center text-xs">🛡️</div>
                           )}
-                          <span className="font-semibold text-white">{eq.nom}</span>
+                          <span className="font-bold text-white group-hover:text-indigo-400 transition-colors">{eq.nom}</span>
                         </div>
                       </td>
                       <td className="py-4 px-4 text-center">
@@ -343,7 +357,7 @@ export default function App() {
           </div>
         )}
 
-        {/* 2. MATCHS & BOUTON DÉTAILS */}
+        {/* 2. MATCHS */}
         {tab === 'matchs' && (
           <div className="space-y-6">
             <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl flex flex-col sm:flex-row items-center justify-between gap-4">
@@ -374,7 +388,6 @@ export default function App() {
 
                   return (
                     <div key={m.id} className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-lg flex flex-col sm:flex-row items-center justify-between gap-4">
-                      {/* Équipe Domicile */}
                       <div className="flex items-center gap-3 sm:w-3/12 justify-start w-full">
                         {m.dom?.logo_url ? (
                           <img src={m.dom.logo_url} className="w-10 h-10 object-contain" alt="" />
@@ -384,7 +397,6 @@ export default function App() {
                         <span className="font-bold text-base text-white truncate">{m.dom?.nom}</span>
                       </div>
 
-                      {/* Score + VS */}
                       <div className="flex items-center gap-3 sm:w-4/12 justify-center my-2 sm:my-0">
                         <input
                           type="number"
@@ -409,7 +421,6 @@ export default function App() {
                         />
                       </div>
 
-                      {/* Équipe Extérieure + Boutons */}
                       <div className="flex items-center gap-2 sm:w-5/12 justify-end w-full">
                         <span className="font-bold text-base text-white truncate text-right mr-2">{m.ext?.nom}</span>
                         {m.ext?.logo_url ? (
@@ -442,7 +453,6 @@ export default function App() {
         {/* 3. CLASSEMENT BUTEURS ET PASSEURS */}
         {tab === 'buteurs' && (
           <div className="grid md:grid-cols-2 gap-6">
-            {/* Classement Buteurs */}
             <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl">
               <h2 className="text-xl font-bold mb-6 text-white flex items-center gap-2">⚽ Meilleurs Buteurs</h2>
               <div className="overflow-x-auto">
@@ -472,7 +482,6 @@ export default function App() {
               </div>
             </div>
 
-            {/* Classement Passeurs */}
             <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl">
               <h2 className="text-xl font-bold mb-6 text-white flex items-center gap-2">🎯 Meilleurs Passeurs</h2>
               <div className="overflow-x-auto">
@@ -510,7 +519,7 @@ export default function App() {
             <h2 className="text-2xl font-extrabold text-white">⚙️ Panneau d'Administration</h2>
 
             <div className="grid gap-6 md:grid-cols-2">
-              {/* Équipe */}
+              {/* Création Équipe */}
               <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl">
                 <h3 className="text-lg font-bold text-white mb-4">1. Créer une Équipe</h3>
                 <form onSubmit={handleAddTeam} className="space-y-4">
@@ -540,7 +549,7 @@ export default function App() {
                 </form>
               </div>
 
-              {/* Joueur */}
+              {/* Création Joueur (AVEC NOTE, ÂGE, ET VALEUR) */}
               <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl">
                 <h3 className="text-lg font-bold text-white mb-4">2. Ajouter un Joueur</h3>
                 <form onSubmit={handleAddPlayer} className="space-y-3">
@@ -567,6 +576,43 @@ export default function App() {
                       required
                     />
                   </div>
+
+                  {/* Champs Générale / Âge / Valeur */}
+                  <div className="grid grid-cols-3 gap-2">
+                    <div>
+                      <label className="block text-xs font-medium text-slate-400 mb-1">Général</label>
+                      <input
+                        type="number"
+                        min="40"
+                        max="99"
+                        value={newPlayer.general}
+                        onChange={(e) => setNewPlayer({ ...newPlayer, general: e.target.value })}
+                        className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm text-white"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-slate-400 mb-1">Âge</label>
+                      <input
+                        type="number"
+                        min="15"
+                        max="45"
+                        value={newPlayer.age}
+                        onChange={(e) => setNewPlayer({ ...newPlayer, age: e.target.value })}
+                        className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm text-white"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-slate-400 mb-1">Valeur (€)</label>
+                      <input
+                        type="number"
+                        step="500000"
+                        value={newPlayer.valeur}
+                        onChange={(e) => setNewPlayer({ ...newPlayer, valeur: e.target.value })}
+                        className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm text-white"
+                      />
+                    </div>
+                  </div>
+
                   <button type="submit" className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-semibold py-2.5 rounded-xl text-sm mt-2">
                     + Ajouter le joueur
                   </button>
@@ -574,7 +620,7 @@ export default function App() {
               </div>
             </div>
 
-            {/* Match */}
+            {/* Programer Match */}
             <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl">
               <h3 className="text-lg font-bold text-white mb-4">3. Programmer une Rencontre</h3>
               <form onSubmit={handleAddMatch} className="grid grid-cols-1 sm:grid-cols-4 gap-3">
@@ -621,7 +667,74 @@ export default function App() {
         )}
       </main>
 
-      {/* --- MODALE FENÊTRE DÉTAILS D'UN MATCH --- */}
+      {/* --- MODALE DÉTAILS D'UNE ÉQUIPE (EFFECTIF) --- */}
+      {selectedTeam && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-2xl w-full p-6 shadow-2xl relative">
+            <button
+              onClick={() => setSelectedTeam(null)}
+              className="absolute top-4 right-4 text-slate-400 hover:text-white font-bold text-xl"
+            >
+              ✕
+            </button>
+
+            <div className="flex items-center gap-4 mb-6 pb-4 border-b border-slate-800">
+              {selectedTeam.logo_url ? (
+                <img src={selectedTeam.logo_url} className="w-14 h-14 object-contain rounded-full bg-slate-950 p-1" alt="" />
+              ) : (
+                <div className="w-14 h-14 bg-slate-950 rounded-full flex items-center justify-center text-xl">🛡️</div>
+              )}
+              <div>
+                <h3 className="text-xl font-extrabold text-white">{selectedTeam.nom}</h3>
+                <p className="text-xs text-indigo-400 font-semibold">{teamRoster.length} joueurs dans l'effectif • {selectedTeam.points || 0} points</p>
+              </div>
+            </div>
+
+            <div className="overflow-x-auto max-h-96 overflow-y-auto">
+              <table className="w-full text-left border-collapse">
+                <thead className="sticky top-0 bg-slate-900 border-b border-slate-800 text-slate-400 text-xs font-semibold uppercase">
+                  <tr>
+                    <th className="py-2.5 px-3">Joueur</th>
+                    <th className="py-2.5 px-3 text-center">GEN</th>
+                    <th className="py-2.5 px-3 text-center">Âge</th>
+                    <th className="py-2.5 px-3 text-center">Buts</th>
+                    <th className="py-2.5 px-3 text-center">Passes</th>
+                    <th className="py-2.5 px-3 text-right">Valeur</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-800/50 text-sm">
+                  {teamRoster.length === 0 ? (
+                    <tr>
+                      <td colSpan="6" className="py-6 text-center text-slate-500 text-xs">
+                        Aucun joueur enregistré dans cette équipe pour l'instant.
+                      </td>
+                    </tr>
+                  ) : (
+                    teamRoster.map((j) => (
+                      <tr key={j.id} className="hover:bg-slate-800/30">
+                        <td className="py-3 px-3 font-semibold text-white">{j.nom}</td>
+                        <td className="py-3 px-3 text-center font-extrabold text-emerald-400">
+                          <span className="bg-emerald-500/10 border border-emerald-500/20 px-2 py-0.5 rounded-lg">
+                            {j.general || 75}
+                          </span>
+                        </td>
+                        <td className="py-3 px-3 text-center text-slate-300 font-medium">{j.age || '-'} ans</td>
+                        <td className="py-3 px-3 text-center text-amber-400 font-bold">⚽ {j.buts || 0}</td>
+                        <td className="py-3 px-3 text-center text-indigo-400 font-bold">🎯 {j.passes_decisives || 0}</td>
+                        <td className="py-3 px-3 text-right font-mono text-xs text-slate-300">
+                          {formatMoney(j.valeur_marchande)}
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* --- MODALE FEUILLE DE MATCH --- */}
       {selectedMatch && (
         <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-lg w-full p-6 shadow-2xl relative">
@@ -637,7 +750,6 @@ export default function App() {
               {selectedMatch.dom?.nom} ({selectedMatch.score_domicile ?? 0}) VS ({selectedMatch.score_exterieur ?? 0}) {selectedMatch.ext?.nom}
             </p>
 
-            {/* Formulaire ajout évènement */}
             <form onSubmit={handleAddMatchEvent} className="bg-slate-950 p-4 rounded-xl border border-slate-800 mb-6 space-y-3">
               <h4 className="text-xs font-bold uppercase text-slate-400">Ajouter une action</h4>
               
@@ -669,7 +781,6 @@ export default function App() {
               </button>
             </form>
 
-            {/* Liste des actions enregistrées */}
             <h4 className="text-xs font-bold uppercase text-slate-400 mb-2">Événements du match</h4>
             <div className="space-y-2 max-h-48 overflow-y-auto">
               {matchEvents.length === 0 ? (
