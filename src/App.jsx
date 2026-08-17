@@ -95,7 +95,7 @@ export default function App() {
   const [logoFile, setLogoFile] = useState(null);
   const [uploading, setUploading] = useState(false);
   const [newPlayer, setNewPlayer] = useState({ nom: '', equipe_id: '', numero: 10, general: 75, valeur: 10000000, age: 22, poste: 'MC' });
-  const [newMatch, setNewMatch] = useState({ dom_id: '', ext_id: '', journee: 1 });
+  const [generatingSchedule, setGeneratingSchedule] = useState(false);
 
   // Formulaire Transfert
   const [transferFromTeamId, setTransferFromTeamId] = useState('');
@@ -180,15 +180,13 @@ export default function App() {
     const { data: dataPlayers } = await supabase.from('players').select('*, teams(nom, logo_url)');
     if (dataPlayers) setPlayers(dataPlayers);
 
-    // Récupération complète des équipes pour les matchs (y compris formation et lineup_ids)
+    // Récupération complète des matchs
     let { data: userMatches } = await supabase
       .from('matches')
       .select('*, dom:teams!equipe_domicile_id(*), ext:teams!equipe_exterieur_id(*)')
-      .eq('user_id', session.user.id);
+      .eq('user_id', session.user.id)
+      .order('journee', { ascending: true });
 
-    if ((!userMatches || userMatches.length === 0) && dataTeams && dataTeams.length > 0) {
-      userMatches = await initializeUserMatches(dataTeams);
-    }
     if (userMatches) setMatches(userMatches);
 
     const { data: dataEvents } = await supabase.from('match_events').select('*').eq('user_id', session.user.id);
@@ -201,29 +199,109 @@ export default function App() {
     if (dataTransfers) setTransfers(dataTransfers);
   }
 
-  async function initializeUserMatches(allTeams) {
-    const defaultMatches = [];
-    for (let i = 0; i < allTeams.length; i++) {
-      for (let j = i + 1; j < allTeams.length; j++) {
-        defaultMatches.push({
-          equipe_domicile_id: allTeams[i].id,
-          equipe_exterieur_id: allTeams[j].id,
-          journee: 1,
-          statut: 'à venir',
-          user_id: session.user.id
-        });
-      }
+  // --- ALGORITHME DE GÉNÉRATION AUTOMATIQUE D'UN CALENDRIER ALLER-RETOUR ---
+  function buildRoundRobinFixtures(allTeams, userId) {
+    if (!allTeams || allTeams.length < 2) return [];
+
+    // Mélange aléatoire des équipes pour un tirage au sort unique
+    const list = [...allTeams].sort(() => Math.random() - 0.5);
+
+    let n = list.length;
+    // Si nombre impair, ajout d'une équipe 'exempte'
+    if (n % 2 !== 0) {
+      list.push(null);
+      n++;
     }
 
-    if (defaultMatches.length > 0) {
-      await supabase.from('matches').insert(defaultMatches);
-      const { data: createdMatches } = await supabase
-        .from('matches')
-        .select('*, dom:teams!equipe_domicile_id(*), ext:teams!equipe_exterieur_id(*)')
-        .eq('user_id', session.user.id);
-      return createdMatches || [];
+    const numRounds = n - 1;
+    const half = n / 2;
+    const allerMatches = [];
+
+    // 1. Phase ALLER
+    for (let round = 0; round < numRounds; round++) {
+      const journee = round + 1;
+      for (let i = 0; i < half; i++) {
+        const t1 = list[i];
+        const t2 = list[n - 1 - i];
+
+        if (t1 !== null && t2 !== null) {
+          // Alternance Domicile / Extérieur
+          let home = (round + i) % 2 === 0 ? t1 : t2;
+          let away = (round + i) % 2 === 0 ? t2 : t1;
+
+          if (i === 0) {
+            home = round % 2 === 0 ? t1 : t2;
+            away = round % 2 === 0 ? t2 : t1;
+          }
+
+          allerMatches.push({
+            equipe_domicile_id: home.id,
+            equipe_exterieur_id: away.id,
+            journee: journee,
+            statut: 'à venir',
+            user_id: userId
+          });
+        }
+      }
+
+      // Rotation circulaire (Table de Berger)
+      const fixed = list[0];
+      const rest = list.slice(1);
+      const last = rest.pop();
+      rest.unshift(last);
+      list.splice(0, list.length, fixed, ...rest);
     }
-    return [];
+
+    // 2. Phase RETOUR (inversion stricte des terrains)
+    const retourMatches = allerMatches.map(m => ({
+      equipe_domicile_id: m.equipe_exterieur_id,
+      equipe_exterieur_id: m.equipe_domicile_id,
+      journee: m.journee + numRounds,
+      statut: 'à venir',
+      user_id: userId
+    }));
+
+    return [...allerMatches, ...retourMatches];
+  }
+
+  async function handleGenerateSchedule() {
+    if (!teams || teams.length < 2) {
+      showNotif("Vous devez avoir au moins 2 équipes créées pour générer un calendrier.");
+      return;
+    }
+
+    const totalJournees = (teams.length % 2 === 0 ? teams.length - 1 : teams.length) * 2;
+    const totalMatchs = teams.length * (teams.length - 1);
+
+    if (!window.confirm(`Voulez-vous générer automatiquement le calendrier Aller-Retour ?\n\n- ${teams.length} Équipes\n- ${totalJournees} Journées complètes\n- ${totalMatchs} Matchs programmés\n\nAttention : Cela remplacera le calendrier actuel.`)) {
+      return;
+    }
+
+    setGeneratingSchedule(true);
+
+    try {
+      // 1. Supprimer les anciens événements et matchs de l'utilisateur
+      await supabase.from('match_events').delete().eq('user_id', session.user.id);
+      await supabase.from('matches').delete().eq('user_id', session.user.id);
+
+      // 2. Générer le nouveau calendrier
+      const fixtures = buildRoundRobinFixtures(teams, session.user.id);
+
+      // 3. Insérer dans Supabase
+      const { error } = await supabase.from('matches').insert(fixtures);
+
+      if (error) {
+        showNotif(`Erreur : ${error.message}`);
+      } else {
+        showNotif(`Calendrier complet généré avec succès (${totalJournees} Journées, ${totalMatchs} Matchs) !`);
+        setJourneeFilter(1);
+        await fetchData();
+      }
+    } catch (err) {
+      showNotif(`Erreur : ${err.message}`);
+    }
+
+    setGeneratingSchedule(false);
   }
 
   const classement = teams.map(team => {
@@ -378,7 +456,6 @@ export default function App() {
     }
   }
 
-  // --- MISE À JOUR DU LOGO DU CLUB ---
   async function handleUpdateTeamLogo(e) {
     e.preventDefault();
     if (!editingTeamLogo || !newLogoFile) {
@@ -545,22 +622,6 @@ export default function App() {
     }
   }
 
-  async function handleAddMatch(e) {
-    e.preventDefault();
-    if (!newMatch.dom_id || !newMatch.ext_id || !userProfile?.is_admin) return;
-
-    const { error } = await supabase.from('matches').insert([{
-      equipe_domicile_id: newMatch.dom_id,
-      equipe_exterieur_id: newMatch.ext_id,
-      journee: parseInt(newMatch.journee),
-      statut: 'à venir',
-      user_id: session.user.id
-    }]);
-
-    if (error) showNotif(`Erreur : ${error.message}`);
-    else { showNotif("Match programmé !"); fetchData(); }
-  }
-
   function formatMoney(amount) {
     if (!amount) return '0 €';
     return new Intl.NumberFormat('fr-FR', { style: 'currency', currency: 'EUR', maximumFractionDigits: 0 }).format(amount);
@@ -580,9 +641,8 @@ export default function App() {
 
   const teamRoster = selectedTeam ? getSortedTeamPlayers(selectedTeam.id) : [];
 
-  // --- OUVERTURE DE LA COMPOSITION (Recherche automatique dans la liste fraîche des équipes) ---
+  // --- OUVERTURE DE LA COMPOSITION ---
   function openTeamLineup(team) {
-    // On récupère toujours l'objet d'équipe le plus récent depuis l'état 'teams'
     const fullTeam = teams.find(t => t.id === team.id) || team;
     setSelectedLineupTeam(fullTeam);
     setSelectedSlot(null);
@@ -591,7 +651,6 @@ export default function App() {
     const savedFormation = fullTeam.formation || '4-3-3';
     setCurrentFormation(savedFormation);
 
-    // Vérification et parsing des IDs sauvegardés
     let savedIds = fullTeam.lineup_ids;
     if (typeof savedIds === 'string') {
       try { savedIds = JSON.parse(savedIds); } catch (e) { savedIds = []; }
@@ -618,7 +677,6 @@ export default function App() {
       }
     }
 
-    // Si aucune composition sauvegardée, génération automatique de la meilleure équipe
     buildLineupForFormation(allTeamPlayers, savedFormation);
   }
 
@@ -660,7 +718,6 @@ export default function App() {
     buildLineupForFormation(allCombined, newFmt);
   }
 
-  // --- SAUVEGARDE DÉFINITIVE DANS SUPABASE ---
   async function handleSaveLineup() {
     if (!selectedLineupTeam) return;
 
@@ -681,11 +738,10 @@ export default function App() {
       } else {
         showNotif(`Composition de "${selectedLineupTeam.nom}" (${currentFormation}) sauvegardée pour toutes les journées !`);
         
-        // Mise à jour locale immédiate
         setTeams(prev => prev.map(t => t.id === selectedLineupTeam.id ? { ...t, formation: currentFormation, lineup_ids: starterIds } : t));
         setSelectedLineupTeam(prev => ({ ...prev, formation: currentFormation, lineup_ids: starterIds }));
         
-        await fetchData(); // Recharge complètement les données
+        await fetchData();
       }
     } catch (err) {
       showNotif(`Erreur : ${err.message}`);
@@ -748,6 +804,11 @@ export default function App() {
   const matchPlayers = selectedMatch
     ? playersWithStats.filter(p => p.equipe_id === selectedMatch.equipe_domicile_id || p.equipe_id === selectedMatch.equipe_exterieur_id)
     : [];
+
+  // Nombre total de journées dans le calendrier actuel
+  const maxJourneesCount = matches.length > 0
+    ? Math.max(...matches.map(m => m.journee || 1))
+    : (teams.length >= 2 ? (teams.length % 2 === 0 ? teams.length - 1 : teams.length) * 2 : 38);
 
   const PitchPlayerSlot = ({ player, globalIndex }) => {
     const isSelected = selectedSlot?.type === 'pitch' && selectedSlot?.index === globalIndex;
@@ -1001,99 +1062,114 @@ export default function App() {
                 <input
                   type="number"
                   min="1"
-                  max="38"
+                  max={maxJourneesCount}
                   value={journeeFilter}
                   onChange={(e) => setJourneeFilter(e.target.value)}
                   className="bg-slate-800 text-white font-bold w-16 px-3 py-1.5 rounded-lg border border-slate-700 focus:outline-none focus:border-indigo-500 text-center"
                 />
+                <span className="text-xs text-slate-500 pr-2">/ {maxJourneesCount}</span>
               </div>
             </div>
 
             <div className="grid gap-4 sm:grid-cols-1">
-              {matches
-                .filter((m) => m.journee === parseInt(journeeFilter))
-                .map((m) => {
-                  const currentDomInput = scoresInput[m.id]?.dom !== undefined ? scoresInput[m.id].dom : (m.score_domicile ?? '');
-                  const currentExtInput = scoresInput[m.id]?.ext !== undefined ? scoresInput[m.id].ext : (m.score_exterieur ?? '');
+              {matches.filter((m) => m.journee === parseInt(journeeFilter)).length === 0 ? (
+                <div className="bg-slate-900 border border-slate-800 rounded-2xl p-12 text-center">
+                  <p className="text-slate-400 font-medium text-sm mb-4">Aucun match programmé pour cette journée.</p>
+                  {userProfile?.is_admin && (
+                    <button
+                      onClick={() => setTab('admin')}
+                      className="bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold px-4 py-2.5 rounded-xl transition-all"
+                    >
+                      Aller dans l'onglet Admin pour générer le calendrier 🎲
+                    </button>
+                  )}
+                </div>
+              ) : (
+                matches
+                  .filter((m) => m.journee === parseInt(journeeFilter))
+                  .map((m) => {
+                    const currentDomInput = scoresInput[m.id]?.dom !== undefined ? scoresInput[m.id].dom : (m.score_domicile ?? '');
+                    const currentExtInput = scoresInput[m.id]?.ext !== undefined ? scoresInput[m.id].ext : (m.score_exterieur ?? '');
 
-                  return (
-                    <div key={m.id} className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-lg flex flex-col sm:flex-row items-center justify-between gap-4">
-                      
-                      {/* ÉQUIPE DOMICILE */}
-                      <div 
-                        onClick={() => openTeamLineup(m.dom)}
-                        className="flex items-center gap-3 sm:w-3/12 justify-start w-full cursor-pointer group"
-                        title="Voir & modifier la composition (11 de départ)"
-                      >
-                        {m.dom?.logo_url ? (
-                          <img src={m.dom.logo_url} className="w-10 h-10 object-contain group-hover:scale-110 transition-transform" alt="" />
-                        ) : (
-                          <div className="w-10 h-10 bg-slate-800 rounded-full flex items-center justify-center text-xs group-hover:bg-slate-700">🛡️</div>
-                        )}
-                        <span className="font-bold text-base text-white group-hover:text-indigo-400 transition-colors truncate">
-                          {m.dom?.nom}
-                        </span>
-                      </div>
-
-                      {/* SCORE & VS */}
-                      <div className="flex items-center gap-3 sm:w-4/12 justify-center my-2 sm:my-0">
-                        <input
-                          type="number"
-                          min="0"
-                          placeholder="0"
-                          value={currentDomInput}
-                          onChange={(e) => handleScoreInputChange(m.id, 'dom', e.target.value)}
-                          className="w-14 h-11 bg-slate-950 text-white font-mono font-bold text-lg text-center rounded-xl border border-slate-700 focus:outline-none focus:border-indigo-500 shadow-inner [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
-                        />
-
-                        <span className="text-xs font-black bg-indigo-600/30 text-indigo-400 px-3 py-1.5 rounded-lg border border-indigo-500/20 uppercase tracking-widest">
-                          VS
-                        </span>
-
-                        <input
-                          type="number"
-                          min="0"
-                          placeholder="0"
-                          value={currentExtInput}
-                          onChange={(e) => handleScoreInputChange(m.id, 'ext', e.target.value)}
-                          className="w-14 h-11 bg-slate-950 text-white font-mono font-bold text-lg text-center rounded-xl border border-slate-700 focus:outline-none focus:border-indigo-500 shadow-inner [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
-                        />
-                      </div>
-
-                      {/* ÉQUIPE EXTÉRIEURE */}
-                      <div className="flex items-center gap-2 sm:w-5/12 justify-end w-full">
+                    return (
+                      <div key={m.id} className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-lg flex flex-col sm:flex-row items-center justify-between gap-4">
+                        
+                        {/* ÉQUIPE DOMICILE */}
                         <div 
-                          onClick={() => openTeamLineup(m.ext)}
-                          className="flex items-center gap-2 cursor-pointer group mr-3"
+                          onClick={() => openTeamLineup(m.dom)}
+                          className="flex items-center gap-3 sm:w-3/12 justify-start w-full cursor-pointer group"
                           title="Voir & modifier la composition (11 de départ)"
                         >
-                          <span className="font-bold text-base text-white group-hover:text-indigo-400 transition-colors truncate text-right">
-                            {m.ext?.nom}
-                          </span>
-                          {m.ext?.logo_url ? (
-                            <img src={m.ext.logo_url} className="w-10 h-10 object-contain group-hover:scale-110 transition-transform" alt="" />
+                          {m.dom?.logo_url ? (
+                            <img src={m.dom.logo_url} className="w-10 h-10 object-contain group-hover:scale-110 transition-transform" alt="" />
                           ) : (
                             <div className="w-10 h-10 bg-slate-800 rounded-full flex items-center justify-center text-xs group-hover:bg-slate-700">🛡️</div>
                           )}
+                          <span className="font-bold text-base text-white group-hover:text-indigo-400 transition-colors truncate">
+                            {m.dom?.nom}
+                          </span>
                         </div>
 
-                        <button
-                          onClick={() => handleSaveMatchScore(m)}
-                          className="bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold px-3 py-2.5 rounded-xl transition-all shadow-md shadow-emerald-600/20 active:scale-95 cursor-pointer"
-                        >
-                          Valider
-                        </button>
+                        {/* SCORE & VS */}
+                        <div className="flex items-center gap-3 sm:w-4/12 justify-center my-2 sm:my-0">
+                          <input
+                            type="number"
+                            min="0"
+                            placeholder="0"
+                            value={currentDomInput}
+                            onChange={(e) => handleScoreInputChange(m.id, 'dom', e.target.value)}
+                            className="w-14 h-11 bg-slate-950 text-white font-mono font-bold text-lg text-center rounded-xl border border-slate-700 focus:outline-none focus:border-indigo-500 shadow-inner [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                          />
 
-                        <button
-                          onClick={() => openMatchDetails(m)}
-                          className="bg-slate-800 hover:bg-slate-700 text-indigo-400 border border-slate-700 text-xs font-bold px-3 py-2.5 rounded-xl transition-all active:scale-95 cursor-pointer"
-                        >
-                          Détails 📝
-                        </button>
+                          <span className="text-xs font-black bg-indigo-600/30 text-indigo-400 px-3 py-1.5 rounded-lg border border-indigo-500/20 uppercase tracking-widest">
+                            VS
+                          </span>
+
+                          <input
+                            type="number"
+                            min="0"
+                            placeholder="0"
+                            value={currentExtInput}
+                            onChange={(e) => handleScoreInputChange(m.id, 'ext', e.target.value)}
+                            className="w-14 h-11 bg-slate-950 text-white font-mono font-bold text-lg text-center rounded-xl border border-slate-700 focus:outline-none focus:border-indigo-500 shadow-inner [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                          />
+                        </div>
+
+                        {/* ÉQUIPE EXTÉRIEURE */}
+                        <div className="flex items-center gap-2 sm:w-5/12 justify-end w-full">
+                          <div 
+                            onClick={() => openTeamLineup(m.ext)}
+                            className="flex items-center gap-2 cursor-pointer group mr-3"
+                            title="Voir & modifier la composition (11 de départ)"
+                          >
+                            <span className="font-bold text-base text-white group-hover:text-indigo-400 transition-colors truncate text-right">
+                              {m.ext?.nom}
+                            </span>
+                            {m.ext?.logo_url ? (
+                              <img src={m.ext.logo_url} className="w-10 h-10 object-contain group-hover:scale-110 transition-transform" alt="" />
+                            ) : (
+                              <div className="w-10 h-10 bg-slate-800 rounded-full flex items-center justify-center text-xs group-hover:bg-slate-700">🛡️</div>
+                            )}
+                          </div>
+
+                          <button
+                            onClick={() => handleSaveMatchScore(m)}
+                            className="bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold px-3 py-2.5 rounded-xl transition-all shadow-md shadow-emerald-600/20 active:scale-95 cursor-pointer"
+                          >
+                            Valider
+                          </button>
+
+                          <button
+                            onClick={() => openMatchDetails(m)}
+                            className="bg-slate-800 hover:bg-slate-700 text-indigo-400 border border-slate-700 text-xs font-bold px-3 py-2.5 rounded-xl transition-all active:scale-95 cursor-pointer"
+                          >
+                            Détails 📝
+                          </button>
+                        </div>
                       </div>
-                    </div>
-                  );
-                })}
+                    );
+                  })
+              )}
             </div>
           </div>
         )}
@@ -1317,7 +1393,7 @@ export default function App() {
           </div>
         )}
 
-        {/* 5. ADMIN */}
+        {/* 5. ADMIN (CRÉATEUR DE LIGUE) */}
         {tab === 'admin' && userProfile?.is_admin && (
           <div className="space-y-6">
             <h2 className="text-2xl font-extrabold text-white">⚙️ Panneau d'Administration (Créateur de Ligue)</h2>
@@ -1346,7 +1422,7 @@ export default function App() {
                       className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2 text-xs text-slate-300 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-indigo-600 file:text-white"
                     />
                   </div>
-                  <button type="submit" disabled={uploading} className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-semibold py-2.5 rounded-xl text-sm">
+                  <button type="submit" disabled={uploading} className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-semibold py-2.5 rounded-xl text-sm cursor-pointer">
                     {uploading ? 'Chargement...' : '+ Ajouter l\'équipe'}
                   </button>
                 </form>
@@ -1457,47 +1533,32 @@ export default function App() {
               </div>
             </div>
 
+            {/* SECTION 3 : GÉNÉRATEUR AUTOMATIQUE DE CALENDRIER COMPLET */}
             <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl">
-              <h3 className="text-lg font-bold text-white mb-4">3. Programmer un Match</h3>
-              <form onSubmit={handleAddMatch} className="grid grid-cols-1 sm:grid-cols-4 gap-3">
+              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
                 <div>
-                  <label className="block text-xs font-medium text-slate-400 mb-1">Journée</label>
-                  <input
-                    type="number"
-                    value={newMatch.journee}
-                    onChange={(e) => setNewMatch({ ...newMatch, journee: e.target.value })}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2 text-sm text-white"
-                    required
-                  />
+                  <h3 className="text-lg font-bold text-white flex items-center gap-2">
+                    <span>🎲</span> 3. Générateur Automatique de Calendrier (Aller-Retour)
+                  </h3>
+                  <p className="text-xs text-slate-400 mt-1 max-w-xl">
+                    Génère instantanément un calendrier officiel de championnat avec tirage aléatoire des journées. Chaque équipe jouera exactement 1 match aller et 1 match retour contre tous les clubs.
+                  </p>
+                  <div className="flex items-center gap-4 mt-3 text-xs font-semibold text-slate-400">
+                    <span>🛡️ Équipes : <strong className="text-indigo-400">{teams.length}</strong></span>
+                    <span>📅 Journées : <strong className="text-amber-400">{teams.length >= 2 ? (teams.length % 2 === 0 ? teams.length - 1 : teams.length) * 2 : 0}</strong></span>
+                    <span>⚽ Total Matchs : <strong className="text-emerald-400">{teams.length * (teams.length - 1)}</strong></span>
+                  </div>
                 </div>
-                <div>
-                  <label className="block text-xs font-medium text-slate-400 mb-1">Domicile</label>
-                  <select
-                    onChange={(e) => setNewMatch({ ...newMatch, dom_id: e.target.value })}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm text-white"
-                    required
-                  >
-                    <option value="">Sélectionner</option>
-                    {teams.map((t) => <option key={t.id} value={t.id}>{t.nom}</option>)}
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-slate-400 mb-1">Extérieur</label>
-                  <select
-                    onChange={(e) => setNewMatch({ ...newMatch, ext_id: e.target.value })}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm text-white"
-                    required
-                  >
-                    <option value="">Sélectionner</option>
-                    {teams.map((t) => <option key={t.id} value={t.id}>{t.nom}</option>)}
-                  </select>
-                </div>
-                <div className="flex items-end">
-                  <button type="submit" className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-semibold py-2 rounded-xl text-sm cursor-pointer">
-                    Programmer
-                  </button>
-                </div>
-              </form>
+
+                <button
+                  type="button"
+                  onClick={handleGenerateSchedule}
+                  disabled={generatingSchedule || teams.length < 2}
+                  className="bg-indigo-600 hover:bg-indigo-500 active:scale-95 disabled:bg-slate-800 disabled:text-slate-600 text-white font-extrabold px-6 py-3.5 rounded-xl text-sm transition-all shadow-lg shadow-indigo-600/30 flex items-center gap-2 cursor-pointer whitespace-nowrap"
+                >
+                  <span>🎲</span> {generatingSchedule ? 'Génération en cours...' : 'Générer le Calendrier Complet'}
+                </button>
+              </div>
             </div>
           </div>
         )}
