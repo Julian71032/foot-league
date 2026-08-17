@@ -180,9 +180,10 @@ export default function App() {
     const { data: dataPlayers } = await supabase.from('players').select('*, teams(nom, logo_url)');
     if (dataPlayers) setPlayers(dataPlayers);
 
+    // Récupération complète des équipes pour les matchs (y compris formation et lineup_ids)
     let { data: userMatches } = await supabase
       .from('matches')
-      .select('*, dom:teams!equipe_domicile_id(id, nom, logo_url), ext:teams!equipe_exterieur_id(id, nom, logo_url)')
+      .select('*, dom:teams!equipe_domicile_id(*), ext:teams!equipe_exterieur_id(*)')
       .eq('user_id', session.user.id);
 
     if ((!userMatches || userMatches.length === 0) && dataTeams && dataTeams.length > 0) {
@@ -218,7 +219,7 @@ export default function App() {
       await supabase.from('matches').insert(defaultMatches);
       const { data: createdMatches } = await supabase
         .from('matches')
-        .select('*, dom:teams!equipe_domicile_id(id, nom, logo_url), ext:teams!equipe_exterieur_id(id, nom, logo_url)')
+        .select('*, dom:teams!equipe_domicile_id(*), ext:teams!equipe_exterieur_id(*)')
         .eq('user_id', session.user.id);
       return createdMatches || [];
     }
@@ -579,22 +580,29 @@ export default function App() {
 
   const teamRoster = selectedTeam ? getSortedTeamPlayers(selectedTeam.id) : [];
 
-  // --- CHARGEMENT DU 11 SAUVEGARDÉ OU PAR DÉFAUT ---
+  // --- OUVERTURE DE LA COMPOSITION (Recherche automatique dans la liste fraîche des équipes) ---
   function openTeamLineup(team) {
-    setSelectedLineupTeam(team);
+    // On récupère toujours l'objet d'équipe le plus récent depuis l'état 'teams'
+    const fullTeam = teams.find(t => t.id === team.id) || team;
+    setSelectedLineupTeam(fullTeam);
     setSelectedSlot(null);
 
-    const allTeamPlayers = getSortedTeamPlayers(team.id);
-    const savedFormation = team.formation || '4-3-3';
+    const allTeamPlayers = getSortedTeamPlayers(fullTeam.id);
+    const savedFormation = fullTeam.formation || '4-3-3';
     setCurrentFormation(savedFormation);
 
-    // Si une composition a déjà été enregistrée dans Supabase
-    if (team.lineup_ids && Array.isArray(team.lineup_ids) && team.lineup_ids.length > 0) {
+    // Vérification et parsing des IDs sauvegardés
+    let savedIds = fullTeam.lineup_ids;
+    if (typeof savedIds === 'string') {
+      try { savedIds = JSON.parse(savedIds); } catch (e) { savedIds = []; }
+    }
+
+    if (Array.isArray(savedIds) && savedIds.length > 0) {
       const playerMap = new Map(allTeamPlayers.map(p => [p.id, p]));
       const savedStarters = [];
       const usedIds = new Set();
 
-      team.lineup_ids.forEach(id => {
+      savedIds.forEach(id => {
         if (playerMap.has(id)) {
           savedStarters.push(playerMap.get(id));
           usedIds.add(id);
@@ -603,7 +611,6 @@ export default function App() {
 
       const remainingBench = allTeamPlayers.filter(p => !usedIds.has(p.id));
 
-      // Si le 11 est complet
       if (savedStarters.length >= 11) {
         setTeamLineupPlayers(savedStarters.slice(0, 11));
         setTeamBenchPlayers([...savedStarters.slice(11), ...remainingBench]);
@@ -611,7 +618,7 @@ export default function App() {
       }
     }
 
-    // Sinon, génération automatique de la meilleure équipe
+    // Si aucune composition sauvegardée, génération automatique de la meilleure équipe
     buildLineupForFormation(allTeamPlayers, savedFormation);
   }
 
@@ -653,7 +660,7 @@ export default function App() {
     buildLineupForFormation(allCombined, newFmt);
   }
 
-  // --- SAUVEGARDE DÉFINITIVE DE LA COMPOSITION DANS SUPABASE ---
+  // --- SAUVEGARDE DÉFINITIVE DANS SUPABASE ---
   async function handleSaveLineup() {
     if (!selectedLineupTeam) return;
 
@@ -670,13 +677,15 @@ export default function App() {
         .eq('id', selectedLineupTeam.id);
 
       if (error) {
-        showNotif(`Erreur : ${error.message}`);
+        showNotif(`Erreur Supabase : ${error.message}`);
       } else {
         showNotif(`Composition de "${selectedLineupTeam.nom}" (${currentFormation}) sauvegardée pour toutes les journées !`);
         
-        // Mettre à jour l'état local des équipes
+        // Mise à jour locale immédiate
         setTeams(prev => prev.map(t => t.id === selectedLineupTeam.id ? { ...t, formation: currentFormation, lineup_ids: starterIds } : t));
         setSelectedLineupTeam(prev => ({ ...prev, formation: currentFormation, lineup_ids: starterIds }));
+        
+        await fetchData(); // Recharge complètement les données
       }
     } catch (err) {
       showNotif(`Erreur : ${err.message}`);
@@ -704,7 +713,7 @@ export default function App() {
       updatedPitch[selectedSlot.index] = updatedPitch[index];
       updatedPitch[index] = temp;
       setTeamLineupPlayers(updatedPitch);
-      showNotif("Postes permutés ! N'oubliez pas d'enregistrer.");
+      showNotif("Postes permutés ! Cliquez sur 'Sauvegarder la Composition' pour enregistrer.");
     } else if (selectedSlot.type === 'bench' && type === 'pitch') {
       const benchP = updatedBench[selectedSlot.index];
       const pitchP = updatedPitch[index];
@@ -740,7 +749,6 @@ export default function App() {
     ? playersWithStats.filter(p => p.equipe_id === selectedMatch.equipe_domicile_id || p.equipe_id === selectedMatch.equipe_exterieur_id)
     : [];
 
-  // Composant bulle du joueur sur le terrain
   const PitchPlayerSlot = ({ player, globalIndex }) => {
     const isSelected = selectedSlot?.type === 'pitch' && selectedSlot?.index === globalIndex;
 
@@ -1904,7 +1912,7 @@ export default function App() {
                     max="99"
                     value={editingPlayer.general !== undefined && editingPlayer.general !== null ? editingPlayer.general : 75}
                     onChange={(e) => setEditingPlayer({ ...editingPlayer, general: e.target.value })}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm text-white"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-indigo-500"
                   />
                 </div>
                 <div>
@@ -1915,7 +1923,7 @@ export default function App() {
                     max="45"
                     value={editingPlayer.age !== undefined && editingPlayer.age !== null ? editingPlayer.age : 22}
                     onChange={(e) => setEditingPlayer({ ...editingPlayer, age: e.target.value })}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm text-white"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-indigo-500"
                   />
                 </div>
                 <div>
@@ -1925,7 +1933,7 @@ export default function App() {
                     step="500000"
                     value={editingPlayer.valeur_marchande !== undefined && editingPlayer.valeur_marchande !== null ? editingPlayer.valeur_marchande : 10000000}
                     onChange={(e) => setEditingPlayer({ ...editingPlayer, valeur_marchande: e.target.value })}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm text-white"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-indigo-500"
                   />
                 </div>
               </div>
