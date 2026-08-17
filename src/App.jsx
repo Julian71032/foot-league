@@ -76,6 +76,11 @@ export default function App() {
   const [selectedTeam, setSelectedTeam] = useState(null);
   const [editingPlayer, setEditingPlayer] = useState(null);
 
+  // MODALE MODIFICATION DU LOGO DE L'ÉQUIPE
+  const [editingTeamLogo, setEditingTeamLogo] = useState(null);
+  const [newLogoFile, setNewLogoFile] = useState(null);
+  const [logoUpdating, setLogoUpdating] = useState(false);
+
   // ÉTAT TACTIQUE / COMPOSITION EN DIRECT
   const [selectedLineupTeam, setSelectedLineupTeam] = useState(null);
   const [currentFormation, setCurrentFormation] = useState('4-3-3');
@@ -371,6 +376,53 @@ export default function App() {
     }
   }
 
+  // --- MISE À JOUR DU LOGO DU CLUB ---
+  async function handleUpdateTeamLogo(e) {
+    e.preventDefault();
+    if (!editingTeamLogo || !newLogoFile) {
+      showNotif("Veuillez sélectionner un fichier image.");
+      return;
+    }
+
+    setLogoUpdating(true);
+    let logoUrl = '';
+
+    try {
+      logoUrl = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = (err) => reject(err);
+        reader.readAsDataURL(newLogoFile);
+      });
+
+      const { error } = await supabase
+        .from('teams')
+        .update({ logo_url: logoUrl })
+        .eq('id', editingTeamLogo.id);
+
+      if (error) {
+        showNotif(`Erreur : ${error.message}`);
+      } else {
+        showNotif(`Logo de l'équipe "${editingTeamLogo.nom}" modifié avec succès !`);
+        
+        // Mettre à jour les modales actives avec le nouveau logo
+        if (selectedTeam && selectedTeam.id === editingTeamLogo.id) {
+          setSelectedTeam({ ...selectedTeam, logo_url: logoUrl });
+        }
+        if (selectedLineupTeam && selectedLineupTeam.id === editingTeamLogo.id) {
+          setSelectedLineupTeam({ ...selectedLineupTeam, logo_url: logoUrl });
+        }
+
+        setEditingTeamLogo(null);
+        setNewLogoFile(null);
+        fetchData();
+      }
+    } catch (err) {
+      showNotif(`Erreur : ${err.message}`);
+    }
+    setLogoUpdating(false);
+  }
+
   async function openMatchDetails(match) {
     setSelectedMatch(match);
     fetchSelectedMatchEvents(match.id);
@@ -573,7 +625,6 @@ export default function App() {
     buildLineupForFormation(allCombined, newFmt);
   }
 
-  // Permutation au clic
   function handleSelectSlot(type, index) {
     if (!selectedSlot) {
       setSelectedSlot({ type, index });
@@ -629,7 +680,6 @@ export default function App() {
     ? playersWithStats.filter(p => p.equipe_id === selectedMatch.equipe_domicile_id || p.equipe_id === selectedMatch.equipe_exterieur_id)
     : [];
 
-  // Composant bulle du joueur sur le terrain avec NUMÉRO DE MAILLOT
   const PitchPlayerSlot = ({ player, globalIndex }) => {
     const isSelected = selectedSlot?.type === 'pitch' && selectedSlot?.index === globalIndex;
 
@@ -652,7 +702,6 @@ export default function App() {
         }`}
       >
         <div className="relative">
-          {/* ROND DU JOUEUR AVEC NUMÉRO AU CENTRE */}
           <div className={`w-11 h-11 sm:w-13 sm:h-13 rounded-full bg-slate-900 border-2 shadow-xl flex items-center justify-center text-white text-base font-black ring-2 overflow-hidden transition-all ${
             isSelected 
               ? 'border-amber-400 ring-amber-400 ring-4 animate-pulse bg-slate-800' 
@@ -663,18 +712,15 @@ export default function App() {
             </span>
           </div>
 
-          {/* Pastille Note Générale */}
           <span className="absolute -top-1 -right-1 bg-amber-400 text-slate-950 font-black text-[9px] w-4 h-4 rounded-full flex items-center justify-center shadow-md">
             {player.general || 75}
           </span>
 
-          {/* Pastille Poste */}
           <span className="absolute -bottom-1 -left-1 bg-indigo-600 text-white font-bold text-[8px] px-1 rounded shadow">
             {player.poste || 'MC'}
           </span>
         </div>
 
-        {/* Nom du joueur */}
         <span className={`text-[10px] sm:text-xs font-bold mt-1 px-2 py-0.5 rounded-full shadow text-center max-w-[85px] truncate transition-colors ${
           isSelected ? 'bg-amber-400 text-slate-950 font-black' : 'bg-black/80 text-white'
         }`}>
@@ -1548,7 +1594,7 @@ export default function App() {
         </div>
       )}
 
-      {/* --- MODALE 2 : EFFECTIF COMPLET ÉQUIPE --- */}
+      {/* --- MODALE 2 : EFFECTIF COMPLET ÉQUIPE & MODIFICATION DU LOGO --- */}
       {selectedTeam && (
         <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-3xl w-full p-6 shadow-2xl relative">
@@ -1560,16 +1606,28 @@ export default function App() {
               ✕
             </button>
 
-            <div className="flex items-center gap-4 mb-6 pb-4 border-b border-slate-800">
-              {selectedTeam.logo_url ? (
-                <img src={selectedTeam.logo_url} className="w-14 h-14 object-contain rounded-full bg-slate-950 p-1" alt="" />
-              ) : (
-                <div className="w-14 h-14 bg-slate-950 rounded-full flex items-center justify-center text-xl">🛡️</div>
-              )}
-              <div>
-                <h3 className="text-xl font-extrabold text-white">{selectedTeam.nom}</h3>
-                <p className="text-xs text-indigo-400 font-semibold">{teamRoster.length} joueurs dans l'effectif complet</p>
+            <div className="flex items-center justify-between gap-4 mb-6 pb-4 border-b border-slate-800">
+              <div className="flex items-center gap-4">
+                {selectedTeam.logo_url ? (
+                  <img src={selectedTeam.logo_url} className="w-14 h-14 object-contain rounded-full bg-slate-950 p-1" alt="" />
+                ) : (
+                  <div className="w-14 h-14 bg-slate-950 rounded-full flex items-center justify-center text-xl">🛡️</div>
+                )}
+                <div>
+                  <h3 className="text-xl font-extrabold text-white">{selectedTeam.nom}</h3>
+                  <p className="text-xs text-indigo-400 font-semibold">{teamRoster.length} joueurs dans l'effectif complet</p>
+                </div>
               </div>
+
+              {/* BOUTON MODIFICATION DU LOGO (ADMIN SEULEMENT) */}
+              {userProfile?.is_admin && (
+                <button
+                  onClick={() => setEditingTeamLogo(selectedTeam)}
+                  className="bg-indigo-600/20 hover:bg-indigo-600 text-indigo-300 hover:text-white border border-indigo-500/30 text-xs font-bold px-3.5 py-2 rounded-xl transition-all flex items-center gap-2 cursor-pointer shadow-md"
+                >
+                  <span>📷</span> Modifier le Logo
+                </button>
+              )}
             </div>
 
             <div className="overflow-x-auto max-h-96 overflow-y-auto">
@@ -1637,6 +1695,65 @@ export default function App() {
                 </tbody>
               </table>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* --- MODALE NOUVELLE : MODIFIER LE LOGO D'UNE ÉQUIPE (ADMIN SEULEMENT) --- */}
+      {editingTeamLogo && userProfile?.is_admin && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-md w-full p-6 shadow-2xl relative">
+            <button
+              type="button"
+              onClick={() => { setEditingTeamLogo(null); setNewLogoFile(null); }}
+              className="absolute top-4 right-4 text-slate-400 hover:text-white font-bold text-xl cursor-pointer"
+            >
+              ✕
+            </button>
+
+            <h3 className="text-lg font-bold text-white mb-2">📷 Modifier le Logo</h3>
+            <p className="text-xs text-slate-400 mb-4">Équipe : <span className="font-bold text-indigo-400">{editingTeamLogo.nom}</span></p>
+
+            <form onSubmit={handleUpdateTeamLogo} className="space-y-4">
+              <div className="flex justify-center mb-2">
+                {newLogoFile ? (
+                  <img
+                    src={URL.createObjectURL(newLogoFile)}
+                    alt="Aperçu"
+                    className="w-20 h-20 object-contain rounded-2xl bg-slate-950 p-2 border border-slate-700 shadow-lg"
+                  />
+                ) : editingTeamLogo.logo_url ? (
+                  <img
+                    src={editingTeamLogo.logo_url}
+                    alt="Logo actuel"
+                    className="w-20 h-20 object-contain rounded-2xl bg-slate-950 p-2 border border-slate-700 shadow-lg"
+                  />
+                ) : (
+                  <div className="w-20 h-20 bg-slate-950 rounded-2xl flex items-center justify-center text-3xl border border-slate-700">
+                    🛡️
+                  </div>
+                )}
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-400 mb-1.5">Choisir une nouvelle image</label>
+                <input
+                  type="file"
+                  accept="image/*"
+                  onChange={(e) => setNewLogoFile(e.target.files[0])}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 text-xs text-slate-300 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-indigo-600 file:text-white cursor-pointer"
+                  required
+                />
+              </div>
+
+              <button
+                type="submit"
+                disabled={logoUpdating || !newLogoFile}
+                className="w-full bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-800 disabled:text-slate-600 text-white font-bold py-2.5 rounded-xl text-sm transition-all shadow-lg shadow-indigo-600/30 cursor-pointer"
+              >
+                {logoUpdating ? 'Mise à jour...' : 'Sauvegarder le Logo'}
+              </button>
+            </form>
           </div>
         </div>
       )}
