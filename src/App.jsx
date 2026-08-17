@@ -55,7 +55,7 @@ export default function App() {
     if (dataMatches) setMatches(dataMatches);
   }
 
-  // 1. Ajouter Équipe avec Upload de Fichier Logo
+  // 1. Ajouter Équipe avec Upload sécurisé
   async function handleAddTeam(e) {
     e.preventDefault();
     if (!newTeamName) return;
@@ -63,14 +63,16 @@ export default function App() {
     setUploading(true);
     let logoUrl = '';
 
-    // Si une image a été sélectionnée
     if (logoFile) {
-      const fileExt = logoFile.name.split('.').pop();
-      const fileName = `${Date.now()}_${Math.random().toString(36).substring(7)}.${fileExt}`;
+      // Nettoyage strict du nom du fichier pour éviter 'Invalid path'
+      const cleanFileName = `${Date.now()}_logo.png`;
 
       const { data: uploadData, error: uploadError } = await supabase.storage
         .from('logos')
-        .upload(fileName, logoFile);
+        .upload(cleanFileName, logoFile, {
+          cacheControl: '3600',
+          upsert: true
+        });
 
       if (uploadError) {
         showNotif(`Erreur upload image: ${uploadError.message}`);
@@ -78,15 +80,13 @@ export default function App() {
         return;
       }
 
-      // Récupération de l'URL publique de l'image
       const { data: publicUrlData } = supabase.storage
         .from('logos')
-        .getPublicUrl(fileName);
+        .getPublicUrl(cleanFileName);
 
       logoUrl = publicUrlData.publicUrl;
     }
 
-    // Insertion de l'équipe dans la base de données
     const { error } = await supabase.from('teams').insert([{
       nom: newTeamName,
       logo_url: logoUrl
@@ -95,7 +95,7 @@ export default function App() {
     setUploading(false);
 
     if (error) {
-      showNotif(`Erreur lors de la création de l'équipe: ${error.message}`);
+      showNotif(`Erreur création équipe: ${error.message}`);
     } else {
       showNotif(`Équipe "${newTeamName}" créée avec succès !`);
       setNewTeamName('');
@@ -371,7 +371,7 @@ export default function App() {
             <h2 className="text-2xl font-extrabold text-white">⚙️ Panneau d'Administration</h2>
 
             <div className="grid gap-6 md:grid-cols-2">
-              {/* Ajouter Équipe avec Import Image */}
+              {/* Ajouter Équipe */}
               <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl">
                 <h3 className="text-lg font-bold text-white mb-4">1. Créer une Équipe</h3>
                 <form onSubmit={handleAddTeam} className="space-y-4">
