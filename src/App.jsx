@@ -1,31 +1,45 @@
 import React, { useState, useEffect } from 'react';
 import { supabase } from './supabaseClient';
 
-export default function App() {
-  // --- LISTE COMPLÈTE ET PRÉCISE DES POSTES ---
-  const POSITIONS_LIST = [
-    { label: '-- GARDIENS --', disabled: true },
-    { value: 'G', label: 'G - Gardien' },
-    { label: '-- DÉFENSEURS --', disabled: true },
-    { value: 'DC', label: 'DC - Défenseur Central' },
-    { value: 'DD', label: 'DD - Défenseur Droit' },
-    { value: 'DG', label: 'DG - Défenseur Gauche' },
-    { value: 'DLD', label: 'DLD - Piston Droit' },
-    { value: 'DLG', label: 'DLG - Piston Gauche' },
-    { label: '-- MILIEUX --', disabled: true },
-    { value: 'MDC', label: 'MDC - Milieu Défensif Central' },
-    { value: 'MC', label: 'MC - Milieu Central' },
-    { value: 'MOC', label: 'MOC - Milieu Offensif Central' },
-    { value: 'MD', label: 'MD - Milieu Droit' },
-    { value: 'MG', label: 'MG - Milieu Gauche' },
-    { label: '-- ATTAQUANTS --', disabled: true },
-    { value: 'BU', label: 'BU - Buteur' },
-    { value: 'AT', label: 'AT - Attaquant' },
-    { value: 'AD', label: 'AD - Ailier Droit' },
-    { value: 'AG', label: 'AG - Ailier Gauche' },
-    { value: 'SA', label: 'SA - Second Attaquant' }
-  ];
+// --- LISTE COMPLÈTE ET PRÉCISE DES POSTES ---
+const POSITIONS_LIST = [
+  { label: '-- GARDIENS --', disabled: true },
+  { value: 'G', label: 'G - Gardien' },
+  { label: '-- DÉFENSEURS --', disabled: true },
+  { value: 'DC', label: 'DC - Défenseur Central' },
+  { value: 'DD', label: 'DD - Défenseur Droit' },
+  { value: 'DG', label: 'DG - Défenseur Gauche' },
+  { value: 'DLD', label: 'DLD - Piston Droit' },
+  { value: 'DLG', label: 'DLG - Piston Gauche' },
+  { label: '-- MILIEUX --', disabled: true },
+  { value: 'MDC', label: 'MDC - Milieu Défensif Central' },
+  { value: 'MC', label: 'MC - Milieu Central' },
+  { value: 'MOC', label: 'MOC - Milieu Offensif Central' },
+  { value: 'MD', label: 'MD - Milieu Droit' },
+  { value: 'MG', label: 'MG - Milieu Gauche' },
+  { label: '-- ATTAQUANTS --', disabled: true },
+  { value: 'BU', label: 'BU - Buteur' },
+  { value: 'AT', label: 'AT - Attaquant' },
+  { value: 'AD', label: 'AD - Ailier Droit' },
+  { value: 'AG', label: 'AG - Ailier Gauche' },
+  { value: 'SA', label: 'SA - Second Attaquant' }
+];
 
+// --- ORDRE DES POSTES POUR LE TRI DANS L'EFFECTIF ---
+const POSITION_ORDER = {
+  'G': 0,
+  'DC': 1, 'DD': 2, 'DG': 3, 'DLD': 4, 'DLG': 4,
+  'MDC': 5, 'MC': 6, 'MOC': 7, 'MD': 8, 'MG': 8,
+  'AD': 9, 'AG': 10, 'SA': 11, 'BU': 12, 'AT': 12
+};
+
+function getPositionRank(posteStr) {
+  if (!posteStr) return 99; // Si aucun poste, on le met à la fin
+  const code = posteStr.split(' - ')[0].trim().toUpperCase();
+  return POSITION_ORDER[code] ?? 99;
+}
+
+export default function App() {
   // --- AUTHENTIFICATION ---
   const [session, setSession] = useState(null);
   const [userProfile, setUserProfile] = useState(null);
@@ -323,10 +337,8 @@ export default function App() {
     }
   }
 
- async function handleUpdatePlayer(e) {
+  async function handleUpdatePlayer(e) {
     e.preventDefault();
-    
-    // Vérification de sécurité Admin + présence du joueur
     if (!userProfile?.is_admin || !editingPlayer) return;
 
     try {
@@ -342,11 +354,11 @@ export default function App() {
         .eq('id', editingPlayer.id);
 
       if (error) {
-        showNotif(`Erreur : ${error.message}`);
+        showNotif(`Erreur Supabase : ${error.message}`);
       } else {
         showNotif(`Joueur "${editingPlayer.nom}" mis à jour avec succès !`);
-        setEditingPlayer(null); // Ferme la modale d'édition
-        await fetchData();       // Recharge la liste complète
+        setEditingPlayer(null);
+        await fetchData();
       }
     } catch (err) {
       showNotif(`Erreur inattendue : ${err.message}`);
@@ -496,8 +508,19 @@ export default function App() {
     return new Intl.NumberFormat('fr-FR', { style: 'currency', currency: 'EUR', maximumFractionDigits: 0 }).format(amount);
   }
 
+  // --- TRI DE L'EFFECTIF DE L'ÉQUIPE (Par Poste puis par Note Générale) ---
   const teamRoster = selectedTeam
-    ? playersWithStats.filter(p => p.equipe_id === selectedTeam.id).sort((a, b) => (b.general || 0) - (a.general || 0))
+    ? playersWithStats
+        .filter(p => p.equipe_id === selectedTeam.id)
+        .sort((a, b) => {
+          const rankA = getPositionRank(a.poste);
+          const rankB = getPositionRank(b.poste);
+          
+          if (rankA !== rankB) {
+            return rankA - rankB; // Tri par poste G -> BU
+          }
+          return (b.general || 0) - (a.general || 0); // Puis par note générale
+        })
     : [];
 
   const matchPlayers = selectedMatch
@@ -1275,6 +1298,7 @@ export default function App() {
         <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-md w-full p-6 shadow-2xl relative">
             <button
+              type="button"
               onClick={() => setEditingPlayer(null)}
               className="absolute top-4 right-4 text-slate-400 hover:text-white font-bold text-xl"
             >
@@ -1288,7 +1312,7 @@ export default function App() {
                 <label className="block text-xs text-slate-400 mb-1">Nom du joueur</label>
                 <input
                   type="text"
-                  value={editingPlayer.nom}
+                  value={editingPlayer.nom || ''}
                   onChange={(e) => setEditingPlayer({ ...editingPlayer, nom: e.target.value })}
                   className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-indigo-500"
                   required
@@ -1298,7 +1322,11 @@ export default function App() {
               <div>
                 <label className="block text-xs text-slate-400 mb-1">Poste précis</label>
                 <select
-                  value={editingPlayer.poste || 'MC'}
+                  value={
+                    POSITIONS_LIST.find(
+                      (p) => !p.disabled && (p.value === editingPlayer.poste || p.label === editingPlayer.poste)
+                    )?.value || 'MC'
+                  }
                   onChange={(e) => setEditingPlayer({ ...editingPlayer, poste: e.target.value })}
                   className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-indigo-500"
                 >
@@ -1323,9 +1351,9 @@ export default function App() {
                     type="number"
                     min="40"
                     max="99"
-                    value={editingPlayer.general || 75}
+                    value={editingPlayer.general !== undefined && editingPlayer.general !== null ? editingPlayer.general : 75}
                     onChange={(e) => setEditingPlayer({ ...editingPlayer, general: e.target.value })}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm text-white"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-indigo-500"
                   />
                 </div>
                 <div>
@@ -1334,9 +1362,9 @@ export default function App() {
                     type="number"
                     min="15"
                     max="45"
-                    value={editingPlayer.age || 22}
+                    value={editingPlayer.age !== undefined && editingPlayer.age !== null ? editingPlayer.age : 22}
                     onChange={(e) => setEditingPlayer({ ...editingPlayer, age: e.target.value })}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm text-white"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-indigo-500"
                   />
                 </div>
                 <div>
@@ -1344,14 +1372,17 @@ export default function App() {
                   <input
                     type="number"
                     step="500000"
-                    value={editingPlayer.valeur_marchande || 10000000}
+                    value={editingPlayer.valeur_marchande !== undefined && editingPlayer.valeur_marchande !== null ? editingPlayer.valeur_marchande : 10000000}
                     onChange={(e) => setEditingPlayer({ ...editingPlayer, valeur_marchande: e.target.value })}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm text-white"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-indigo-500"
                   />
                 </div>
               </div>
 
-              <button type="submit" className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-2.5 rounded-xl text-sm mt-2">
+              <button
+                type="submit"
+                className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-2.5 rounded-xl text-sm mt-2 transition-all shadow-lg shadow-indigo-600/30 cursor-pointer"
+              >
                 Enregistrer les modifications
               </button>
             </form>
