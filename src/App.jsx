@@ -25,7 +25,7 @@ const POSITIONS_LIST = [
   { value: 'SA', label: 'SA - Second Attaquant' }
 ];
 
-// --- ORDRE DES POSTES POUR LE TRI DANS L'EFFECTIF ---
+// --- ORDRE DES POSTES POUR LE TRI TACTIQUE (Gardien -> Attaquant) ---
 const POSITION_ORDER = {
   'G': 0,
   'DC': 1, 'DD': 2, 'DG': 3, 'DLD': 4, 'DLG': 4,
@@ -34,7 +34,7 @@ const POSITION_ORDER = {
 };
 
 function getPositionRank(posteStr) {
-  if (!posteStr) return 99; // Si aucun poste, on le met à la fin
+  if (!posteStr) return 99;
   const code = posteStr.split(' - ')[0].trim().toUpperCase();
   return POSITION_ORDER[code] ?? 99;
 }
@@ -65,6 +65,7 @@ export default function App() {
   const [eventPlayerId, setEventPlayerId] = useState('');
   const [eventType, setEventType] = useState('but');
   const [selectedTeam, setSelectedTeam] = useState(null);
+  const [selectedLineupTeam, setSelectedLineupTeam] = useState(null); // Modale 11 de départ
   const [editingPlayer, setEditingPlayer] = useState(null);
 
   // Formulaires Admin, Scores & Transferts
@@ -75,14 +76,14 @@ export default function App() {
   const [newPlayer, setNewPlayer] = useState({ nom: '', equipe_id: '', general: 75, valeur: 10000000, age: 22, poste: 'MC' });
   const [newMatch, setNewMatch] = useState({ dom_id: '', ext_id: '', journee: 1 });
 
-  // Formulaire Transfert (Sélection en cascade)
+  // Formulaire Transfert
   const [transferFromTeamId, setTransferFromTeamId] = useState('');
   const [transferPlayerId, setTransferPlayerId] = useState('');
   const [transferToTeamId, setTransferToTeamId] = useState('');
   const [transferFee, setTransferFee] = useState(10000000);
   const [transferLoading, setTransferLoading] = useState(false);
 
-  // 1. Détection de la session au démarrage
+  // 1. Détection de la session
   useEffect(() => {
     if (!document.getElementById('tailwind-cdn')) {
       const script = document.createElement('script');
@@ -224,7 +225,7 @@ export default function App() {
         } else if (m.equipe_exterieur_id === team.id) {
           joues++;
           if (m.score_exterieur > m.score_domicile) points += 3;
-          else if (m.score_exterieur === m.score_domicile) points += 1;
+          else if (m.score_domicile === m.score_exterieur) points += 1;
         }
       }
     });
@@ -266,7 +267,6 @@ export default function App() {
     }
   }
 
-  // --- GESTION DU TRANSFERT DE JOUEUR ---
   async function handleTransferPlayer(e) {
     e.preventDefault();
     if (!transferFromTeamId || !transferPlayerId || !transferToTeamId) {
@@ -508,20 +508,31 @@ export default function App() {
     return new Intl.NumberFormat('fr-FR', { style: 'currency', currency: 'EUR', maximumFractionDigits: 0 }).format(amount);
   }
 
-  // --- TRI DE L'EFFECTIF DE L'ÉQUIPE (Par Poste puis par Note Générale) ---
-  const teamRoster = selectedTeam
-    ? playersWithStats
-        .filter(p => p.equipe_id === selectedTeam.id)
-        .sort((a, b) => {
-          const rankA = getPositionRank(a.poste);
-          const rankB = getPositionRank(b.poste);
-          
-          if (rankA !== rankB) {
-            return rankA - rankB; // Tri par poste G -> BU
-          }
-          return (b.general || 0) - (a.general || 0); // Puis par note générale
-        })
-    : [];
+  // --- LOGIQUE DU 11 DE DÉPART ET DE L'EFFECTIF ---
+  // Tri de l'effectif d'une équipe : Gardien -> Attaquant puis Général décroissant
+  const getSortedTeamPlayers = (teamId) => {
+    if (!teamId) return [];
+    return playersWithStats
+      .filter(p => p.equipe_id === teamId)
+      .sort((a, b) => {
+        const rankA = getPositionRank(a.poste);
+        const rankB = getPositionRank(b.poste);
+        if (rankA !== rankB) return rankA - rankB;
+        return (b.general || 0) - (a.general || 0);
+      });
+  };
+
+  const teamRoster = selectedTeam ? getSortedTeamPlayers(selectedTeam.id) : [];
+
+  // Pour la modale Composition de Match : les 11 meilleurs joueurs (11 de départ) + remplaçants
+  const lineupTeamPlayers = selectedLineupTeam ? getSortedTeamPlayers(selectedLineupTeam.id) : [];
+  
+  // Pour former le 11 de départ le plus fort : on prend le meilleur par catégorie puis on complète
+  const starters = lineupTeamPlayers.slice(0, 11);
+  const bench = lineupTeamPlayers.slice(11);
+  const averageGen = starters.length > 0 
+    ? Math.round(starters.reduce((acc, p) => acc + (p.general || 75), 0) / starters.length)
+    : 0;
 
   const matchPlayers = selectedMatch
     ? playersWithStats.filter(p => p.equipe_id === selectedMatch.equipe_domicile_id || p.equipe_id === selectedMatch.equipe_exterieur_id)
@@ -672,7 +683,7 @@ export default function App() {
           <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl">
             <div className="flex items-center justify-between mb-6">
               <h2 className="text-xl font-bold flex items-center gap-2 text-white">🏆 Classement Personnel</h2>
-              <span className="text-xs text-slate-400 bg-slate-800 px-3 py-1 rounded-full border border-slate-700">💡 Clique sur une équipe pour voir son effectif</span>
+              <span className="text-xs text-slate-400 bg-slate-800 px-3 py-1 rounded-full border border-slate-700">💡 Clique sur une équipe pour voir son effectif complet</span>
             </div>
 
             <div className="overflow-x-auto">
@@ -723,7 +734,7 @@ export default function App() {
             <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl flex flex-col sm:flex-row items-center justify-between gap-4">
               <div>
                 <h2 className="text-xl font-bold text-white flex items-center gap-2">📅 Calendrier des Rencontres</h2>
-                <p className="text-xs text-slate-400 mt-1">Saisissez vos scores et gérez vos buteurs dans "Détails"</p>
+                <p className="text-xs text-slate-400 mt-1">💡 Clique sur le logo ou nom d'une équipe pour voir sa <strong>composition (11 de départ)</strong></p>
               </div>
 
               <div className="flex items-center gap-3 bg-slate-950 p-2 rounded-xl border border-slate-800">
@@ -748,15 +759,24 @@ export default function App() {
 
                   return (
                     <div key={m.id} className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-lg flex flex-col sm:flex-row items-center justify-between gap-4">
-                      <div className="flex items-center gap-3 sm:w-3/12 justify-start w-full">
+                      
+                      {/* ÉQUIPE DOMICILE (CLIQUABLE POUR VOIR LA COMPO DU 11) */}
+                      <div 
+                        onClick={() => setSelectedLineupTeam(m.dom)}
+                        className="flex items-center gap-3 sm:w-3/12 justify-start w-full cursor-pointer group"
+                        title="Voir la composition (11 de départ)"
+                      >
                         {m.dom?.logo_url ? (
-                          <img src={m.dom.logo_url} className="w-10 h-10 object-contain" alt="" />
+                          <img src={m.dom.logo_url} className="w-10 h-10 object-contain group-hover:scale-110 transition-transform" alt="" />
                         ) : (
-                          <div className="w-10 h-10 bg-slate-800 rounded-full flex items-center justify-center text-xs">🛡️</div>
+                          <div className="w-10 h-10 bg-slate-800 rounded-full flex items-center justify-center text-xs group-hover:bg-slate-700">🛡️</div>
                         )}
-                        <span className="font-bold text-base text-white truncate">{m.dom?.nom}</span>
+                        <span className="font-bold text-base text-white group-hover:text-indigo-400 transition-colors truncate">
+                          {m.dom?.nom}
+                        </span>
                       </div>
 
+                      {/* SCORE & VS */}
                       <div className="flex items-center gap-3 sm:w-4/12 justify-center my-2 sm:my-0">
                         <input
                           type="number"
@@ -781,13 +801,22 @@ export default function App() {
                         />
                       </div>
 
+                      {/* ÉQUIPE EXTÉRIEURE (CLIQUABLE POUR VOIR LA COMPO DU 11) */}
                       <div className="flex items-center gap-2 sm:w-5/12 justify-end w-full">
-                        <span className="font-bold text-base text-white truncate text-right mr-2">{m.ext?.nom}</span>
-                        {m.ext?.logo_url ? (
-                          <img src={m.ext.logo_url} className="w-10 h-10 object-contain mr-2" alt="" />
-                        ) : (
-                          <div className="w-10 h-10 bg-slate-800 rounded-full flex items-center justify-center text-xs mr-2">🛡️</div>
-                        )}
+                        <div 
+                          onClick={() => setSelectedLineupTeam(m.ext)}
+                          className="flex items-center gap-2 cursor-pointer group mr-3"
+                          title="Voir la composition (11 de départ)"
+                        >
+                          <span className="font-bold text-base text-white group-hover:text-indigo-400 transition-colors truncate text-right">
+                            {m.ext?.nom}
+                          </span>
+                          {m.ext?.logo_url ? (
+                            <img src={m.ext.logo_url} className="w-10 h-10 object-contain group-hover:scale-110 transition-transform" alt="" />
+                          ) : (
+                            <div className="w-10 h-10 bg-slate-800 rounded-full flex items-center justify-center text-xs group-hover:bg-slate-700">🛡️</div>
+                          )}
+                        </div>
 
                         <button
                           onClick={() => handleSaveMatchScore(m)}
@@ -832,7 +861,7 @@ export default function App() {
                         <tr key={j.id} className="hover:bg-slate-800/30">
                           <td className="py-3 px-2 font-mono font-bold text-slate-500">{i + 1}</td>
                           <td className="py-3 px-4">
-                            <div className="font-semibold text-white">{j.nom} {j.poste && <span className="text-[10px] text-indigo-400">({j.poste})</span>}</div>
+                            <div className="font-semibold text-white">{j.nom} {j.poste && <span className="text-[10px] text-indigo-400 font-bold">({j.poste})</span>}</div>
                             <div className="text-xs text-slate-400">{j.teams?.nom}</div>
                           </td>
                           <td className="py-3 px-4 text-right font-extrabold text-amber-400 text-base">
@@ -865,7 +894,7 @@ export default function App() {
                         <tr key={j.id} className="hover:bg-slate-800/30">
                           <td className="py-3 px-2 font-mono font-bold text-slate-500">{i + 1}</td>
                           <td className="py-3 px-4">
-                            <div className="font-semibold text-white">{j.nom} {j.poste && <span className="text-[10px] text-indigo-400">({j.poste})</span>}</div>
+                            <div className="font-semibold text-white">{j.nom} {j.poste && <span className="text-[10px] text-indigo-400 font-bold">({j.poste})</span>}</div>
                             <div className="text-xs text-slate-400">{j.teams?.nom}</div>
                           </td>
                           <td className="py-3 px-4 text-right font-extrabold text-indigo-400 text-base">
@@ -989,7 +1018,7 @@ export default function App() {
                 <button
                   type="submit"
                   disabled={transferLoading || !transferFromTeamId || !transferPlayerId || !transferToTeamId}
-                  className="w-full bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-800 disabled:text-slate-600 text-white font-bold py-3 rounded-xl text-sm transition-all shadow-lg shadow-indigo-600/30 mt-2"
+                  className="w-full bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-800 disabled:text-slate-600 text-white font-bold py-3 rounded-xl text-sm transition-all shadow-lg shadow-indigo-600/30 mt-2 cursor-pointer"
                 >
                   {transferLoading ? 'Transfert en cours...' : '🤝 Confirmer le Transfert'}
                 </button>
@@ -1149,7 +1178,7 @@ export default function App() {
                     </div>
                   </div>
 
-                  <button type="submit" className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-semibold py-2.5 rounded-xl text-sm mt-2">
+                  <button type="submit" className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-semibold py-2.5 rounded-xl text-sm mt-2 cursor-pointer">
                     + Ajouter le joueur
                   </button>
                 </form>
@@ -1192,7 +1221,7 @@ export default function App() {
                   </select>
                 </div>
                 <div className="flex items-end">
-                  <button type="submit" className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-semibold py-2 rounded-xl text-sm">
+                  <button type="submit" className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-semibold py-2 rounded-xl text-sm cursor-pointer">
                     Programmer
                   </button>
                 </div>
@@ -1202,13 +1231,106 @@ export default function App() {
         )}
       </main>
 
-      {/* --- MODALE EFFECTIF ÉQUIPE --- */}
+      {/* --- MODALE 1 : COMPOSITION ET 11 DE DÉPART (CLIQUE SUR UNE ÉQUIPE DANS MATCHS) --- */}
+      {selectedLineupTeam && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-2xl w-full p-6 shadow-2xl relative max-h-[90vh] flex flex-col">
+            <button
+              type="button"
+              onClick={() => setSelectedLineupTeam(null)}
+              className="absolute top-4 right-4 text-slate-400 hover:text-white font-bold text-xl cursor-pointer"
+            >
+              ✕
+            </button>
+
+            {/* Entête du club */}
+            <div className="flex items-center justify-between pb-4 border-b border-slate-800 mb-4">
+              <div className="flex items-center gap-3">
+                {selectedLineupTeam.logo_url ? (
+                  <img src={selectedLineupTeam.logo_url} className="w-12 h-12 object-contain rounded-full bg-slate-950 p-1" alt="" />
+                ) : (
+                  <div className="w-12 h-12 bg-slate-950 rounded-full flex items-center justify-center text-lg">🛡️</div>
+                )}
+                <div>
+                  <h3 className="text-lg font-extrabold text-white">{selectedLineupTeam.nom}</h3>
+                  <p className="text-xs text-indigo-400 font-semibold">Composition tactique du Match</p>
+                </div>
+              </div>
+
+              <div className="text-right">
+                <span className="text-[10px] uppercase font-bold text-slate-400 block">Note du 11</span>
+                <span className="text-lg font-black text-emerald-400 font-mono bg-emerald-500/10 border border-emerald-500/20 px-3 py-0.5 rounded-lg">
+                  {averageGen} GEN
+                </span>
+              </div>
+            </div>
+
+            {/* Contenu : 11 de Départ + Remplaçants */}
+            <div className="overflow-y-auto space-y-6 pr-1">
+              {/* SECTION 11 DE DÉPART */}
+              <div>
+                <h4 className="text-xs font-extrabold uppercase tracking-wider text-emerald-400 mb-3 flex items-center gap-1.5">
+                  <span>⚡</span> 11 de Départ ({starters.length}/11)
+                </h4>
+                
+                {starters.length === 0 ? (
+                  <p className="text-xs text-slate-500 py-3">Aucun joueur dans l'effectif.</p>
+                ) : (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    {starters.map((j, idx) => (
+                      <div key={j.id} className="bg-slate-950/80 border border-slate-800/80 p-2.5 rounded-xl flex items-center justify-between">
+                        <div className="flex items-center gap-2.5">
+                          <span className="font-mono text-xs font-bold text-slate-500 w-4">{idx + 1}</span>
+                          <span className="text-xs font-black px-2 py-0.5 rounded bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
+                            {j.poste || 'MC'}
+                          </span>
+                          <span className="text-sm font-bold text-white truncate max-w-[130px]">{j.nom}</span>
+                        </div>
+                        <span className="text-xs font-extrabold text-emerald-400 font-mono bg-emerald-500/10 px-2 py-0.5 rounded">
+                          {j.general || 75}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* SECTION REMPLAÇANTS */}
+              {bench.length > 0 && (
+                <div>
+                  <h4 className="text-xs font-extrabold uppercase tracking-wider text-slate-400 mb-3 flex items-center gap-1.5">
+                    <span>🪑</span> Remplaçants ({bench.length})
+                  </h4>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    {bench.map((j) => (
+                      <div key={j.id} className="bg-slate-950/40 border border-slate-800/40 p-2 rounded-xl flex items-center justify-between opacity-80">
+                        <div className="flex items-center gap-2">
+                          <span className="text-[11px] font-bold px-1.5 py-0.5 rounded bg-slate-800 text-slate-400">
+                            {j.poste || 'MC'}
+                          </span>
+                          <span className="text-xs font-medium text-slate-300 truncate max-w-[140px]">{j.nom}</span>
+                        </div>
+                        <span className="text-xs font-bold text-slate-400 font-mono">
+                          {j.general || 75}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* --- MODALE 2 : EFFECTIF COMPLET ÉQUIPE (CLIQUE DEPUIS LE CLASSEMENT) --- */}
       {selectedTeam && (
         <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-3xl w-full p-6 shadow-2xl relative">
             <button
+              type="button"
               onClick={() => setSelectedTeam(null)}
-              className="absolute top-4 right-4 text-slate-400 hover:text-white font-bold text-xl"
+              className="absolute top-4 right-4 text-slate-400 hover:text-white font-bold text-xl cursor-pointer"
             >
               ✕
             </button>
@@ -1221,7 +1343,7 @@ export default function App() {
               )}
               <div>
                 <h3 className="text-xl font-extrabold text-white">{selectedTeam.nom}</h3>
-                <p className="text-xs text-indigo-400 font-semibold">{teamRoster.length} joueurs dans l'effectif</p>
+                <p className="text-xs text-indigo-400 font-semibold">{teamRoster.length} joueurs dans l'effectif complet</p>
               </div>
             </div>
 
@@ -1262,20 +1384,19 @@ export default function App() {
                         <td className="py-3 px-3 text-right font-mono text-xs text-slate-300">
                           {formatMoney(j.valeur_marchande)}
                         </td>
-                        {/* SEUL L'ADMIN VOIT CES BOUTONS */}
                         {userProfile?.is_admin && (
                           <td className="py-3 px-3 text-center">
                             <div className="flex items-center justify-center gap-1">
                               <button
                                 onClick={() => setEditingPlayer(j)}
-                                className="bg-amber-500/20 hover:bg-amber-600 text-amber-300 hover:text-white p-1.5 rounded-lg transition-all text-xs"
+                                className="bg-amber-500/20 hover:bg-amber-600 text-amber-300 hover:text-white p-1.5 rounded-lg transition-all text-xs cursor-pointer"
                                 title="Modifier ce joueur"
                               >
                                 ✏️
                               </button>
                               <button
                                 onClick={() => handleDeletePlayer(j.id, j.nom)}
-                                className="bg-rose-500/20 hover:bg-rose-600 text-rose-300 hover:text-white p-1.5 rounded-lg transition-all text-xs"
+                                className="bg-rose-500/20 hover:bg-rose-600 text-rose-300 hover:text-white p-1.5 rounded-lg transition-all text-xs cursor-pointer"
                                 title="Supprimer ce joueur"
                               >
                                 🗑️
@@ -1293,14 +1414,14 @@ export default function App() {
         </div>
       )}
 
-      {/* --- MODALE ÉDITION DE JOUEUR (ADMIN SEULEMENT) --- */}
+      {/* --- MODALE 3 : ÉDITION DE JOUEUR (ADMIN SEULEMENT) --- */}
       {editingPlayer && userProfile?.is_admin && (
         <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-md w-full p-6 shadow-2xl relative">
             <button
               type="button"
               onClick={() => setEditingPlayer(null)}
-              className="absolute top-4 right-4 text-slate-400 hover:text-white font-bold text-xl"
+              className="absolute top-4 right-4 text-slate-400 hover:text-white font-bold text-xl cursor-pointer"
             >
               ✕
             </button>
@@ -1353,7 +1474,7 @@ export default function App() {
                     max="99"
                     value={editingPlayer.general !== undefined && editingPlayer.general !== null ? editingPlayer.general : 75}
                     onChange={(e) => setEditingPlayer({ ...editingPlayer, general: e.target.value })}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-indigo-500"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm text-white"
                   />
                 </div>
                 <div>
@@ -1364,7 +1485,7 @@ export default function App() {
                     max="45"
                     value={editingPlayer.age !== undefined && editingPlayer.age !== null ? editingPlayer.age : 22}
                     onChange={(e) => setEditingPlayer({ ...editingPlayer, age: e.target.value })}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-indigo-500"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm text-white"
                   />
                 </div>
                 <div>
@@ -1374,7 +1495,7 @@ export default function App() {
                     step="500000"
                     value={editingPlayer.valeur_marchande !== undefined && editingPlayer.valeur_marchande !== null ? editingPlayer.valeur_marchande : 10000000}
                     onChange={(e) => setEditingPlayer({ ...editingPlayer, valeur_marchande: e.target.value })}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-indigo-500"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm text-white"
                   />
                 </div>
               </div>
@@ -1390,13 +1511,14 @@ export default function App() {
         </div>
       )}
 
-      {/* --- MODALE FEUILLE DE MATCH --- */}
+      {/* --- MODALE 4 : FEUILLE DE MATCH (DÉTAILS MATCH) --- */}
       {selectedMatch && (
         <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-lg w-full p-6 shadow-2xl relative">
             <button
+              type="button"
               onClick={() => setSelectedMatch(null)}
-              className="absolute top-4 right-4 text-slate-400 hover:text-white font-bold text-xl"
+              className="absolute top-4 right-4 text-slate-400 hover:text-white font-bold text-xl cursor-pointer"
             >
               ✕
             </button>
@@ -1432,7 +1554,7 @@ export default function App() {
                 </select>
               </div>
 
-              <button type="submit" className="w-full bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold py-2 rounded-lg">
+              <button type="submit" className="w-full bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold py-2 rounded-lg cursor-pointer">
                 + Enregistrer l'action
               </button>
             </form>
@@ -1449,7 +1571,7 @@ export default function App() {
                     </span>
                     <button
                       onClick={() => handleDeleteMatchEvent(ev)}
-                      className="text-rose-500 hover:text-rose-400 font-bold px-2"
+                      className="text-rose-500 hover:text-rose-400 font-bold px-2 cursor-pointer"
                     >
                       Supprimer
                     </button>
