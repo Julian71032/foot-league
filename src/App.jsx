@@ -188,8 +188,15 @@ export default function App() {
     return { ...p, buts, passes_decisives: passes };
   });
 
-  const topButeurs = [...playersWithStats].sort((a, b) => b.buts - a.buts);
-  const topPasseurs = [...playersWithStats].sort((a, b) => b.passes_decisives - a.passes_decisives);
+// On ne garde que les joueurs qui ont au moins 1 but
+const topButeurs = [...playersWithStats]
+  .filter(j => j.buts > 0)
+  .sort((a, b) => b.buts - a.buts);
+
+// On ne garde que les joueurs qui ont au moins 1 passe décisive
+const topPasseurs = [...playersWithStats]
+  .filter(j => j.passes_decisives > 0)
+  .sort((a, b) => b.passes_decisives - a.passes_decisives);
 
   // --- ÉVÉNEMENTS & SCORES (PROPRES À L'UTILISATEUR) ---
   async function openMatchDetails(match) {
