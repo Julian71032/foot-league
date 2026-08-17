@@ -38,6 +38,12 @@ function getPositionRank(posteStr) {
   return POSITION_ORDER[code] ?? 99;
 }
 
+// Formatage du nom de la saison : Saison 1 = 2026/2027, Saison 2 = 2027/2028, etc.
+function getSeasonLabel(seasonNum) {
+  const startYear = 2026 + (parseInt(seasonNum) - 1);
+  return `Saison ${seasonNum} (${startYear}/${startYear + 1})`;
+}
+
 // Dispositifs tactiques
 const FORMATIONS = {
   '4-3-3': { name: '4-3-3 (Classique)', def: 4, mid: 3, att: 3 },
@@ -65,6 +71,7 @@ export default function App() {
   const [matches, setMatches] = useState([]);
   const [matchEvents, setMatchEvents] = useState([]);
   const [transfers, setTransfers] = useState([]);
+  const [seasonFilter, setSeasonFilter] = useState(1);
   const [journeeFilter, setJourneeFilter] = useState(1);
   const [notification, setNotification] = useState('');
 
@@ -180,14 +187,19 @@ export default function App() {
     const { data: dataPlayers } = await supabase.from('players').select('*, teams(nom, logo_url)');
     if (dataPlayers) setPlayers(dataPlayers);
 
-    // Récupération complète des matchs de l'utilisateur
+    // Récupération de tous les matchs
     let { data: userMatches } = await supabase
       .from('matches')
       .select('*, dom:teams!equipe_domicile_id(*), ext:teams!equipe_exterieur_id(*)')
       .eq('user_id', session.user.id)
       .order('journee', { ascending: true });
 
-    if (userMatches) setMatches(userMatches);
+    if (userMatches) {
+      setMatches(userMatches);
+      // Trouve la plus haute saison disponible
+      const maxS = Math.max(...userMatches.map(m => m.saison || 1), 1);
+      setSeasonFilter(prev => Math.max(prev, maxS));
+    }
 
     const { data: dataEvents } = await supabase.from('match_events').select('*').eq('user_id', session.user.id);
     if (dataEvents) setMatchEvents(dataEvents);
@@ -199,11 +211,10 @@ export default function App() {
     if (dataTransfers) setTransfers(dataTransfers);
   }
 
-  // --- ALGORITHME DE GÉNÉRATION AUTOMATIQUE D'UN CALENDRIER ALLER-RETOUR ---
-  function buildRoundRobinFixtures(allTeams, userId) {
+  // --- ALGORITHME ROUND-ROBIN POUR UNE SAISON SPÉCIFIQUE ---
+  function buildRoundRobinFixtures(allTeams, userId, seasonNum) {
     if (!allTeams || allTeams.length < 2) return [];
 
-    // Mélange aléatoire des équipes pour un tirage au sort unique
     const list = [...allTeams].sort(() => Math.random() - 0.5);
 
     let n = list.length;
@@ -216,7 +227,7 @@ export default function App() {
     const half = n / 2;
     const allerMatches = [];
 
-    // 1. Phase ALLER
+    // Phase ALLER
     for (let round = 0; round < numRounds; round++) {
       const journee = round + 1;
       for (let i = 0; i < half; i++) {
@@ -236,13 +247,13 @@ export default function App() {
             equipe_domicile_id: home.id,
             equipe_exterieur_id: away.id,
             journee: journee,
+            saison: seasonNum,
             statut: 'à venir',
             user_id: userId
           });
         }
       }
 
-      // Rotation circulaire (Table de Berger)
       const fixed = list[0];
       const rest = list.slice(1);
       const last = rest.pop();
@@ -250,11 +261,12 @@ export default function App() {
       list.splice(0, list.length, fixed, ...rest);
     }
 
-    // 2. Phase RETOUR
+    // Phase RETOUR
     const retourMatches = allerMatches.map(m => ({
       equipe_domicile_id: m.equipe_exterieur_id,
       equipe_exterieur_id: m.equipe_domicile_id,
       journee: m.journee + numRounds,
+      saison: seasonNum,
       statut: 'à venir',
       user_id: userId
     }));
@@ -262,37 +274,43 @@ export default function App() {
     return [...allerMatches, ...retourMatches];
   }
 
-  // Fonction accessible par TOUS les utilisateurs pour démarrer une nouvelle saison
-  async function handleGenerateSchedule() {
+  // Lancer une toute première saison ou une nouvelle saison suivante
+  async function handleStartNewSeason(isNextSeason = false) {
     if (!teams || teams.length < 2) {
       showNotif("Il doit y avoir au moins 2 équipes créées pour lancer une saison.");
       return;
     }
 
+    const currentMaxSeason = matches.length > 0 ? Math.max(...matches.map(m => m.saison || 1), 1) : 1;
+    const targetSeason = isNextSeason ? currentMaxSeason + 1 : currentMaxSeason;
+    const seasonLabel = getSeasonLabel(targetSeason);
+
     const totalJournees = (teams.length % 2 === 0 ? teams.length - 1 : teams.length) * 2;
     const totalMatchs = teams.length * (teams.length - 1);
 
-    if (!window.confirm(`Voulez-vous démarrer une NOUVELLE SAISON ?\n\n- ${teams.length} Équipes en compétition\n- ${totalJournees} Journées Aller-Retour\n- ${totalMatchs} Matchs programmés\n\nCela va réinitialiser vos scores et générer un calendrier tout neuf.`)) {
-      return;
-    }
+    const confirmMsg = isNextSeason
+      ? `Voulez-vous lancer la ${seasonLabel} ?\n\n- ${teams.length} Équipes\n- ${totalJournees} Journées Aller-Retour\n- ${totalMatchs} Matchs programmés\n\nL'historique des saisons précédentes restera consultable.`
+      : `Voulez-vous générer le calendrier pour la ${seasonLabel} ?\n\n- ${teams.length} Équipes\n- ${totalJournees} Journées Aller-Retour\n- ${totalMatchs} Matchs programmés`;
+
+    if (!window.confirm(confirmMsg)) return;
 
     setGeneratingSchedule(true);
 
     try {
-      // 1. Supprimer les anciens événements et matchs propres à cet utilisateur
-      await supabase.from('match_events').delete().eq('user_id', session.user.id);
-      await supabase.from('matches').delete().eq('user_id', session.user.id);
+      if (!isNextSeason) {
+        // Supprime seulement la saison courante si on regénère
+        await supabase.from('match_events').delete().eq('user_id', session.user.id).eq('saison', targetSeason);
+        await supabase.from('matches').delete().eq('user_id', session.user.id).eq('saison', targetSeason);
+      }
 
-      // 2. Générer le calendrier
-      const fixtures = buildRoundRobinFixtures(teams, session.user.id);
-
-      // 3. Insérer dans Supabase
+      const fixtures = buildRoundRobinFixtures(teams, session.user.id, targetSeason);
       const { error } = await supabase.from('matches').insert(fixtures);
 
       if (error) {
         showNotif(`Erreur : ${error.message}`);
       } else {
-        showNotif(`Nouvelle saison lancée ! ${totalJournees} Journées générées.`);
+        showNotif(`${seasonLabel} lancée avec succès !`);
+        setSeasonFilter(targetSeason);
         setJourneeFilter(1);
         await fetchData();
       }
@@ -303,11 +321,21 @@ export default function App() {
     setGeneratingSchedule(false);
   }
 
+  // --- FILTRAGE DES MATCHS ET STATS DE LA SAISON SÉLECTIONNÉE ---
+  const seasonMatches = matches.filter(m => (m.saison || 1) === parseInt(seasonFilter));
+  const seasonEvents = matchEvents.filter(e => (e.saison || 1) === parseInt(seasonFilter));
+
+  // Liste des numéros de saisons existantes pour le sélecteur
+  const availableSeasons = Array.from(
+    new Set([...matches.map(m => m.saison || 1), 1])
+  ).sort((a, b) => a - b);
+
+  // Calcul du classement de la saison filtrée
   const classement = teams.map(team => {
     let points = 0;
     let joues = 0;
 
-    matches.forEach(m => {
+    seasonMatches.forEach(m => {
       if (m.statut === 'terminé') {
         if (m.equipe_domicile_id === team.id) {
           joues++;
@@ -324,9 +352,10 @@ export default function App() {
     return { ...team, points, joues };
   }).sort((a, b) => b.points - a.points);
 
+  // Statistiques joueurs pour la saison filtrée
   const playersWithStats = players.map(p => {
-    const buts = matchEvents.filter(e => e.player_id === p.id && e.type === 'but').length;
-    const passes = matchEvents.filter(e => e.player_id === p.id && e.type === 'passe').length;
+    const buts = seasonEvents.filter(e => e.player_id === p.id && e.type === 'but').length;
+    const passes = seasonEvents.filter(e => e.player_id === p.id && e.type === 'passe').length;
     return { ...p, buts, passes_decisives: passes };
   });
 
@@ -522,6 +551,7 @@ export default function App() {
       match_id: selectedMatch.id,
       player_id: eventPlayerId,
       type: eventType,
+      saison: selectedMatch.saison || 1,
       user_id: session.user.id
     }]);
 
@@ -717,7 +747,6 @@ export default function App() {
     buildLineupForFormation(allCombined, newFmt);
   }
 
-  // --- SAUVEGARDE DÉFINITIVE DANS SUPABASE ---
   async function handleSaveLineup() {
     if (!selectedLineupTeam) return;
 
@@ -737,10 +766,8 @@ export default function App() {
         showNotif(`Erreur Supabase : ${error.message}`);
       } else {
         showNotif(`Composition de "${selectedLineupTeam.nom}" (${currentFormation}) sauvegardée pour toutes les journées !`);
-        
         setTeams(prev => prev.map(t => t.id === selectedLineupTeam.id ? { ...t, formation: currentFormation, lineup_ids: starterIds } : t));
         setSelectedLineupTeam(prev => ({ ...prev, formation: currentFormation, lineup_ids: starterIds }));
-        
         await fetchData();
       }
     } catch (err) {
@@ -805,8 +832,8 @@ export default function App() {
     ? playersWithStats.filter(p => p.equipe_id === selectedMatch.equipe_domicile_id || p.equipe_id === selectedMatch.equipe_exterieur_id)
     : [];
 
-  const maxJourneesCount = matches.length > 0
-    ? Math.max(...matches.map(m => m.journee || 1))
+  const maxJourneesCount = seasonMatches.length > 0
+    ? Math.max(...seasonMatches.map(m => m.journee || 1))
     : (teams.length >= 2 ? (teams.length % 2 === 0 ? teams.length - 1 : teams.length) * 2 : 38);
 
   const PitchPlayerSlot = ({ player, globalIndex }) => {
@@ -1000,9 +1027,28 @@ export default function App() {
         {/* 1. CLASSEMENT ÉQUIPES */}
         {tab === 'classement' && (
           <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl">
-            <div className="flex items-center justify-between mb-6">
-              <h2 className="text-xl font-bold flex items-center gap-2 text-white">🏆 Classement Personnel</h2>
-              <span className="text-xs text-slate-400 bg-slate-800 px-3 py-1 rounded-full border border-slate-700">💡 Clique sur une équipe pour voir son effectif complet</span>
+            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-6">
+              <div>
+                <h2 className="text-xl font-bold flex items-center gap-2 text-white">🏆 Classement Général</h2>
+                <span className="text-xs text-slate-400">💡 Clique sur une équipe pour voir son effectif complet</span>
+              </div>
+
+              {/* SÉLECTEUR DE SAISON */}
+              <div className="flex items-center gap-2 bg-slate-950 p-1.5 rounded-xl border border-slate-800">
+                <span className="text-xs font-bold text-slate-400 pl-2">Saison :</span>
+                <select
+                  value={seasonFilter}
+                  onChange={(e) => {
+                    setSeasonFilter(parseInt(e.target.value));
+                    setJourneeFilter(1);
+                  }}
+                  className="bg-slate-900 border border-slate-700 text-indigo-400 font-bold text-xs rounded-lg px-3 py-1.5 focus:outline-none focus:border-indigo-500 cursor-pointer"
+                >
+                  {availableSeasons.map((s) => (
+                    <option key={s} value={s}>{getSeasonLabel(s)}</option>
+                  ))}
+                </select>
+              </div>
             </div>
 
             <div className="overflow-x-auto">
@@ -1053,21 +1099,29 @@ export default function App() {
             <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
               <div>
                 <h2 className="text-xl font-bold text-white flex items-center gap-2">📅 Calendrier des Rencontres</h2>
-                <p className="text-xs text-slate-400 mt-1">💡 Clique sur le logo ou nom d'une équipe pour <strong>modifier et sauvegarder son 11</strong></p>
+                <p className="text-xs text-slate-400 mt-1">💡 Clique sur le logo ou nom d'une équipe pour <strong>modifier son 11 de départ</strong></p>
               </div>
 
               <div className="flex flex-wrap items-center gap-3 w-full md:w-auto justify-between md:justify-end">
-                {/* BOUTON NOUVELLE SAISON ACCESSIBLE PAR TOUS LES USERS */}
-                <button
-                  type="button"
-                  onClick={handleGenerateSchedule}
-                  disabled={generatingSchedule || teams.length < 2}
-                  className="bg-indigo-600/30 hover:bg-indigo-600 text-indigo-300 hover:text-white border border-indigo-500/40 text-xs font-bold px-3.5 py-2 rounded-xl transition-all shadow-md flex items-center gap-1.5 cursor-pointer active:scale-95"
-                  title="Génère un calendrier complet Aller-Retour pour votre carrière"
-                >
-                  <span>🎲</span> {generatingSchedule ? 'Génération...' : 'Nouvelle Saison'}
-                </button>
+                
+                {/* 1. SÉLECTEUR DE SAISON */}
+                <div className="flex items-center gap-1.5 bg-slate-950 p-1.5 rounded-xl border border-slate-800">
+                  <span className="text-[11px] font-bold text-slate-400 pl-1.5">Saison :</span>
+                  <select
+                    value={seasonFilter}
+                    onChange={(e) => {
+                      setSeasonFilter(parseInt(e.target.value));
+                      setJourneeFilter(1);
+                    }}
+                    className="bg-slate-900 border border-slate-700 text-indigo-400 font-bold text-xs rounded-lg px-2.5 py-1 focus:outline-none focus:border-indigo-500 cursor-pointer"
+                  >
+                    {availableSeasons.map((s) => (
+                      <option key={s} value={s}>{getSeasonLabel(s)}</option>
+                    ))}
+                  </select>
+                </div>
 
+                {/* 2. SÉLECTEUR DE JOURNÉE */}
                 <div className="flex items-center gap-2 bg-slate-950 p-1.5 rounded-xl border border-slate-800">
                   <span className="text-xs text-slate-400 font-medium pl-2">Journée</span>
                   <input
@@ -1080,23 +1134,46 @@ export default function App() {
                   />
                   <span className="text-[11px] text-slate-500 pr-2">/ {maxJourneesCount}</span>
                 </div>
+
+                {/* 3. BOUTONS NOUVELLE SAISON */}
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => handleStartNewSeason(false)}
+                    disabled={generatingSchedule || teams.length < 2}
+                    className="bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700 text-xs font-bold px-3 py-2 rounded-xl transition-all cursor-pointer"
+                    title="Regénère le calendrier pour la saison actuelle"
+                  >
+                    🎲 Regénérer
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => handleStartNewSeason(true)}
+                    disabled={generatingSchedule || teams.length < 2}
+                    className="bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold px-3.5 py-2 rounded-xl transition-all shadow-md shadow-indigo-600/30 flex items-center gap-1.5 cursor-pointer active:scale-95"
+                    title="Crée la saison suivante (ex: 2027/2028)"
+                  >
+                    <span>🚀</span> {generatingSchedule ? 'Création...' : 'Saison Suivante'}
+                  </button>
+                </div>
               </div>
             </div>
 
             <div className="grid gap-4 sm:grid-cols-1">
-              {matches.filter((m) => m.journee === parseInt(journeeFilter)).length === 0 ? (
+              {seasonMatches.filter((m) => m.journee === parseInt(journeeFilter)).length === 0 ? (
                 <div className="bg-slate-900 border border-slate-800 rounded-2xl p-12 text-center">
-                  <p className="text-slate-400 font-medium text-sm mb-4">Aucun match programmé pour le moment.</p>
+                  <p className="text-slate-400 font-medium text-sm mb-4">Aucun match programmé pour cette journée dans la {getSeasonLabel(seasonFilter)}.</p>
                   <button
-                    onClick={handleGenerateSchedule}
+                    onClick={() => handleStartNewSeason(false)}
                     disabled={generatingSchedule || teams.length < 2}
                     className="bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold px-5 py-3 rounded-xl transition-all shadow-lg shadow-indigo-600/30 cursor-pointer"
                   >
-                    🎲 Lancer une Nouvelle Saison (Générer le Calendrier)
+                    🎲 Générer le Calendrier de la {getSeasonLabel(seasonFilter)}
                   </button>
                 </div>
               ) : (
-                matches
+                seasonMatches
                   .filter((m) => m.journee === parseInt(journeeFilter))
                   .map((m) => {
                     const currentDomInput = scoresInput[m.id]?.dom !== undefined ? scoresInput[m.id].dom : (m.score_domicile ?? '');
@@ -1187,73 +1264,99 @@ export default function App() {
 
         {/* 3. CLASSEMENT BUTEURS ET PASSEURS */}
         {tab === 'buteurs' && (
-          <div className="grid md:grid-cols-2 gap-6">
-            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl">
-              <h2 className="text-xl font-bold mb-6 text-white flex items-center gap-2">⚽ Vos Meilleurs Buteurs</h2>
-              <div className="overflow-x-auto">
-                {topButeurs.length === 0 ? (
-                  <p className="text-xs text-slate-500 text-center py-6">Aucun buteur enregistré pour le moment.</p>
-                ) : (
-                  <table className="w-full text-left border-collapse">
-                    <thead>
-                      <tr className="border-b border-slate-800 text-slate-400 text-xs font-semibold uppercase">
-                        <th className="py-3 px-2">#</th>
-                        <th className="py-3 px-4">Joueur</th>
-                        <th className="py-3 px-4 text-right">Buts</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-800/60 text-sm">
-                      {topButeurs.slice(0, 10).map((j, i) => (
-                        <tr key={j.id} className="hover:bg-slate-800/30">
-                          <td className="py-3 px-2 font-mono font-bold text-slate-500">{i + 1}</td>
-                          <td className="py-3 px-4">
-                            <div className="font-semibold text-white">
-                              {j.nom} {j.numero && <span className="text-[10px] text-slate-400 font-mono">#{j.numero}</span>} {j.poste && <span className="text-[10px] text-indigo-400 font-bold">({j.poste})</span>}
-                            </div>
-                            <div className="text-xs text-slate-400">{j.teams?.nom}</div>
-                          </td>
-                          <td className="py-3 px-4 text-right font-extrabold text-amber-400 text-base">
-                            {j.buts}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                )}
+          <div className="space-y-6">
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl flex items-center justify-between">
+              <div>
+                <h2 className="text-xl font-bold text-white flex items-center gap-2">🏅 Statistiques Individuelles</h2>
+                <p className="text-xs text-slate-400">Performances enregistrées sur la saison sélectionnée</p>
+              </div>
+
+              {/* SÉLECTEUR DE SAISON */}
+              <div className="flex items-center gap-2 bg-slate-950 p-1.5 rounded-xl border border-slate-800">
+                <span className="text-xs font-bold text-slate-400 pl-2">Saison :</span>
+                <select
+                  value={seasonFilter}
+                  onChange={(e) => setSeasonFilter(parseInt(e.target.value))}
+                  className="bg-slate-900 border border-slate-700 text-indigo-400 font-bold text-xs rounded-lg px-3 py-1.5 focus:outline-none focus:border-indigo-500 cursor-pointer"
+                >
+                  {availableSeasons.map((s) => (
+                    <option key={s} value={s}>{getSeasonLabel(s)}</option>
+                  ))}
+                </select>
               </div>
             </div>
 
-            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl">
-              <h2 className="text-xl font-bold mb-6 text-white flex items-center gap-2">🎯 Vos Meilleurs Passeurs</h2>
-              <div className="overflow-x-auto">
-                {topPasseurs.length === 0 ? (
-                  <p className="text-xs text-slate-500 text-center py-6">Aucune passe décisive enregistrée pour le moment.</p>
-                ) : (
-                  <table className="w-full text-left border-collapse">
-                    <thead>
-                      <tr className="border-b border-slate-800 text-slate-400 text-xs font-semibold uppercase">
-                        <th className="py-3 px-4">Joueur</th>
-                        <th className="py-3 px-4 text-right">Passes D.</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-800/60 text-sm">
-                      {topPasseurs.slice(0, 10).map((j, i) => (
-                        <tr key={j.id} className="hover:bg-slate-800/30">
-                          <td className="py-3 px-2 font-mono font-bold text-slate-500">{i + 1}</td>
-                          <td className="py-3 px-4">
-                            <div className="font-semibold text-white">
-                              {j.nom} {j.numero && <span className="text-[10px] text-slate-400 font-mono">#{j.numero}</span>} {j.poste && <span className="text-[10px] text-indigo-400 font-bold">({j.poste})</span>}
-                            </div>
-                            <div className="text-xs text-slate-400">{j.teams?.nom}</div>
-                          </td>
-                          <td className="py-3 px-4 text-right font-extrabold text-indigo-400 text-base">
-                            {j.passes_decisives}
-                          </td>
+            <div className="grid md:grid-cols-2 gap-6">
+              {/* MEILLEURS BUTEURS */}
+              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl">
+                <h3 className="text-lg font-bold mb-4 text-white flex items-center gap-2">⚽ Vos Meilleurs Buteurs</h3>
+                <div className="overflow-x-auto">
+                  {topButeurs.length === 0 ? (
+                    <p className="text-xs text-slate-500 text-center py-6">Aucun buteur dans cette saison.</p>
+                  ) : (
+                    <table className="w-full text-left border-collapse">
+                      <thead>
+                        <tr className="border-b border-slate-800 text-slate-400 text-xs font-semibold uppercase">
+                          <th className="py-3 px-2">#</th>
+                          <th className="py-3 px-4">Joueur</th>
+                          <th className="py-3 px-4 text-right">Buts</th>
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                )}
+                      </thead>
+                      <tbody className="divide-y divide-slate-800/60 text-sm">
+                        {topButeurs.slice(0, 10).map((j, i) => (
+                          <tr key={j.id} className="hover:bg-slate-800/30">
+                            <td className="py-3 px-2 font-mono font-bold text-slate-500">{i + 1}</td>
+                            <td className="py-3 px-4">
+                              <div className="font-semibold text-white">
+                                {j.nom} {j.numero && <span className="text-[10px] text-slate-400 font-mono">#{j.numero}</span>} {j.poste && <span className="text-[10px] text-indigo-400 font-bold">({j.poste})</span>}
+                              </div>
+                              <div className="text-xs text-slate-400">{j.teams?.nom}</div>
+                            </td>
+                            <td className="py-3 px-4 text-right font-extrabold text-amber-400 text-base">
+                              {j.buts}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
+                </div>
+              </div>
+
+              {/* MEILLEURS PASSEURS */}
+              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl">
+                <h3 className="text-lg font-bold mb-4 text-white flex items-center gap-2">🎯 Vos Meilleurs Passeurs</h3>
+                <div className="overflow-x-auto">
+                  {topPasseurs.length === 0 ? (
+                    <p className="text-xs text-slate-500 text-center py-6">Aucune passe décisive dans cette saison.</p>
+                  ) : (
+                    <table className="w-full text-left border-collapse">
+                      <thead>
+                        <tr className="border-b border-slate-800 text-slate-400 text-xs font-semibold uppercase">
+                          <th className="py-3 px-2">#</th>
+                          <th className="py-3 px-4">Joueur</th>
+                          <th className="py-3 px-4 text-right">Passes D.</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-800/60 text-sm">
+                        {topPasseurs.slice(0, 10).map((j, i) => (
+                          <tr key={j.id} className="hover:bg-slate-800/30">
+                            <td className="py-3 px-2 font-mono font-bold text-slate-500">{i + 1}</td>
+                            <td className="py-3 px-4">
+                              <div className="font-semibold text-white">
+                                {j.nom} {j.numero && <span className="text-[10px] text-slate-400 font-mono">#{j.numero}</span>} {j.poste && <span className="text-[10px] text-indigo-400 font-bold">({j.poste})</span>}
+                              </div>
+                              <div className="text-xs text-slate-400">{j.teams?.nom}</div>
+                            </td>
+                            <td className="py-3 px-4 text-right font-extrabold text-indigo-400 text-base">
+                              {j.passes_decisives}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
+                </div>
               </div>
             </div>
           </div>
@@ -1543,31 +1646,41 @@ export default function App() {
               </div>
             </div>
 
-            {/* SECTION 3 : GÉNÉRATEUR AUTOMATIQUE */}
+            {/* SECTION 3 : GESTION DES SAISONS ADMIN */}
             <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl">
               <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
                 <div>
                   <h3 className="text-lg font-bold text-white flex items-center gap-2">
-                    <span>🎲</span> 3. Générateur de Calendrier (Aller-Retour)
+                    <span>🎲</span> 3. Gestion des Saisons & Calendriers
                   </h3>
                   <p className="text-xs text-slate-400 mt-1 max-w-xl">
-                    Génère un calendrier officiel de championnat avec tirage aléatoire des journées.
+                    Chaque saison génère un calendrier complet Aller-Retour de championnat. Les saisons passées restent archivées et consultables.
                   </p>
                   <div className="flex items-center gap-4 mt-3 text-xs font-semibold text-slate-400">
                     <span>🛡️ Équipes : <strong className="text-indigo-400">{teams.length}</strong></span>
-                    <span>📅 Journées : <strong className="text-amber-400">{teams.length >= 2 ? (teams.length % 2 === 0 ? teams.length - 1 : teams.length) * 2 : 0}</strong></span>
-                    <span>⚽ Total Matchs : <strong className="text-emerald-400">{teams.length * (teams.length - 1)}</strong></span>
+                    <span>📅 Journées/Saison : <strong className="text-amber-400">{teams.length >= 2 ? (teams.length % 2 === 0 ? teams.length - 1 : teams.length) * 2 : 0}</strong></span>
+                    <span>🏆 Saisons créées : <strong className="text-emerald-400">{availableSeasons.length}</strong></span>
                   </div>
                 </div>
 
-                <button
-                  type="button"
-                  onClick={handleGenerateSchedule}
-                  disabled={generatingSchedule || teams.length < 2}
-                  className="bg-indigo-600 hover:bg-indigo-500 active:scale-95 disabled:bg-slate-800 disabled:text-slate-600 text-white font-extrabold px-6 py-3.5 rounded-xl text-sm transition-all shadow-lg shadow-indigo-600/30 flex items-center gap-2 cursor-pointer whitespace-nowrap"
-                >
-                  <span>🎲</span> {generatingSchedule ? 'Génération...' : 'Lancer une Nouvelle Saison'}
-                </button>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => handleStartNewSeason(false)}
+                    disabled={generatingSchedule || teams.length < 2}
+                    className="bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold px-4 py-3 rounded-xl text-sm transition-all cursor-pointer"
+                  >
+                    Regénérer la Saison Active
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleStartNewSeason(true)}
+                    disabled={generatingSchedule || teams.length < 2}
+                    className="bg-indigo-600 hover:bg-indigo-500 active:scale-95 disabled:bg-slate-800 disabled:text-slate-600 text-white font-extrabold px-6 py-3 rounded-xl text-sm transition-all shadow-lg shadow-indigo-600/30 flex items-center gap-2 cursor-pointer whitespace-nowrap"
+                  >
+                    <span>🚀</span> Lancer la Saison Suivante
+                  </button>
+                </div>
               </div>
             </div>
           </div>
