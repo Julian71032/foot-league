@@ -17,6 +17,7 @@ export default function App() {
   const [players, setPlayers] = useState([]);
   const [matches, setMatches] = useState([]);
   const [matchEvents, setMatchEvents] = useState([]);
+  const [transfers, setTransfers] = useState([]);
   const [journeeFilter, setJourneeFilter] = useState(1);
   const [notification, setNotification] = useState('');
 
@@ -27,13 +28,19 @@ export default function App() {
   const [eventType, setEventType] = useState('but');
   const [selectedTeam, setSelectedTeam] = useState(null);
 
-  // Formulaires Admin & Scores
+  // Formulaires Admin, Scores & Transferts
   const [scoresInput, setScoresInput] = useState({});
   const [newTeamName, setNewTeamName] = useState('');
   const [logoFile, setLogoFile] = useState(null);
   const [uploading, setUploading] = useState(false);
   const [newPlayer, setNewPlayer] = useState({ nom: '', equipe_id: '', general: 75, valeur: 10000000, age: 22 });
   const [newMatch, setNewMatch] = useState({ dom_id: '', ext_id: '', journee: 1 });
+
+  // Formulaire Transfert
+  const [transferPlayerId, setTransferPlayerId] = useState('');
+  const [transferNewTeamId, setTransferNewTeamId] = useState('');
+  const [transferFee, setTransferFee] = useState(10000000);
+  const [transferLoading, setTransferLoading] = useState(false);
 
   // 1. Détection de la session au démarrage
   useEffect(() => {
@@ -106,36 +113,40 @@ export default function App() {
     showNotif("Déconnexion réussie.");
   }
 
-  // --- CHARGEMENT ET INITIALISATION DES DONNÉES PAR UTILISATEUR ---
+  // --- CHARGEMENT DES DONNÉES ---
   async function fetchData() {
-    // 1. Équipes et Joueurs (Globaux)
+    // 1. Équipes et Joueurs
     const { data: dataTeams } = await supabase.from('teams').select('*');
     if (dataTeams) setTeams(dataTeams);
 
     const { data: dataPlayers } = await supabase.from('players').select('*, teams(nom, logo_url)');
     if (dataPlayers) setPlayers(dataPlayers);
 
-    // 2. Récupération ou initialisation des Matchs du Joueur Connecté
+    // 2. Matchs du joueur
     let { data: userMatches } = await supabase
       .from('matches')
       .select('*, dom:teams!equipe_domicile_id(id, nom, logo_url), ext:teams!equipe_exterieur_id(id, nom, logo_url)')
       .eq('user_id', session.user.id);
 
-    // Si l'utilisateur n'a pas encore de calendrier généré
     if ((!userMatches || userMatches.length === 0) && dataTeams && dataTeams.length > 0) {
       userMatches = await initializeUserMatches(dataTeams);
     }
     if (userMatches) setMatches(userMatches);
 
-    // 3. Récupération des Événements du Joueur Connecté
+    // 3. Événements
     const { data: dataEvents } = await supabase.from('match_events').select('*').eq('user_id', session.user.id);
     if (dataEvents) setMatchEvents(dataEvents);
+
+    // 4. Historique des Transferts (S'il existe dans Supabase)
+    const { data: dataTransfers } = await supabase
+      .from('transfers')
+      .select('*, players(nom), old_team:teams!old_team_id(nom), new_team:teams!new_team_id(nom)')
+      .order('created_at', { ascending: false });
+    if (dataTransfers) setTransfers(dataTransfers);
   }
 
-  // Si le joueur est nouveau, on lui crée sa propre ligue/calendrier
   async function initializeUserMatches(allTeams) {
     const defaultMatches = [];
-    // Génération automatique des matchs opposant les équipes existantes
     for (let i = 0; i < allTeams.length; i++) {
       for (let j = i + 1; j < allTeams.length; j++) {
         defaultMatches.push({
@@ -159,7 +170,7 @@ export default function App() {
     return [];
   }
 
-  // --- CALCUL DYNAMIQUE DU CLASSEMENT ---
+  // --- CALCULS STATISTIQUES ---
   const classement = teams.map(team => {
     let points = 0;
     let joues = 0;
@@ -173,7 +184,7 @@ export default function App() {
         } else if (m.equipe_exterieur_id === team.id) {
           joues++;
           if (m.score_exterieur > m.score_domicile) points += 3;
-          else if (m.score_domicile === m.score_exterieur) points += 1;
+          else if (m.score_exterieur === m.score_domicile) points += 1;
         }
       }
     });
@@ -181,24 +192,72 @@ export default function App() {
     return { ...team, points, joues };
   }).sort((a, b) => b.points - a.points);
 
-  // --- CALCUL DYNAMIQUE DES BUTEURS ET PASSEURS ---
   const playersWithStats = players.map(p => {
     const buts = matchEvents.filter(e => e.player_id === p.id && e.type === 'but').length;
     const passes = matchEvents.filter(e => e.player_id === p.id && e.type === 'passe').length;
     return { ...p, buts, passes_decisives: passes };
   });
 
-// On ne garde que les joueurs qui ont au moins 1 but
-const topButeurs = [...playersWithStats]
-  .filter(j => j.buts > 0)
-  .sort((a, b) => b.buts - a.buts);
+  const topButeurs = [...playersWithStats]
+    .filter(j => j.buts > 0)
+    .sort((a, b) => b.buts - a.buts);
 
-// On ne garde que les joueurs qui ont au moins 1 passe décisive
-const topPasseurs = [...playersWithStats]
-  .filter(j => j.passes_decisives > 0)
-  .sort((a, b) => b.passes_decisives - a.passes_decisives);
+  const topPasseurs = [...playersWithStats]
+    .filter(j => j.passes_decisives > 0)
+    .sort((a, b) => b.passes_decisives - a.passes_decisives);
 
-  // --- ÉVÉNEMENTS & SCORES (PROPRES À L'UTILISATEUR) ---
+  // --- GESTION DU TRANSFERT DE JOUEUR ---
+  async function handleTransferPlayer(e) {
+    e.preventDefault();
+    if (!transferPlayerId || !transferNewTeamId) {
+      showNotif("Veuillez choisir un joueur et sa nouvelle équipe.");
+      return;
+    }
+
+    const selectedPlayer = players.find(p => p.id === transferPlayerId);
+    if (!selectedPlayer) return;
+
+    if (selectedPlayer.equipe_id === transferNewTeamId) {
+      showNotif("Le joueur est déjà dans cette équipe !");
+      return;
+    }
+
+    setTransferLoading(true);
+
+    // 1. Mettre à jour le club du joueur dans la table 'players'
+    const { error: updateError } = await supabase
+      .from('players')
+      .update({
+        equipe_id: transferNewTeamId,
+        valeur_marchande: parseInt(transferFee)
+      })
+      .eq('id', transferPlayerId);
+
+    if (updateError) {
+      showNotif(`Erreur : ${updateError.message}`);
+      setTransferLoading(false);
+      return;
+    }
+
+    // 2. Enregistrer le transfert dans l'historique (Si la table 'transfers' existe)
+    await supabase.from('transfers').insert([{
+      player_id: transferPlayerId,
+      old_team_id: selectedPlayer.equipe_id,
+      new_team_id: transferNewTeamId,
+      fee: parseInt(transferFee),
+      user_id: session.user.id
+    }]);
+
+    showNotif(`Transfert de ${selectedPlayer.nom} effectué avec succès !`);
+    setTransferPlayerId('');
+    setTransferNewTeamId('');
+    setTransferFee(10000000);
+    setTransferLoading(false);
+
+    fetchData();
+  }
+
+  // --- ÉVÉNEMENTS & SCORES ---
   async function openMatchDetails(match) {
     setSelectedMatch(match);
     fetchSelectedMatchEvents(match.id);
@@ -263,7 +322,7 @@ const topPasseurs = [...playersWithStats]
     }
   }
 
-  // --- ACTIONS ADMIN (Équipes, Joueurs, Programation globale) ---
+  // --- ACTIONS ADMIN ---
   async function handleAddTeam(e) {
     e.preventDefault();
     if (!newTeamName) return;
@@ -347,6 +406,8 @@ const topPasseurs = [...playersWithStats]
   const matchPlayers = selectedMatch
     ? playersWithStats.filter(p => p.equipe_id === selectedMatch.equipe_domicile_id || p.equipe_id === selectedMatch.equipe_exterieur_id)
     : [];
+
+  const selectedTransferPlayer = players.find(p => p.id === transferPlayerId);
 
   // --- ÉCRAN DE CONNEXION ---
   if (!session) {
@@ -449,6 +510,7 @@ const topPasseurs = [...playersWithStats]
                 { id: 'classement', label: '🏆 Classement' },
                 { id: 'matchs', label: '📅 Matchs' },
                 { id: 'buteurs', label: '👟 Stats Joueurs' },
+                { id: 'transferts', label: '🔄 Transferts' },
                 ...(userProfile?.is_admin ? [{ id: 'admin', label: '⚙️ Admin' }] : []),
               ].map((item) => (
                 <button
@@ -636,64 +698,184 @@ const topPasseurs = [...playersWithStats]
             <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl">
               <h2 className="text-xl font-bold mb-6 text-white flex items-center gap-2">⚽ Vos Meilleurs Buteurs</h2>
               <div className="overflow-x-auto">
-                <table className="w-full text-left border-collapse">
-                  <thead>
-                    <tr className="border-b border-slate-800 text-slate-400 text-xs font-semibold uppercase">
-                      <th className="py-3 px-2">#</th>
-                      <th className="py-3 px-4">Joueur</th>
-                      <th className="py-3 px-4 text-right">Buts</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-800/60 text-sm">
-                    {topButeurs.slice(0, 10).map((j, i) => (
-                      <tr key={j.id} className="hover:bg-slate-800/30">
-                        <td className="py-3 px-2 font-mono font-bold text-slate-500">{i + 1}</td>
-                        <td className="py-3 px-4">
-                          <div className="font-semibold text-white">{j.nom}</div>
-                          <div className="text-xs text-slate-400">{j.teams?.nom}</div>
-                        </td>
-                        <td className="py-3 px-4 text-right font-extrabold text-amber-400 text-base">
-                          {j.buts}
-                        </td>
+                {topButeurs.length === 0 ? (
+                  <p className="text-xs text-slate-500 text-center py-6">Aucun buteur enregistré pour le moment.</p>
+                ) : (
+                  <table className="w-full text-left border-collapse">
+                    <thead>
+                      <tr className="border-b border-slate-800 text-slate-400 text-xs font-semibold uppercase">
+                        <th className="py-3 px-2">#</th>
+                        <th className="py-3 px-4">Joueur</th>
+                        <th className="py-3 px-4 text-right">Buts</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
+                    </thead>
+                    <tbody className="divide-y divide-slate-800/60 text-sm">
+                      {topButeurs.slice(0, 10).map((j, i) => (
+                        <tr key={j.id} className="hover:bg-slate-800/30">
+                          <td className="py-3 px-2 font-mono font-bold text-slate-500">{i + 1}</td>
+                          <td className="py-3 px-4">
+                            <div className="font-semibold text-white">{j.nom}</div>
+                            <div className="text-xs text-slate-400">{j.teams?.nom}</div>
+                          </td>
+                          <td className="py-3 px-4 text-right font-extrabold text-amber-400 text-base">
+                            {j.buts}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
               </div>
             </div>
 
             <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl">
               <h2 className="text-xl font-bold mb-6 text-white flex items-center gap-2">🎯 Vos Meilleurs Passeurs</h2>
               <div className="overflow-x-auto">
-                <table className="w-full text-left border-collapse">
-                  <thead>
-                    <tr className="border-b border-slate-800 text-slate-400 text-xs font-semibold uppercase">
-                      <th className="py-3 px-2">#</th>
-                      <th className="py-3 px-4">Joueur</th>
-                      <th className="py-3 px-4 text-right">Passes D.</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-800/60 text-sm">
-                    {topPasseurs.slice(0, 10).map((j, i) => (
-                      <tr key={j.id} className="hover:bg-slate-800/30">
-                        <td className="py-3 px-2 font-mono font-bold text-slate-500">{i + 1}</td>
-                        <td className="py-3 px-4">
-                          <div className="font-semibold text-white">{j.nom}</div>
-                          <div className="text-xs text-slate-400">{j.teams?.nom}</div>
-                        </td>
-                        <td className="py-3 px-4 text-right font-extrabold text-indigo-400 text-base">
-                          {j.passes_decisives}
-                        </td>
+                {topPasseurs.length === 0 ? (
+                  <p className="text-xs text-slate-500 text-center py-6">Aucune passe décisive enregistrée pour le moment.</p>
+                ) : (
+                  <table className="w-full text-left border-collapse">
+                    <thead>
+                      <tr className="border-b border-slate-800 text-slate-400 text-xs font-semibold uppercase">
+                        <th className="py-3 px-2">#</th>
+                        <th className="py-3 px-4">Joueur</th>
+                        <th className="py-3 px-4 text-right">Passes D.</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
+                    </thead>
+                    <tbody className="divide-y divide-slate-800/60 text-sm">
+                      {topPasseurs.slice(0, 10).map((j, i) => (
+                        <tr key={j.id} className="hover:bg-slate-800/30">
+                          <td className="py-3 px-2 font-mono font-bold text-slate-500">{i + 1}</td>
+                          <td className="py-3 px-4">
+                            <div className="font-semibold text-white">{j.nom}</div>
+                            <div className="text-xs text-slate-400">{j.teams?.nom}</div>
+                          </td>
+                          <td className="py-3 px-4 text-right font-extrabold text-indigo-400 text-base">
+                            {j.passes_decisives}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
               </div>
             </div>
           </div>
         )}
 
-        {/* 4. ADMIN (RÉSERVÉ À TON COMPTE ADMIN) */}
+        {/* 4. MARCHE DES TRANSFERTS */}
+        {tab === 'transferts' && (
+          <div className="space-y-6">
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl">
+              <h2 className="text-xl font-bold text-white mb-2 flex items-center gap-2">🔄 Marché des Transferts</h2>
+              <p className="text-xs text-slate-400 mb-6">
+                Transférez n'importe quel joueur vers un nouveau club et ajustez sa valeur marchande.
+              </p>
+
+              <form onSubmit={handleTransferPlayer} className="space-y-4 max-w-2xl">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-400 mb-1">Sélectionner le joueur</label>
+                  <select
+                    value={transferPlayerId}
+                    onChange={(e) => setTransferPlayerId(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:border-indigo-500"
+                    required
+                  >
+                    <option value="">-- Choisir un joueur --</option>
+                    {players.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.nom} ({p.teams?.nom || 'Sans club'}) - GEN: {p.general || 75}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {selectedTransferPlayer && (
+                  <div className="bg-slate-950 border border-slate-800/80 p-4 rounded-xl flex items-center justify-between">
+                    <div>
+                      <p className="text-xs text-slate-400">Club actuel</p>
+                      <p className="text-sm font-bold text-amber-400">{selectedTransferPlayer.teams?.nom || 'Sans club'}</p>
+                    </div>
+                    <div className="text-right">
+                      <p className="text-xs text-slate-400">Valeur actuelle</p>
+                      <p className="text-sm font-bold text-emerald-400">{formatMoney(selectedTransferPlayer.valeur_marchande)}</p>
+                    </div>
+                  </div>
+                )}
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-400 mb-1">Nouveau club de destination</label>
+                    <select
+                      value={transferNewTeamId}
+                      onChange={(e) => setTransferNewTeamId(e.target.value)}
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:border-indigo-500"
+                      required
+                    >
+                      <option value="">-- Choisir le nouveau club --</option>
+                      {teams.map((t) => (
+                        <option key={t.id} value={t.id}>{t.nom}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-400 mb-1">Montant du transfert (€)</label>
+                    <input
+                      type="number"
+                      step="500000"
+                      value={transferFee}
+                      onChange={(e) => setTransferFee(e.target.value)}
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:border-indigo-500"
+                      required
+                    />
+                  </div>
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={transferLoading}
+                  className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-3 rounded-xl text-sm transition-all shadow-lg shadow-indigo-600/30 mt-2"
+                >
+                  {transferLoading ? 'Transfert en cours...' : '🤝 Confirmer le Transfert'}
+                </button>
+              </form>
+            </div>
+
+            {/* Historique des Transferts */}
+            {transfers.length > 0 && (
+              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl">
+                <h3 className="text-lg font-bold text-white mb-4">📋 Historique des Derniers Transferts</h3>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left border-collapse">
+                    <thead>
+                      <tr className="border-b border-slate-800 text-slate-400 text-xs font-semibold uppercase">
+                        <th className="py-3 px-4">Joueur</th>
+                        <th className="py-3 px-4">Ancien Club</th>
+                        <th className="py-3 px-4">Nouveau Club</th>
+                        <th className="py-3 px-4 text-right">Montant</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-800/60 text-sm">
+                      {transfers.map((t) => (
+                        <tr key={t.id} className="hover:bg-slate-800/30">
+                          <td className="py-3.5 px-4 font-bold text-white">{t.players?.nom || 'Joueur inconnu'}</td>
+                          <td className="py-3.5 px-4 text-rose-400 font-semibold">{t.old_team?.nom || '-'}</td>
+                          <td className="py-3.5 px-4 text-emerald-400 font-semibold">{t.new_team?.nom || '-'}</td>
+                          <td className="py-3.5 px-4 text-right font-mono font-bold text-indigo-300">
+                            {formatMoney(t.fee)}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* 5. ADMIN (RÉSERVÉ À TON COMPTE ADMIN) */}
         {tab === 'admin' && userProfile?.is_admin && (
           <div className="space-y-6">
             <h2 className="text-2xl font-extrabold text-white">⚙️ Panneau d'Administration (Créateur de Ligue)</h2>
