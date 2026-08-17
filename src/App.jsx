@@ -33,10 +33,10 @@ export default function App() {
   const [newTeamName, setNewTeamName] = useState('');
   const [logoFile, setLogoFile] = useState(null);
   const [uploading, setUploading] = useState(false);
-  const [newPlayer, setNewPlayer] = useState({ nom: '', equipe_id: '', general: 75, valeur: 10000000, age: 22 });
+  const [newPlayer, setNewPlayer] = useState({ nom: '', equipe_id: '', general: 75, valeur: 10000000, age: 22, poste: 'Milieu' });
   const [newMatch, setNewMatch] = useState({ dom_id: '', ext_id: '', journee: 1 });
 
-  // Formulaire Transfert (Sélection en cascade : Club origine -> Joueur -> Club destination)
+  // Formulaire Transfert (Sélection en cascade)
   const [transferFromTeamId, setTransferFromTeamId] = useState('');
   const [transferPlayerId, setTransferPlayerId] = useState('');
   const [transferToTeamId, setTransferToTeamId] = useState('');
@@ -208,23 +208,16 @@ export default function App() {
     .sort((a, b) => b.passes_decisives - a.passes_decisives);
 
   // --- FILTRES DE TRANSFERT ---
-  // Joueurs appartenant au club de provenance sélectionné
   const availablePlayersForTransfer = players.filter(p => p.equipe_id === transferFromTeamId);
-
-  // Clubs de destination (exclut le club d'origine)
   const availableDestinationTeams = teams.filter(t => t.id !== transferFromTeamId);
-
-  // Joueur actuellement sélectionné pour afficher ses infos
   const selectedTransferPlayer = players.find(p => p.id === transferPlayerId);
 
-  // Quand le club de provenance change, réinitialiser la sélection du joueur
   function handleFromTeamChange(e) {
     const newFromTeamId = e.target.value;
     setTransferFromTeamId(newFromTeamId);
     setTransferPlayerId('');
   }
 
-  // Quand le joueur change, suggérer sa valeur actuelle par défaut
   function handlePlayerSelectChange(e) {
     const selectedId = e.target.value;
     setTransferPlayerId(selectedId);
@@ -252,7 +245,6 @@ export default function App() {
 
     setTransferLoading(true);
 
-    // 1. Mettre à jour l'équipe du joueur dans 'players'
     const { error: updateError } = await supabase
       .from('players')
       .update({
@@ -267,7 +259,6 @@ export default function App() {
       return;
     }
 
-    // 2. Enregistrer le transfert dans l'historique
     await supabase.from('transfers').insert([{
       player_id: transferPlayerId,
       old_team_id: transferFromTeamId,
@@ -278,7 +269,6 @@ export default function App() {
 
     showNotif(`Transfert de ${selectedPlayer.nom} effectué avec succès !`);
     
-    // Réinitialisation du formulaire
     setTransferFromTeamId('');
     setTransferPlayerId('');
     setTransferToTeamId('');
@@ -286,6 +276,26 @@ export default function App() {
     setTransferLoading(false);
 
     fetchData();
+  }
+
+  // --- SUPPRESSION D'UN JOUEUR ---
+  async function handleDeletePlayer(playerId, playerNom) {
+    if (!window.confirm(`Êtes-vous sûr de vouloir supprimer définitivement le joueur "${playerNom}" ?`)) {
+      return;
+    }
+
+    // Supprimer les événements de match associés d'abord pour éviter les conflits de clé étrangère
+    await supabase.from('match_events').delete().eq('player_id', playerId);
+
+    // Supprimer le joueur
+    const { error } = await supabase.from('players').delete().eq('id', playerId);
+
+    if (error) {
+      showNotif(`Erreur lors de la suppression : ${error.message}`);
+    } else {
+      showNotif(`Le joueur "${playerNom}" a été supprimé.`);
+      fetchData();
+    }
   }
 
   // --- ÉVÉNEMENTS & SCORES ---
@@ -396,6 +406,7 @@ export default function App() {
     const { error } = await supabase.from('players').insert([{
       nom: newPlayer.nom,
       equipe_id: newPlayer.equipe_id,
+      poste: newPlayer.poste,
       general: parseInt(newPlayer.general),
       valeur_marchande: parseInt(newPlayer.valeur),
       age: parseInt(newPlayer.age)
@@ -403,8 +414,8 @@ export default function App() {
 
     if (error) showNotif(`Erreur : ${error.message}`);
     else {
-      showNotif(`Joueur "${newPlayer.nom}" ajouté !`);
-      setNewPlayer({ nom: '', equipe_id: newPlayer.equipe_id, general: 75, valeur: 10000000, age: 22 });
+      showNotif(`Joueur "${newPlayer.nom}" (${newPlayer.poste}) ajouté !`);
+      setNewPlayer({ nom: '', equipe_id: newPlayer.equipe_id, general: 75, valeur: 10000000, age: 22, poste: 'Milieu' });
       fetchData();
     }
   }
@@ -743,7 +754,7 @@ export default function App() {
                         <tr key={j.id} className="hover:bg-slate-800/30">
                           <td className="py-3 px-2 font-mono font-bold text-slate-500">{i + 1}</td>
                           <td className="py-3 px-4">
-                            <div className="font-semibold text-white">{j.nom}</div>
+                            <div className="font-semibold text-white">{j.nom} {j.poste && <span className="text-[10px] text-indigo-400">({j.poste})</span>}</div>
                             <div className="text-xs text-slate-400">{j.teams?.nom}</div>
                           </td>
                           <td className="py-3 px-4 text-right font-extrabold text-amber-400 text-base">
@@ -776,7 +787,7 @@ export default function App() {
                         <tr key={j.id} className="hover:bg-slate-800/30">
                           <td className="py-3 px-2 font-mono font-bold text-slate-500">{i + 1}</td>
                           <td className="py-3 px-4">
-                            <div className="font-semibold text-white">{j.nom}</div>
+                            <div className="font-semibold text-white">{j.nom} {j.poste && <span className="text-[10px] text-indigo-400">({j.poste})</span>}</div>
                             <div className="text-xs text-slate-400">{j.teams?.nom}</div>
                           </td>
                           <td className="py-3 px-4 text-right font-extrabold text-indigo-400 text-base">
@@ -820,7 +831,7 @@ export default function App() {
                   </select>
                 </div>
 
-                {/* ÉTAPE 2 : JOUEUR (Affiché uniquement si un club d'origine est sélectionné) */}
+                {/* ÉTAPE 2 : JOUEUR */}
                 <div>
                   <label className="block text-xs font-semibold text-indigo-400 uppercase tracking-wider mb-1.5">
                     2. Joueur à transférer
@@ -841,7 +852,7 @@ export default function App() {
                     </option>
                     {availablePlayersForTransfer.map((p) => (
                       <option key={p.id} value={p.id}>
-                        {p.nom} - GEN: {p.general || 75} ({formatMoney(p.valeur_marchande)})
+                        {p.nom} [{p.poste || 'N/A'}] - GEN: {p.general || 75} ({formatMoney(p.valeur_marchande)})
                       </option>
                     ))}
                   </select>
@@ -852,7 +863,7 @@ export default function App() {
                   <div className="bg-slate-950 border border-slate-800/80 p-4 rounded-xl flex items-center justify-between">
                     <div>
                       <p className="text-xs text-slate-400">Joueur</p>
-                      <p className="text-sm font-bold text-white">{selectedTransferPlayer.nom}</p>
+                      <p className="text-sm font-bold text-white">{selectedTransferPlayer.nom} <span className="text-indigo-400 font-normal">({selectedTransferPlayer.poste || 'Poste non défini'})</span></p>
                     </div>
                     <div className="text-right">
                       <p className="text-xs text-slate-400">Valeur actuelle</p>
@@ -990,16 +1001,32 @@ export default function App() {
                       {teams.map((t) => <option key={t.id} value={t.id}>{t.nom}</option>)}
                     </select>
                   </div>
-                  <div>
-                    <label className="block text-xs font-medium text-slate-400 mb-1">Nom du joueur</label>
-                    <input
-                      type="text"
-                      placeholder="Ex: Kylian Mbappé"
-                      value={newPlayer.nom}
-                      onChange={(e) => setNewPlayer({ ...newPlayer, nom: e.target.value })}
-                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2 text-sm text-white focus:outline-none focus:border-indigo-500"
-                      required
-                    />
+
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="block text-xs font-medium text-slate-400 mb-1">Nom du joueur</label>
+                      <input
+                        type="text"
+                        placeholder="Ex: Kylian Mbappé"
+                        value={newPlayer.nom}
+                        onChange={(e) => setNewPlayer({ ...newPlayer, nom: e.target.value })}
+                        className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2 text-sm text-white focus:outline-none focus:border-indigo-500"
+                        required
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-slate-400 mb-1">Poste</label>
+                      <select
+                        value={newPlayer.poste}
+                        onChange={(e) => setNewPlayer({ ...newPlayer, poste: e.target.value })}
+                        className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-indigo-500"
+                      >
+                        <option value="Gardien">Gardien (G)</option>
+                        <option value="Défenseur">Défenseur (DC/DD/DG)</option>
+                        <option value="Milieu">Milieu (MC/MDC/MOC)</option>
+                        <option value="Attaquant">Attaquant (BU/AG/AD)</option>
+                      </select>
+                    </div>
                   </div>
 
                   <div className="grid grid-cols-3 gap-2">
@@ -1093,7 +1120,7 @@ export default function App() {
       {/* --- MODALE EFFECTIF ÉQUIPE --- */}
       {selectedTeam && (
         <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-2xl w-full p-6 shadow-2xl relative">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-3xl w-full p-6 shadow-2xl relative">
             <button
               onClick={() => setSelectedTeam(null)}
               className="absolute top-4 right-4 text-slate-400 hover:text-white font-bold text-xl"
@@ -1118,17 +1145,19 @@ export default function App() {
                 <thead className="sticky top-0 bg-slate-900 border-b border-slate-800 text-slate-400 text-xs font-semibold uppercase">
                   <tr>
                     <th className="py-2.5 px-3">Joueur</th>
+                    <th className="py-2.5 px-3">Poste</th>
                     <th className="py-2.5 px-3 text-center">GEN</th>
                     <th className="py-2.5 px-3 text-center">Âge</th>
                     <th className="py-2.5 px-3 text-center">Buts</th>
                     <th className="py-2.5 px-3 text-center">Passes</th>
                     <th className="py-2.5 px-3 text-right">Valeur</th>
+                    {userProfile?.is_admin && <th className="py-2.5 px-3 text-center">Action</th>}
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-800/50 text-sm">
                   {teamRoster.length === 0 ? (
                     <tr>
-                      <td colSpan="6" className="py-6 text-center text-slate-500 text-xs">
+                      <td colSpan="8" className="py-6 text-center text-slate-500 text-xs">
                         Aucun joueur enregistré dans cette équipe.
                       </td>
                     </tr>
@@ -1136,6 +1165,7 @@ export default function App() {
                     teamRoster.map((j) => (
                       <tr key={j.id} className="hover:bg-slate-800/30">
                         <td className="py-3 px-3 font-semibold text-white">{j.nom}</td>
+                        <td className="py-3 px-3 text-xs text-indigo-300 font-medium">{j.poste || 'N/A'}</td>
                         <td className="py-3 px-3 text-center font-extrabold text-emerald-400">
                           <span className="bg-emerald-500/10 border border-emerald-500/20 px-2 py-0.5 rounded-lg">
                             {j.general || 75}
@@ -1147,6 +1177,17 @@ export default function App() {
                         <td className="py-3 px-3 text-right font-mono text-xs text-slate-300">
                           {formatMoney(j.valeur_marchande)}
                         </td>
+                        {userProfile?.is_admin && (
+                          <td className="py-3 px-3 text-center">
+                            <button
+                              onClick={() => handleDeletePlayer(j.id, j.nom)}
+                              className="bg-rose-500/20 hover:bg-rose-600 text-rose-300 hover:text-white p-1.5 rounded-lg transition-all text-xs"
+                              title="Supprimer ce joueur"
+                            >
+                              🗑️
+                            </button>
+                          </td>
+                        )}
                       </tr>
                     ))
                   )}
@@ -1194,7 +1235,7 @@ export default function App() {
                 >
                   <option value="">-- Choisir le joueur --</option>
                   {matchPlayers.map(p => (
-                    <option key={p.id} value={p.id}>{p.nom}</option>
+                    <option key={p.id} value={p.id}>{p.nom} ({p.poste || 'N/A'})</option>
                   ))}
                 </select>
               </div>
