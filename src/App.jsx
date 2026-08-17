@@ -55,47 +55,46 @@ export default function App() {
     if (dataMatches) setMatches(dataMatches);
   }
 
-// 1. Ajouter Équipe (Conversion Base64 ultra-fiable)
-  async function handleAddTeam(e) {
-    e.preventDefault();
-    if (!newTeamName) return;
+// Remplace ta fonction actuelle par celle-ci :
+async function handleAddTeam(e) {
+  e.preventDefault();
+  if (!newTeamName) return;
 
-    setUploading(true);
-    let logoUrl = '';
+  setUploading(true);
+  
+  let base64Image = null;
 
-    // Convertit directement l'image sélectionnée en texte (Base64)
-    if (logoFile) {
-      try {
-        logoUrl = await new Promise((resolve, reject) => {
-          const reader = new FileReader();
-          reader.onload = () => resolve(reader.result);
-          reader.onerror = (error) => reject(error);
-          reader.readAsDataURL(logoFile);
-        });
-      } catch (err) {
-        showNotif(`Erreur lors de la lecture de l'image : ${err.message}`);
-        setUploading(false);
-        return;
-      }
-    }
-
-    // Insère directement dans la table teams sans passer par Supabase Storage
-    const { error } = await supabase.from('teams').insert([{
-      nom: newTeamName,
-      logo_url: logoUrl
-    }]);
-
-    setUploading(false);
-
-    if (error) {
-      showNotif(`Erreur création équipe : ${error.message}`);
-    } else {
-      showNotif(`Équipe "${newTeamName}" créée avec succès !`);
-      setNewTeamName('');
-      setLogoFile(null);
-      fetchData();
-    }
+  // 1. Conversion sécurisée en Base64
+  if (logoFile) {
+    base64Image = await new Promise((resolve) => {
+      const reader = new FileReader();
+      reader.onloadend = () => resolve(reader.result);
+      reader.readAsDataURL(logoFile);
+    });
   }
+
+  // 2. Insertion directe (sans variable complexe)
+  const { data, error } = await supabase
+    .from('teams')
+    .insert([
+      { 
+        nom: newTeamName, 
+        logo_url: base64Image 
+      }
+    ]);
+
+  setUploading(false);
+
+  if (error) {
+    console.error("Erreur détaillée Supabase :", error); // Regarde dans la console F12
+    alert("Erreur : " + error.message);
+  } else {
+    alert("Succès !");
+    setNewTeamName('');
+    setLogoFile(null);
+    fetchData(); // Actualise ta liste
+  }
+}
 
   // 2. Ajouter un Joueur
   async function handleAddPlayer(e) {
