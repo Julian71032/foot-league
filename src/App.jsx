@@ -38,7 +38,7 @@ function getPositionRank(posteStr) {
   return POSITION_ORDER[code] ?? 99;
 }
 
-// Dispositifs tactiques : Défenseurs, Milieux, Attaquants
+// Dispositifs tactiques
 const FORMATIONS = {
   '4-3-3': { name: '4-3-3 (Classique)', def: 4, mid: 3, att: 3 },
   '4-4-2': { name: '4-4-2 (Équilibré)', def: 4, mid: 4, att: 2 },
@@ -76,19 +76,19 @@ export default function App() {
   const [selectedTeam, setSelectedTeam] = useState(null);
   const [editingPlayer, setEditingPlayer] = useState(null);
 
-  // ÉTAT TACTIQUE / 11 DE DÉPART INTERACTIF
+  // ÉTAT TACTIQUE / COMPOSITION EN DIRECT
   const [selectedLineupTeam, setSelectedLineupTeam] = useState(null);
   const [currentFormation, setCurrentFormation] = useState('4-3-3');
   const [teamLineupPlayers, setTeamLineupPlayers] = useState([]);
   const [teamBenchPlayers, setTeamBenchPlayers] = useState([]);
-  const [selectedSlot, setSelectedSlot] = useState(null); // { type: 'pitch'|'bench', index: number }
+  const [selectedSlot, setSelectedSlot] = useState(null);
 
   // Formulaires Admin & Scores
   const [scoresInput, setScoresInput] = useState({});
   const [newTeamName, setNewTeamName] = useState('');
   const [logoFile, setLogoFile] = useState(null);
   const [uploading, setUploading] = useState(false);
-  const [newPlayer, setNewPlayer] = useState({ nom: '', equipe_id: '', general: 75, valeur: 10000000, age: 22, poste: 'MC' });
+  const [newPlayer, setNewPlayer] = useState({ nom: '', equipe_id: '', numero: 10, general: 75, valeur: 10000000, age: 22, poste: 'MC' });
   const [newMatch, setNewMatch] = useState({ dom_id: '', ext_id: '', journee: 1 });
 
   // Formulaire Transfert
@@ -352,6 +352,7 @@ export default function App() {
         .update({
           nom: editingPlayer.nom,
           poste: editingPlayer.poste,
+          numero: editingPlayer.numero ? parseInt(editingPlayer.numero, 10) : 10,
           general: editingPlayer.general ? parseInt(editingPlayer.general, 10) : 75,
           age: editingPlayer.age ? parseInt(editingPlayer.age, 10) : 22,
           valeur_marchande: editingPlayer.valeur_marchande ? parseInt(editingPlayer.valeur_marchande, 10) : 10000000
@@ -476,6 +477,7 @@ export default function App() {
     const { error } = await supabase.from('players').insert([{
       nom: newPlayer.nom,
       equipe_id: newPlayer.equipe_id,
+      numero: parseInt(newPlayer.numero) || 10,
       poste: newPlayer.poste,
       general: parseInt(newPlayer.general),
       valeur_marchande: parseInt(newPlayer.valeur),
@@ -484,8 +486,8 @@ export default function App() {
 
     if (error) showNotif(`Erreur : ${error.message}`);
     else {
-      showNotif(`Joueur "${newPlayer.nom}" (${newPlayer.poste}) ajouté !`);
-      setNewPlayer({ nom: '', equipe_id: newPlayer.equipe_id, general: 75, valeur: 10000000, age: 22, poste: 'MC' });
+      showNotif(`Joueur "${newPlayer.nom}" (#${newPlayer.numero || 10}) ajouté !`);
+      setNewPlayer({ nom: '', equipe_id: newPlayer.equipe_id, numero: 10, general: 75, valeur: 10000000, age: 22, poste: 'MC' });
       fetchData();
     }
   }
@@ -525,7 +527,7 @@ export default function App() {
 
   const teamRoster = selectedTeam ? getSortedTeamPlayers(selectedTeam.id) : [];
 
-  // --- INITIALISATION TACTIQUE QUAND ON OUVRE UNE ÉQUIPE DE MATCH ---
+  // --- OUVERTURE DE LA MODALE TACTIQUE ---
   function openTeamLineup(team) {
     setSelectedLineupTeam(team);
     setSelectedSlot(null);
@@ -533,7 +535,6 @@ export default function App() {
     buildLineupForFormation(sorted, '4-3-3');
   }
 
-  // Organise les 11 meilleurs joueurs selon la formation choisie
   function buildLineupForFormation(allPlayers, formationKey) {
     const config = FORMATIONS[formationKey] || FORMATIONS['4-3-3'];
     setCurrentFormation(formationKey);
@@ -551,7 +552,6 @@ export default function App() {
     const startersSet = new Set([...selectedGK, ...selectedDEF, ...selectedMID, ...selectedATT].map(p => p.id));
     const remaining = allPlayers.filter(p => !startersSet.has(p.id));
 
-    // Si on manque de joueurs spécifiques, on comble pour avoir 11 titulaires
     while (selectedGK.length + selectedDEF.length + selectedMID.length + selectedATT.length < 11 && remaining.length > 0) {
       const nextP = remaining.shift();
       if (selectedGK.length === 0) selectedGK.push(nextP);
@@ -568,55 +568,48 @@ export default function App() {
     setTeamBenchPlayers(finalBench);
   }
 
-  // Changement de formation via le sélecteur
   function handleFormationChange(newFmt) {
     const allCombined = [...teamLineupPlayers, ...teamBenchPlayers];
     buildLineupForFormation(allCombined, newFmt);
   }
 
-  // --- ÉCHANGE / REMPLACEMENT DE JOUEURS EN 1 CLIC OU DRAG ---
+  // Permutation au clic
   function handleSelectSlot(type, index) {
-    // Si aucun joueur n'était sélectionné : on sélectionne
     if (!selectedSlot) {
       setSelectedSlot({ type, index });
       return;
     }
 
-    // Si on clique sur le même : on annule
     if (selectedSlot.type === type && selectedSlot.index === index) {
       setSelectedSlot(null);
       return;
     }
 
-    // Exécution de la permutation
     const updatedPitch = [...teamLineupPlayers];
     const updatedBench = [...teamBenchPlayers];
 
     if (selectedSlot.type === 'pitch' && type === 'pitch') {
-      // 1. Échange entre 2 joueurs du terrain
       const temp = updatedPitch[selectedSlot.index];
       updatedPitch[selectedSlot.index] = updatedPitch[index];
       updatedPitch[index] = temp;
       setTeamLineupPlayers(updatedPitch);
       showNotif("Postes échangés sur le terrain !");
     } else if (selectedSlot.type === 'bench' && type === 'pitch') {
-      // 2. Banc -> Terrain
       const benchP = updatedBench[selectedSlot.index];
       const pitchP = updatedPitch[index];
       updatedPitch[index] = benchP;
       updatedBench[selectedSlot.index] = pitchP;
       setTeamLineupPlayers(updatedPitch);
       setTeamBenchPlayers(updatedBench);
-      showNotif(`Changement : ${benchP.nom} entre à la place de ${pitchP.nom}`);
+      showNotif(`Changement : ${benchP.nom} entre pour ${pitchP.nom}`);
     } else if (selectedSlot.type === 'pitch' && type === 'bench') {
-      // 3. Terrain -> Banc
       const pitchP = updatedPitch[selectedSlot.index];
       const benchP = updatedBench[index];
       updatedPitch[selectedSlot.index] = benchP;
       updatedBench[index] = pitchP;
       setTeamLineupPlayers(updatedPitch);
       setTeamBenchPlayers(updatedBench);
-      showNotif(`Changement : ${benchP.nom} entre à la place de ${pitchP.nom}`);
+      showNotif(`Changement : ${benchP.nom} entre pour ${pitchP.nom}`);
     }
 
     setSelectedSlot(null);
@@ -636,7 +629,7 @@ export default function App() {
     ? playersWithStats.filter(p => p.equipe_id === selectedMatch.equipe_domicile_id || p.equipe_id === selectedMatch.equipe_exterieur_id)
     : [];
 
-  // Carte Joueur sur le terrain
+  // Composant bulle du joueur sur le terrain avec NUMÉRO DE MAILLOT
   const PitchPlayerSlot = ({ player, globalIndex }) => {
     const isSelected = selectedSlot?.type === 'pitch' && selectedSlot?.index === globalIndex;
 
@@ -659,22 +652,31 @@ export default function App() {
         }`}
       >
         <div className="relative">
-          <div className={`w-10 h-10 sm:w-12 sm:h-12 rounded-full bg-slate-900 border-2 shadow-xl flex items-center justify-center text-white text-xs font-black ring-2 overflow-hidden transition-all ${
+          {/* ROND DU JOUEUR AVEC NUMÉRO AU CENTRE */}
+          <div className={`w-11 h-11 sm:w-13 sm:h-13 rounded-full bg-slate-900 border-2 shadow-xl flex items-center justify-center text-white text-base font-black ring-2 overflow-hidden transition-all ${
             isSelected 
-              ? 'border-amber-400 ring-amber-400 ring-4 animate-pulse' 
-              : 'border-white/95 ring-emerald-500/50'
+              ? 'border-amber-400 ring-amber-400 ring-4 animate-pulse bg-slate-800' 
+              : 'border-white ring-emerald-500/50'
           }`}>
-            {player.nom.split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase()}
+            <span className="font-mono tracking-tight drop-shadow-md">
+              {player.numero !== undefined && player.numero !== null ? player.numero : 10}
+            </span>
           </div>
+
+          {/* Pastille Note Générale */}
           <span className="absolute -top-1 -right-1 bg-amber-400 text-slate-950 font-black text-[9px] w-4 h-4 rounded-full flex items-center justify-center shadow-md">
             {player.general || 75}
           </span>
+
+          {/* Pastille Poste */}
           <span className="absolute -bottom-1 -left-1 bg-indigo-600 text-white font-bold text-[8px] px-1 rounded shadow">
             {player.poste || 'MC'}
           </span>
         </div>
+
+        {/* Nom du joueur */}
         <span className={`text-[10px] sm:text-xs font-bold mt-1 px-2 py-0.5 rounded-full shadow text-center max-w-[85px] truncate transition-colors ${
-          isSelected ? 'bg-amber-400 text-slate-950' : 'bg-black/80 text-white'
+          isSelected ? 'bg-amber-400 text-slate-950 font-black' : 'bg-black/80 text-white'
         }`}>
           {player.nom.split(' ').pop()}
         </span>
@@ -876,7 +878,7 @@ export default function App() {
             <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl flex flex-col sm:flex-row items-center justify-between gap-4">
               <div>
                 <h2 className="text-xl font-bold text-white flex items-center gap-2">📅 Calendrier des Rencontres</h2>
-                <p className="text-xs text-slate-400 mt-1">💡 Clique sur le logo ou nom d'une équipe pour <strong>modifier sa composition et son 11</strong></p>
+                <p className="text-xs text-slate-400 mt-1">💡 Clique sur le logo ou nom d'une équipe pour <strong>modifier sa composition tactique</strong></p>
               </div>
 
               <div className="flex items-center gap-3 bg-slate-950 p-2 rounded-xl border border-slate-800">
@@ -1003,7 +1005,9 @@ export default function App() {
                         <tr key={j.id} className="hover:bg-slate-800/30">
                           <td className="py-3 px-2 font-mono font-bold text-slate-500">{i + 1}</td>
                           <td className="py-3 px-4">
-                            <div className="font-semibold text-white">{j.nom} {j.poste && <span className="text-[10px] text-indigo-400 font-bold">({j.poste})</span>}</div>
+                            <div className="font-semibold text-white">
+                              {j.nom} {j.numero && <span className="text-[10px] text-slate-400 font-mono">#{j.numero}</span>} {j.poste && <span className="text-[10px] text-indigo-400 font-bold">({j.poste})</span>}
+                            </div>
                             <div className="text-xs text-slate-400">{j.teams?.nom}</div>
                           </td>
                           <td className="py-3 px-4 text-right font-extrabold text-amber-400 text-base">
@@ -1036,7 +1040,9 @@ export default function App() {
                         <tr key={j.id} className="hover:bg-slate-800/30">
                           <td className="py-3 px-2 font-mono font-bold text-slate-500">{i + 1}</td>
                           <td className="py-3 px-4">
-                            <div className="font-semibold text-white">{j.nom} {j.poste && <span className="text-[10px] text-indigo-400 font-bold">({j.poste})</span>}</div>
+                            <div className="font-semibold text-white">
+                              {j.nom} {j.numero && <span className="text-[10px] text-slate-400 font-mono">#{j.numero}</span>} {j.poste && <span className="text-[10px] text-indigo-400 font-bold">({j.poste})</span>}
+                            </div>
                             <div className="text-xs text-slate-400">{j.teams?.nom}</div>
                           </td>
                           <td className="py-3 px-4 text-right font-extrabold text-indigo-400 text-base">
@@ -1099,7 +1105,7 @@ export default function App() {
                     </option>
                     {availablePlayersForTransfer.map((p) => (
                       <option key={p.id} value={p.id}>
-                        {p.nom} [{p.poste || 'N/A'}] - GEN: {p.general || 75} ({formatMoney(p.valeur_marchande)})
+                        #{p.numero || 10} {p.nom} [{p.poste || 'N/A'}] - GEN: {p.general || 75} ({formatMoney(p.valeur_marchande)})
                       </option>
                     ))}
                   </select>
@@ -1109,7 +1115,7 @@ export default function App() {
                   <div className="bg-slate-950 border border-slate-800/80 p-4 rounded-xl flex items-center justify-between">
                     <div>
                       <p className="text-xs text-slate-400">Joueur</p>
-                      <p className="text-sm font-bold text-white">{selectedTransferPlayer.nom} <span className="text-indigo-400 font-normal">({selectedTransferPlayer.poste || 'Poste non défini'})</span></p>
+                      <p className="text-sm font-bold text-white">#{selectedTransferPlayer.numero || 10} {selectedTransferPlayer.nom} <span className="text-indigo-400 font-normal">({selectedTransferPlayer.poste || 'Poste non défini'})</span></p>
                     </div>
                     <div className="text-right">
                       <p className="text-xs text-slate-400">Valeur actuelle</p>
@@ -1247,8 +1253,8 @@ export default function App() {
                     </select>
                   </div>
 
-                  <div className="grid grid-cols-2 gap-2">
-                    <div>
+                  <div className="grid grid-cols-12 gap-2">
+                    <div className="col-span-6">
                       <label className="block text-xs font-medium text-slate-400 mb-1">Nom du joueur</label>
                       <input
                         type="text"
@@ -1259,8 +1265,21 @@ export default function App() {
                         required
                       />
                     </div>
-                    <div>
-                      <label className="block text-xs font-medium text-slate-400 mb-1">Poste précis</label>
+                    <div className="col-span-3">
+                      <label className="block text-xs font-medium text-slate-400 mb-1">N° Maillot</label>
+                      <input
+                        type="number"
+                        min="1"
+                        max="99"
+                        placeholder="10"
+                        value={newPlayer.numero}
+                        onChange={(e) => setNewPlayer({ ...newPlayer, numero: e.target.value })}
+                        className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-indigo-500 text-center font-bold"
+                        required
+                      />
+                    </div>
+                    <div className="col-span-3">
+                      <label className="block text-xs font-medium text-slate-400 mb-1">Poste</label>
                       <select
                         value={newPlayer.poste}
                         onChange={(e) => setNewPlayer({ ...newPlayer, poste: e.target.value })}
@@ -1324,7 +1343,7 @@ export default function App() {
             </div>
 
             <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl">
-              <h3 className="text-lg font-bold text-white mb-4">3. Ajouter un match supplémentaire à votre calendrier</h3>
+              <h3 className="text-lg font-bold text-white mb-4">3. Programmer un Match</h3>
               <form onSubmit={handleAddMatch} className="grid grid-cols-1 sm:grid-cols-4 gap-3">
                 <div>
                   <label className="block text-xs font-medium text-slate-400 mb-1">Journée</label>
@@ -1369,7 +1388,7 @@ export default function App() {
         )}
       </main>
 
-      {/* --- MODALE 1 : TERRAIN TACTIQUE INTERACTIF (SÉLECTEUR DE COMPOSITION + INTERVERSION PAR CLIC) --- */}
+      {/* --- MODALE 1 : TERRAIN TACTIQUE INTERACTIF --- */}
       {selectedLineupTeam && (
         <div className="fixed inset-0 bg-black/85 backdrop-blur-md z-50 flex items-center justify-center p-2 sm:p-4">
           <div className="bg-slate-900 border border-slate-800 rounded-3xl max-w-lg w-full p-4 sm:p-6 shadow-2xl relative max-h-[96vh] flex flex-col overflow-y-auto">
@@ -1391,7 +1410,7 @@ export default function App() {
                 )}
                 <div>
                   <h3 className="text-base sm:text-lg font-black text-white">{selectedLineupTeam.nom}</h3>
-                  <p className="text-[10px] text-slate-400">Cliquez sur 2 joueurs pour les échanger</p>
+                  <p className="text-[10px] text-slate-400">Cliquez sur 2 joueurs pour échanger leurs places</p>
                 </div>
               </div>
 
@@ -1422,20 +1441,20 @@ export default function App() {
             {/* TERRAIN DE FOOTBALL VERT */}
             <div className="relative w-full rounded-2xl overflow-hidden shadow-2xl border border-emerald-600/40 bg-gradient-to-b from-emerald-700 via-emerald-600 to-emerald-800 p-4 min-h-[470px] flex flex-col justify-between select-none">
               
-              {/* Lignes du terrain de football */}
+              {/* Lignes du terrain */}
               <div className="absolute inset-2 border-2 border-white/25 rounded-xl pointer-events-none"></div>
               <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-28 h-28 border-2 border-white/25 rounded-full pointer-events-none"></div>
               <div className="absolute top-1/2 left-0 right-0 h-0.5 bg-white/25 pointer-events-none"></div>
               <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-2 h-2 bg-white/40 rounded-full pointer-events-none"></div>
 
-              {/* Surface du gardien (en bas) */}
+              {/* Surface gardien (bas) */}
               <div className="absolute bottom-2 left-1/2 -translate-x-1/2 w-48 h-20 border-2 border-b-0 border-white/25 pointer-events-none"></div>
               <div className="absolute bottom-2 left-1/2 -translate-x-1/2 w-24 h-8 border-2 border-b-0 border-white/25 pointer-events-none"></div>
 
-              {/* Surface adverse (en haut) */}
+              {/* Surface adverse (haut) */}
               <div className="absolute top-2 left-1/2 -translate-x-1/2 w-48 h-20 border-2 border-t-0 border-white/25 pointer-events-none"></div>
 
-              {/* 1. LIGNE D'ATTAQUE (Haut) */}
+              {/* 1. LIGNE D'ATTAQUE */}
               <div className="relative z-10 flex justify-around items-center pt-2">
                 {pitchATT.map((p, idx) => (
                   <PitchPlayerSlot 
@@ -1468,7 +1487,7 @@ export default function App() {
                 ))}
               </div>
 
-              {/* 4. GARDIEN DE BUT (Bas) */}
+              {/* 4. GARDIEN DE BUT */}
               <div className="relative z-10 flex justify-center items-center pb-2">
                 {pitchGK.map((p) => (
                   <PitchPlayerSlot 
@@ -1486,7 +1505,7 @@ export default function App() {
                 <h4 className="text-[11px] font-extrabold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
                   <span>🪑</span> Banc des Remplaçants ({teamBenchPlayers.length})
                 </h4>
-                <span className="text-[10px] text-slate-500 italic">Cliquez pour faire un changement</span>
+                <span className="text-[10px] text-slate-500 italic">Cliquez pour faire entrer un joueur</span>
               </div>
 
               {teamBenchPlayers.length === 0 ? (
@@ -1506,7 +1525,10 @@ export default function App() {
                         }`}
                       >
                         <div className="flex items-center gap-1.5 truncate">
-                          <span className="text-[9px] font-bold text-indigo-400 bg-indigo-500/10 px-1.5 py-0.5 rounded">
+                          <span className="text-[10px] font-mono font-black text-amber-400">
+                            #{j.numero || 10}
+                          </span>
+                          <span className="text-[9px] font-bold text-indigo-400 bg-indigo-500/10 px-1 py-0.5 rounded">
                             {j.poste || 'MC'}
                           </span>
                           <span className={`text-xs font-semibold truncate ${isBenchSelected ? 'text-amber-300' : 'text-slate-300'}`}>
@@ -1554,6 +1576,7 @@ export default function App() {
               <table className="w-full text-left border-collapse">
                 <thead className="sticky top-0 bg-slate-900 border-b border-slate-800 text-slate-400 text-xs font-semibold uppercase">
                   <tr>
+                    <th className="py-2.5 px-3">#</th>
                     <th className="py-2.5 px-3">Joueur</th>
                     <th className="py-2.5 px-3">Poste</th>
                     <th className="py-2.5 px-3 text-center">GEN</th>
@@ -1561,19 +1584,20 @@ export default function App() {
                     <th className="py-2.5 px-3 text-center">Buts</th>
                     <th className="py-2.5 px-3 text-center">Passes</th>
                     <th className="py-2.5 px-3 text-right">Valeur</th>
-                    {userProfile?.is_admin && <th className="py-2.5 px-3 text-center">Actions Admin</th>}
+                    {userProfile?.is_admin && <th className="py-2.5 px-3 text-center">Actions</th>}
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-800/50 text-sm">
                   {teamRoster.length === 0 ? (
                     <tr>
-                      <td colSpan={userProfile?.is_admin ? "8" : "7"} className="py-6 text-center text-slate-500 text-xs">
+                      <td colSpan={userProfile?.is_admin ? "9" : "8"} className="py-6 text-center text-slate-500 text-xs">
                         Aucun joueur enregistré dans cette équipe.
                       </td>
                     </tr>
                   ) : (
                     teamRoster.map((j) => (
                       <tr key={j.id} className="hover:bg-slate-800/30">
+                        <td className="py-3 px-3 font-mono font-bold text-amber-400">#{j.numero || 10}</td>
                         <td className="py-3 px-3 font-semibold text-white">{j.nom}</td>
                         <td className="py-3 px-3 text-xs text-indigo-300 font-bold">{j.poste || 'N/A'}</td>
                         <td className="py-3 px-3 text-center font-extrabold text-emerald-400">
@@ -1632,15 +1656,29 @@ export default function App() {
             <h3 className="text-lg font-bold text-white mb-4">✏️ Modifier {editingPlayer.nom}</h3>
 
             <form onSubmit={handleUpdatePlayer} className="space-y-3">
-              <div>
-                <label className="block text-xs text-slate-400 mb-1">Nom du joueur</label>
-                <input
-                  type="text"
-                  value={editingPlayer.nom || ''}
-                  onChange={(e) => setEditingPlayer({ ...editingPlayer, nom: e.target.value })}
-                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-indigo-500"
-                  required
-                />
+              <div className="grid grid-cols-12 gap-2">
+                <div className="col-span-8">
+                  <label className="block text-xs text-slate-400 mb-1">Nom du joueur</label>
+                  <input
+                    type="text"
+                    value={editingPlayer.nom || ''}
+                    onChange={(e) => setEditingPlayer({ ...editingPlayer, nom: e.target.value })}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-indigo-500"
+                    required
+                  />
+                </div>
+                <div className="col-span-4">
+                  <label className="block text-xs text-slate-400 mb-1">N° Maillot</label>
+                  <input
+                    type="number"
+                    min="1"
+                    max="99"
+                    value={editingPlayer.numero !== undefined && editingPlayer.numero !== null ? editingPlayer.numero : 10}
+                    onChange={(e) => setEditingPlayer({ ...editingPlayer, numero: e.target.value })}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-indigo-500 text-center font-bold"
+                    required
+                  />
+                </div>
               </div>
 
               <div>
@@ -1752,7 +1790,7 @@ export default function App() {
                 >
                   <option value="">-- Choisir le joueur --</option>
                   {matchPlayers.map(p => (
-                    <option key={p.id} value={p.id}>{p.nom} [{p.poste || 'N/A'}]</option>
+                    <option key={p.id} value={p.id}>#{p.numero || 10} {p.nom} [{p.poste || 'N/A'}]</option>
                   ))}
                 </select>
               </div>
