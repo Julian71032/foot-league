@@ -5,7 +5,7 @@ export default function App() {
   // --- AUTHENTIFICATION ---
   const [session, setSession] = useState(null);
   const [userProfile, setUserProfile] = useState(null);
-  const [authMode, setAuthMode] = useState('login'); // 'login' ou 'signup'
+  const [authMode, setAuthMode] = useState('login');
   const [authEmail, setAuthEmail] = useState('');
   const [authPassword, setAuthPassword] = useState('');
   const [authPseudo, setAuthPseudo] = useState('');
@@ -13,21 +13,21 @@ export default function App() {
 
   // --- APP STATE ---
   const [tab, setTab] = useState('classement');
-  const [classement, setClassement] = useState([]);
-  const [players, setPlayers] = useState([]);
   const [teams, setTeams] = useState([]);
+  const [players, setPlayers] = useState([]);
   const [matches, setMatches] = useState([]);
+  const [matchEvents, setMatchEvents] = useState([]);
   const [journeeFilter, setJourneeFilter] = useState(1);
   const [notification, setNotification] = useState('');
 
   // Modales
   const [selectedMatch, setSelectedMatch] = useState(null);
-  const [matchEvents, setMatchEvents] = useState([]);
+  const [selectedMatchEvents, setSelectedMatchEvents] = useState([]);
   const [eventPlayerId, setEventPlayerId] = useState('');
   const [eventType, setEventType] = useState('but');
   const [selectedTeam, setSelectedTeam] = useState(null);
 
-  // Formulaires
+  // Formulaires Admin & Scores
   const [scoresInput, setScoresInput] = useState({});
   const [newTeamName, setNewTeamName] = useState('');
   const [logoFile, setLogoFile] = useState(null);
@@ -53,7 +53,6 @@ export default function App() {
       setSession(session);
       if (session) {
         fetchUserProfile(session.user.id);
-        fetchData();
       } else {
         setUserProfile(null);
       }
@@ -107,40 +106,104 @@ export default function App() {
     showNotif("Déconnexion réussie.");
   }
 
-  // --- CHARGEMENT DES DONNÉES (FILTRÉES PAR USER VIA RLS) ---
+  // --- CHARGEMENT ET INITIALISATION DES DONNÉES PAR UTILISATEUR ---
   async function fetchData() {
-    // 1. Équipes
-    const { data: dataTeams } = await supabase
-      .from('teams')
-      .select('*')
-      .order('points', { ascending: false });
-    if (dataTeams) {
-      setTeams(dataTeams);
-      setClassement(dataTeams);
-    }
+    // 1. Équipes et Joueurs (Globaux)
+    const { data: dataTeams } = await supabase.from('teams').select('*');
+    if (dataTeams) setTeams(dataTeams);
 
-    // 2. Joueurs
-    const { data: dataPlayers } = await supabase
-      .from('players')
-      .select('*, teams(nom, logo_url)');
+    const { data: dataPlayers } = await supabase.from('players').select('*, teams(nom, logo_url)');
     if (dataPlayers) setPlayers(dataPlayers);
 
-    // 3. Matchs
-    const { data: dataMatches } = await supabase
+    // 2. Récupération ou initialisation des Matchs du Joueur Connecté
+    let { data: userMatches } = await supabase
       .from('matches')
-      .select('*, dom:teams!equipe_domicile_id(id, nom, logo_url, points), ext:teams!equipe_exterieur_id(id, nom, logo_url, points)');
-    if (dataMatches) setMatches(dataMatches);
+      .select('*, dom:teams!equipe_domicile_id(id, nom, logo_url), ext:teams!equipe_exterieur_id(id, nom, logo_url)')
+      .eq('user_id', session.user.id);
+
+    // Si l'utilisateur n'a pas encore de calendrier généré
+    if ((!userMatches || userMatches.length === 0) && dataTeams && dataTeams.length > 0) {
+      userMatches = await initializeUserMatches(dataTeams);
+    }
+    if (userMatches) setMatches(userMatches);
+
+    // 3. Récupération des Événements du Joueur Connecté
+    const { data: dataEvents } = await supabase.from('match_events').select('*').eq('user_id', session.user.id);
+    if (dataEvents) setMatchEvents(dataEvents);
   }
 
-  // --- MATCH EVENTS & SCORES ---
+  // Si le joueur est nouveau, on lui crée sa propre ligue/calendrier
+  async function initializeUserMatches(allTeams) {
+    const defaultMatches = [];
+    // Génération automatique des matchs opposant les équipes existantes
+    for (let i = 0; i < allTeams.length; i++) {
+      for (let j = i + 1; j < allTeams.length; j++) {
+        defaultMatches.push({
+          equipe_domicile_id: allTeams[i].id,
+          equipe_exterieur_id: allTeams[j].id,
+          journee: 1,
+          statut: 'à venir',
+          user_id: session.user.id
+        });
+      }
+    }
+
+    if (defaultMatches.length > 0) {
+      await supabase.from('matches').insert(defaultMatches);
+      const { data: createdMatches } = await supabase
+        .from('matches')
+        .select('*, dom:teams!equipe_domicile_id(id, nom, logo_url), ext:teams!equipe_exterieur_id(id, nom, logo_url)')
+        .eq('user_id', session.user.id);
+      return createdMatches || [];
+    }
+    return [];
+  }
+
+  // --- CALCUL DYNAMIQUE DU CLASSEMENT ---
+  const classement = teams.map(team => {
+    let points = 0;
+    let joues = 0;
+
+    matches.forEach(m => {
+      if (m.statut === 'terminé') {
+        if (m.equipe_domicile_id === team.id) {
+          joues++;
+          if (m.score_domicile > m.score_exterieur) points += 3;
+          else if (m.score_domicile === m.score_exterieur) points += 1;
+        } else if (m.equipe_exterieur_id === team.id) {
+          joues++;
+          if (m.score_exterieur > m.score_domicile) points += 3;
+          else if (m.score_domicile === m.score_exterieur) points += 1;
+        }
+      }
+    });
+
+    return { ...team, points, joues };
+  }).sort((a, b) => b.points - a.points);
+
+  // --- CALCUL DYNAMIQUE DES BUTEURS ET PASSEURS ---
+  const playersWithStats = players.map(p => {
+    const buts = matchEvents.filter(e => e.player_id === p.id && e.type === 'but').length;
+    const passes = matchEvents.filter(e => e.player_id === p.id && e.type === 'passe').length;
+    return { ...p, buts, passes_decisives: passes };
+  });
+
+  const topButeurs = [...playersWithStats].sort((a, b) => b.buts - a.buts);
+  const topPasseurs = [...playersWithStats].sort((a, b) => b.passes_decisives - a.passes_decisives);
+
+  // --- ÉVÉNEMENTS & SCORES (PROPRES À L'UTILISATEUR) ---
   async function openMatchDetails(match) {
     setSelectedMatch(match);
-    fetchMatchEvents(match.id);
+    fetchSelectedMatchEvents(match.id);
   }
 
-  async function fetchMatchEvents(matchId) {
-    const { data } = await supabase.from('match_events').select('*, players(nom, equipe_id)').eq('match_id', matchId);
-    if (data) setMatchEvents(data);
+  async function fetchSelectedMatchEvents(matchId) {
+    const { data } = await supabase
+      .from('match_events')
+      .select('*, players(nom)')
+      .eq('match_id', matchId)
+      .eq('user_id', session.user.id);
+    if (data) setSelectedMatchEvents(data);
   }
 
   async function handleAddMatchEvent(e) {
@@ -154,32 +217,18 @@ export default function App() {
       user_id: session.user.id
     }]);
 
-    if (error) { showNotif(`Erreur : ${error.message}`); return; }
-
-    const player = players.find(p => p.id === eventPlayerId);
-    if (player) {
-      const updateData = eventType === 'but'
-        ? { buts: (player.buts || 0) + 1 }
-        : { passes_decisives: (player.passes_decisives || 0) + 1 };
-      await supabase.from('players').update(updateData).eq('id', eventPlayerId);
+    if (error) showNotif(`Erreur : ${error.message}`);
+    else {
+      showNotif("Action enregistrée !");
+      fetchSelectedMatchEvents(selectedMatch.id);
+      fetchData();
     }
-
-    showNotif("Action enregistrée !");
-    fetchMatchEvents(selectedMatch.id);
-    fetchData();
   }
 
   async function handleDeleteMatchEvent(event) {
     await supabase.from('match_events').delete().eq('id', event.id);
-    const player = players.find(p => p.id === event.player_id);
-    if (player) {
-      const updateData = event.type === 'but'
-        ? { buts: Math.max(0, (player.buts || 0) - 1) }
-        : { passes_decisives: Math.max(0, (player.passes_decisives || 0) - 1) };
-      await supabase.from('players').update(updateData).eq('id', event.player_id);
-    }
     showNotif("Événement retiré.");
-    fetchMatchEvents(selectedMatch.id);
+    fetchSelectedMatchEvents(selectedMatch.id);
     fetchData();
   }
 
@@ -194,23 +243,20 @@ export default function App() {
 
     if (isNaN(scoreDom) || isNaN(scoreExt)) { showNotif("Saisissez un score valide."); return; }
 
-    let ptsDom = 0, ptsExt = 0;
-    if (scoreDom > scoreExt) ptsDom = 3;
-    else if (scoreDom < scoreExt) ptsExt = 3;
-    else { ptsDom = 1; ptsExt = 1; }
+    const { error } = await supabase
+      .from('matches')
+      .update({ score_domicile: scoreDom, score_exterieur: scoreExt, statut: 'terminé' })
+      .eq('id', match.id)
+      .eq('user_id', session.user.id);
 
-    const teamDom = teams.find(t => t.id === match.equipe_domicile_id);
-    const teamExt = teams.find(t => t.id === match.equipe_exterieur_id);
-
-    await supabase.from('matches').update({ score_domicile: scoreDom, score_exterieur: scoreExt, statut: 'terminé' }).eq('id', match.id);
-    if (teamDom) await supabase.from('teams').update({ points: (teamDom.points || 0) + ptsDom }).eq('id', teamDom.id);
-    if (teamExt) await supabase.from('teams').update({ points: (teamExt.points || 0) + ptsExt }).eq('id', teamExt.id);
-
-    showNotif("Score enregistré et points mis à jour !");
-    fetchData();
+    if (error) showNotif(`Erreur : ${error.message}`);
+    else {
+      showNotif("Score enregistré ! Le classement a été mis à jour.");
+      fetchData();
+    }
   }
 
-  // --- ADMIN ACTIONS ---
+  // --- ACTIONS ADMIN (Équipes, Joueurs, Programation globale) ---
   async function handleAddTeam(e) {
     e.preventDefault();
     if (!newTeamName) return;
@@ -235,8 +281,7 @@ export default function App() {
     const { error } = await supabase.from('teams').insert([{
       nom: newTeamName,
       logo_url: logoUrl,
-      points: 0,
-      user_id: session.user.id
+      points: 0
     }]);
     setUploading(false);
 
@@ -256,10 +301,7 @@ export default function App() {
       equipe_id: newPlayer.equipe_id,
       general: parseInt(newPlayer.general),
       valeur_marchande: parseInt(newPlayer.valeur),
-      age: parseInt(newPlayer.age),
-      buts: 0,
-      passes_decisives: 0,
-      user_id: session.user.id
+      age: parseInt(newPlayer.age)
     }]);
 
     if (error) showNotif(`Erreur : ${error.message}`);
@@ -292,16 +334,14 @@ export default function App() {
   }
 
   const teamRoster = selectedTeam
-    ? players.filter(p => p.equipe_id === selectedTeam.id).sort((a, b) => (b.general || 0) - (a.general || 0))
+    ? playersWithStats.filter(p => p.equipe_id === selectedTeam.id).sort((a, b) => (b.general || 0) - (a.general || 0))
     : [];
 
-  const topButeurs = [...players].sort((a, b) => (b.buts || 0) - (a.buts || 0));
-  const topPasseurs = [...players].sort((a, b) => (b.passes_decisives || 0) - (a.passes_decisives || 0));
   const matchPlayers = selectedMatch
-    ? players.filter(p => p.equipe_id === selectedMatch.equipe_domicile_id || p.equipe_id === selectedMatch.equipe_exterieur_id)
+    ? playersWithStats.filter(p => p.equipe_id === selectedMatch.equipe_domicile_id || p.equipe_id === selectedMatch.equipe_exterieur_id)
     : [];
 
-  // --- ÉCRAN DE CONNEXION S'IL N'Y A PAS DE SESSION ---
+  // --- ÉCRAN DE CONNEXION ---
   if (!session) {
     return (
       <div className="min-h-screen bg-slate-950 text-slate-100 flex items-center justify-center p-4 font-sans">
@@ -309,7 +349,7 @@ export default function App() {
           <div className="text-center mb-8">
             <div className="inline-block bg-indigo-600 text-white p-3 rounded-2xl shadow-lg shadow-indigo-500/30 mb-3 text-2xl">⚽</div>
             <h1 className="text-2xl font-black text-white tracking-tight">LIGUE DE FOOTBALL</h1>
-            <p className="text-xs text-slate-400 mt-1">Connectez-vous pour retrouver votre carrière sauvegardée</p>
+            <p className="text-xs text-slate-400 mt-1">Connectez-vous pour retrouver votre carrière personnelle</p>
           </div>
 
           {notification && (
@@ -379,7 +419,7 @@ export default function App() {
     );
   }
 
-  // --- APPLICATION PRINCIPALE UNE FOIS CONNECTÉ ---
+  // --- APPLICATION PRINCIPALE ---
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 font-sans pb-12">
       {/* Header */}
@@ -438,13 +478,13 @@ export default function App() {
         </div>
       )}
 
-      {/* Main Content */}
+      {/* Content */}
       <main className="max-w-6xl mx-auto px-4 mt-8">
         {/* 1. CLASSEMENT ÉQUIPES */}
         {tab === 'classement' && (
           <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl">
             <div className="flex items-center justify-between mb-6">
-              <h2 className="text-xl font-bold flex items-center gap-2 text-white">🏆 Classement Général</h2>
+              <h2 className="text-xl font-bold flex items-center gap-2 text-white">🏆 Classement Personnel</h2>
               <span className="text-xs text-slate-400 bg-slate-800 px-3 py-1 rounded-full border border-slate-700">💡 Clique sur une équipe pour voir son effectif</span>
             </div>
 
@@ -454,6 +494,7 @@ export default function App() {
                   <tr className="border-b border-slate-800 text-slate-400 text-xs font-semibold uppercase tracking-wider">
                     <th className="py-3 px-4">#</th>
                     <th className="py-3 px-4">Équipe</th>
+                    <th className="py-3 px-4 text-center">MJ</th>
                     <th className="py-3 px-4 text-center">Points</th>
                   </tr>
                 </thead>
@@ -475,9 +516,10 @@ export default function App() {
                           <span className="font-bold text-white group-hover:text-indigo-400 transition-colors">{eq.nom}</span>
                         </div>
                       </td>
+                      <td className="py-4 px-4 text-center text-slate-400 font-semibold">{eq.joues}</td>
                       <td className="py-4 px-4 text-center">
                         <span className="inline-block bg-indigo-500/10 text-indigo-400 font-extrabold px-3 py-1 rounded-full border border-indigo-500/20">
-                          {eq.points || 0} pts
+                          {eq.points} pts
                         </span>
                       </td>
                     </tr>
@@ -494,7 +536,7 @@ export default function App() {
             <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl flex flex-col sm:flex-row items-center justify-between gap-4">
               <div>
                 <h2 className="text-xl font-bold text-white flex items-center gap-2">📅 Calendrier des Rencontres</h2>
-                <p className="text-xs text-slate-400 mt-1">Saisissez les scores, validez puis gérez les buteurs dans "Détails"</p>
+                <p className="text-xs text-slate-400 mt-1">Saisissez vos scores et gérez vos buteurs dans "Détails"</p>
               </div>
 
               <div className="flex items-center gap-3 bg-slate-950 p-2 rounded-xl border border-slate-800">
@@ -585,7 +627,7 @@ export default function App() {
         {tab === 'buteurs' && (
           <div className="grid md:grid-cols-2 gap-6">
             <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl">
-              <h2 className="text-xl font-bold mb-6 text-white flex items-center gap-2">⚽ Meilleurs Buteurs</h2>
+              <h2 className="text-xl font-bold mb-6 text-white flex items-center gap-2">⚽ Vos Meilleurs Buteurs</h2>
               <div className="overflow-x-auto">
                 <table className="w-full text-left border-collapse">
                   <thead>
@@ -604,7 +646,7 @@ export default function App() {
                           <div className="text-xs text-slate-400">{j.teams?.nom}</div>
                         </td>
                         <td className="py-3 px-4 text-right font-extrabold text-amber-400 text-base">
-                          {j.buts || 0}
+                          {j.buts}
                         </td>
                       </tr>
                     ))}
@@ -614,7 +656,7 @@ export default function App() {
             </div>
 
             <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl">
-              <h2 className="text-xl font-bold mb-6 text-white flex items-center gap-2">🎯 Meilleurs Passeurs</h2>
+              <h2 className="text-xl font-bold mb-6 text-white flex items-center gap-2">🎯 Vos Meilleurs Passeurs</h2>
               <div className="overflow-x-auto">
                 <table className="w-full text-left border-collapse">
                   <thead>
@@ -633,7 +675,7 @@ export default function App() {
                           <div className="text-xs text-slate-400">{j.teams?.nom}</div>
                         </td>
                         <td className="py-3 px-4 text-right font-extrabold text-indigo-400 text-base">
-                          {j.passes_decisives || 0}
+                          {j.passes_decisives}
                         </td>
                       </tr>
                     ))}
@@ -644,13 +686,12 @@ export default function App() {
           </div>
         )}
 
-        {/* 4. ADMIN (RÉSERVÉ AUX COMPTES ADMIN) */}
+        {/* 4. ADMIN (RÉSERVÉ À TON COMPTE ADMIN) */}
         {tab === 'admin' && userProfile?.is_admin && (
           <div className="space-y-6">
-            <h2 className="text-2xl font-extrabold text-white">⚙️ Panneau d'Administration</h2>
+            <h2 className="text-2xl font-extrabold text-white">⚙️ Panneau d'Administration (Créateur de Ligue)</h2>
 
             <div className="grid gap-6 md:grid-cols-2">
-              {/* Équipe */}
               <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl">
                 <h3 className="text-lg font-bold text-white mb-4">1. Créer une Équipe</h3>
                 <form onSubmit={handleAddTeam} className="space-y-4">
@@ -658,7 +699,7 @@ export default function App() {
                     <label className="block text-xs font-medium text-slate-400 mb-1">Nom</label>
                     <input
                       type="text"
-                      placeholder="Ex: Arsenal"
+                      placeholder="Ex: Real Madrid"
                       value={newTeamName}
                       onChange={(e) => setNewTeamName(e.target.value)}
                       className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-indigo-500"
@@ -680,7 +721,6 @@ export default function App() {
                 </form>
               </div>
 
-              {/* Joueur */}
               <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl">
                 <h3 className="text-lg font-bold text-white mb-4">2. Ajouter un Joueur</h3>
                 <form onSubmit={handleAddPlayer} className="space-y-3">
@@ -700,7 +740,7 @@ export default function App() {
                     <label className="block text-xs font-medium text-slate-400 mb-1">Nom du joueur</label>
                     <input
                       type="text"
-                      placeholder="Ex: Bukayo Saka"
+                      placeholder="Ex: Kylian Mbappé"
                       value={newPlayer.nom}
                       onChange={(e) => setNewPlayer({ ...newPlayer, nom: e.target.value })}
                       className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2 text-sm text-white focus:outline-none focus:border-indigo-500"
@@ -750,9 +790,8 @@ export default function App() {
               </div>
             </div>
 
-            {/* Match */}
             <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl">
-              <h3 className="text-lg font-bold text-white mb-4">3. Programmer une Rencontre</h3>
+              <h3 className="text-lg font-bold text-white mb-4">3. Ajouter un match supplémentaire à votre calendrier</h3>
               <form onSubmit={handleAddMatch} className="grid grid-cols-1 sm:grid-cols-4 gap-3">
                 <div>
                   <label className="block text-xs font-medium text-slate-400 mb-1">Journée</label>
@@ -797,7 +836,7 @@ export default function App() {
         )}
       </main>
 
-      {/* --- MODALE DÉTAILS D'UNE ÉQUIPE --- */}
+      {/* --- MODALE EFFECTIF ÉQUIPE --- */}
       {selectedTeam && (
         <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-2xl w-full p-6 shadow-2xl relative">
@@ -816,7 +855,7 @@ export default function App() {
               )}
               <div>
                 <h3 className="text-xl font-extrabold text-white">{selectedTeam.nom}</h3>
-                <p className="text-xs text-indigo-400 font-semibold">{teamRoster.length} joueurs dans l'effectif • {selectedTeam.points || 0} points</p>
+                <p className="text-xs text-indigo-400 font-semibold">{teamRoster.length} joueurs dans l'effectif</p>
               </div>
             </div>
 
@@ -836,7 +875,7 @@ export default function App() {
                   {teamRoster.length === 0 ? (
                     <tr>
                       <td colSpan="6" className="py-6 text-center text-slate-500 text-xs">
-                        Aucun joueur enregistré dans cette équipe pour l'instant.
+                        Aucun joueur enregistré dans cette équipe.
                       </td>
                     </tr>
                   ) : (
@@ -849,8 +888,8 @@ export default function App() {
                           </span>
                         </td>
                         <td className="py-3 px-3 text-center text-slate-300 font-medium">{j.age || '-'} ans</td>
-                        <td className="py-3 px-3 text-center text-amber-400 font-bold">⚽ {j.buts || 0}</td>
-                        <td className="py-3 px-3 text-center text-indigo-400 font-bold">🎯 {j.passes_decisives || 0}</td>
+                        <td className="py-3 px-3 text-center text-amber-400 font-bold">⚽ {j.buts}</td>
+                        <td className="py-3 px-3 text-center text-indigo-400 font-bold">🎯 {j.passes_decisives}</td>
                         <td className="py-3 px-3 text-right font-mono text-xs text-slate-300">
                           {formatMoney(j.valeur_marchande)}
                         </td>
@@ -911,12 +950,12 @@ export default function App() {
               </button>
             </form>
 
-            <h4 className="text-xs font-bold uppercase text-slate-400 mb-2">Événements du match</h4>
+            <h4 className="text-xs font-bold uppercase text-slate-400 mb-2">Événements enregistrés</h4>
             <div className="space-y-2 max-h-48 overflow-y-auto">
-              {matchEvents.length === 0 ? (
-                <p className="text-xs text-slate-500 text-center py-4">Aucun but ou passe enregistré pour l'instant.</p>
+              {selectedMatchEvents.length === 0 ? (
+                <p className="text-xs text-slate-500 text-center py-4">Aucun événement enregistré.</p>
               ) : (
-                matchEvents.map(ev => (
+                selectedMatchEvents.map(ev => (
                   <div key={ev.id} className="flex items-center justify-between bg-slate-950/50 p-2.5 rounded-lg border border-slate-800/50 text-xs">
                     <span className="font-semibold text-white">
                       {ev.type === 'but' ? '⚽ But' : '🎯 Passe D.'} - {ev.players?.nom}
