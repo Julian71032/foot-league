@@ -55,7 +55,7 @@ export default function App() {
     if (dataMatches) setMatches(dataMatches);
   }
 
-// 1. Ajouter Équipe (Conversion Base64 sécurisée)
+// 1. Ajouter Équipe (Conversion Base64 ultra-fiable)
   async function handleAddTeam(e) {
     e.preventDefault();
     if (!newTeamName) return;
@@ -63,33 +63,23 @@ export default function App() {
     setUploading(true);
     let logoUrl = '';
 
+    // Convertit directement l'image sélectionnée en texte (Base64)
     if (logoFile) {
       try {
-        // Envoi via Storage Supabase
-        const cleanFileName = `logo_${Date.now()}.png`;
-
-        const { error: uploadError } = await supabase.storage
-          .from('logos')
-          .upload(cleanFileName, logoFile, { upsert: true });
-
-        if (uploadError) {
-          // Si le storage échoue encore, secours en Base64
-          logoUrl = await new Promise((resolve) => {
-            const reader = new FileReader();
-            reader.onloadend = () => resolve(reader.result);
-            reader.readAsDataURL(logoFile);
-          });
-        } else {
-          const { data: publicUrlData } = supabase.storage
-            .from('logos')
-            .getPublicUrl(cleanFileName);
-          logoUrl = publicUrlData.publicUrl;
-        }
+        logoUrl = await new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result);
+          reader.onerror = (error) => reject(error);
+          reader.readAsDataURL(logoFile);
+        });
       } catch (err) {
-        showNotif(`Erreur image: ${err.message}`);
+        showNotif(`Erreur lors de la lecture de l'image : ${err.message}`);
+        setUploading(false);
+        return;
       }
     }
 
+    // Insère directement dans la table teams sans passer par Supabase Storage
     const { error } = await supabase.from('teams').insert([{
       nom: newTeamName,
       logo_url: logoUrl
@@ -98,7 +88,7 @@ export default function App() {
     setUploading(false);
 
     if (error) {
-      showNotif(`Erreur création équipe: ${error.message}`);
+      showNotif(`Erreur création équipe : ${error.message}`);
     } else {
       showNotif(`Équipe "${newTeamName}" créée avec succès !`);
       setNewTeamName('');
