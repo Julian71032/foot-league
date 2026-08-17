@@ -2,6 +2,30 @@ import React, { useState, useEffect } from 'react';
 import { supabase } from './supabaseClient';
 
 export default function App() {
+  // --- LISTE COMPLÈTE ET PRÉCISE DES POSTES ---
+  const POSITIONS_LIST = [
+    { label: '-- GARDIENS --', disabled: true },
+    { value: 'G', label: 'G - Gardien' },
+    { label: '-- DÉFENSEURS --', disabled: true },
+    { value: 'DC', label: 'DC - Défenseur Central' },
+    { value: 'DD', label: 'DD - Défenseur Droit' },
+    { value: 'DG', label: 'DG - Défenseur Gauche' },
+    { value: 'DLD', label: 'DLD - Piston Droit' },
+    { value: 'DLG', label: 'DLG - Piston Gauche' },
+    { label: '-- MILIEUX --', disabled: true },
+    { value: 'MDC', label: 'MDC - Milieu Défensif Central' },
+    { value: 'MC', label: 'MC - Milieu Central' },
+    { value: 'MOC', label: 'MOC - Milieu Offensif Central' },
+    { value: 'MD', label: 'MD - Milieu Droit' },
+    { value: 'MG', label: 'MG - Milieu Gauche' },
+    { label: '-- ATTAQUANTS --', disabled: true },
+    { value: 'BU', label: 'BU - Buteur' },
+    { value: 'AT', label: 'AT - Attaquant' },
+    { value: 'AD', label: 'AD - Ailier Droit' },
+    { value: 'AG', label: 'AG - Ailier Gauche' },
+    { value: 'SA', label: 'SA - Second Attaquant' }
+  ];
+
   // --- AUTHENTIFICATION ---
   const [session, setSession] = useState(null);
   const [userProfile, setUserProfile] = useState(null);
@@ -33,7 +57,7 @@ export default function App() {
   const [newTeamName, setNewTeamName] = useState('');
   const [logoFile, setLogoFile] = useState(null);
   const [uploading, setUploading] = useState(false);
-  const [newPlayer, setNewPlayer] = useState({ nom: '', equipe_id: '', general: 75, valeur: 10000000, age: 22, poste: 'Milieu' });
+  const [newPlayer, setNewPlayer] = useState({ nom: '', equipe_id: '', general: 75, valeur: 10000000, age: 22, poste: 'MC' });
   const [newMatch, setNewMatch] = useState({ dom_id: '', ext_id: '', journee: 1 });
 
   // Formulaire Transfert (Sélection en cascade)
@@ -284,10 +308,8 @@ export default function App() {
       return;
     }
 
-    // Supprimer les événements de match associés d'abord pour éviter les conflits de clé étrangère
     await supabase.from('match_events').delete().eq('player_id', playerId);
 
-    // Supprimer le joueur
     const { error } = await supabase.from('players').delete().eq('id', playerId);
 
     if (error) {
@@ -415,7 +437,7 @@ export default function App() {
     if (error) showNotif(`Erreur : ${error.message}`);
     else {
       showNotif(`Joueur "${newPlayer.nom}" (${newPlayer.poste}) ajouté !`);
-      setNewPlayer({ nom: '', equipe_id: newPlayer.equipe_id, general: 75, valeur: 10000000, age: 22, poste: 'Milieu' });
+      setNewPlayer({ nom: '', equipe_id: newPlayer.equipe_id, general: 75, valeur: 10000000, age: 22, poste: 'MC' });
       fetchData();
     }
   }
@@ -1015,16 +1037,23 @@ export default function App() {
                       />
                     </div>
                     <div>
-                      <label className="block text-xs font-medium text-slate-400 mb-1">Poste</label>
+                      <label className="block text-xs font-medium text-slate-400 mb-1">Poste précis</label>
                       <select
                         value={newPlayer.poste}
                         onChange={(e) => setNewPlayer({ ...newPlayer, poste: e.target.value })}
                         className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-indigo-500"
                       >
-                        <option value="Gardien">Gardien (G)</option>
-                        <option value="Défenseur">Défenseur (DC/DD/DG)</option>
-                        <option value="Milieu">Milieu (MC/MDC/MOC)</option>
-                        <option value="Attaquant">Attaquant (BU/AG/AD)</option>
+                        {POSITIONS_LIST.map((pos, idx) => (
+                          pos.disabled ? (
+                            <option key={idx} disabled className="font-bold text-indigo-400 bg-slate-900">
+                              {pos.label}
+                            </option>
+                          ) : (
+                            <option key={pos.value} value={pos.value}>
+                              {pos.label}
+                            </option>
+                          )
+                        ))}
                       </select>
                     </div>
                   </div>
@@ -1165,7 +1194,7 @@ export default function App() {
                     teamRoster.map((j) => (
                       <tr key={j.id} className="hover:bg-slate-800/30">
                         <td className="py-3 px-3 font-semibold text-white">{j.nom}</td>
-                        <td className="py-3 px-3 text-xs text-indigo-300 font-medium">{j.poste || 'N/A'}</td>
+                        <td className="py-3 px-3 text-xs text-indigo-300 font-bold">{j.poste || 'N/A'}</td>
                         <td className="py-3 px-3 text-center font-extrabold text-emerald-400">
                           <span className="bg-emerald-500/10 border border-emerald-500/20 px-2 py-0.5 rounded-lg">
                             {j.general || 75}
@@ -1235,7 +1264,7 @@ export default function App() {
                 >
                   <option value="">-- Choisir le joueur --</option>
                   {matchPlayers.map(p => (
-                    <option key={p.id} value={p.id}>{p.nom} ({p.poste || 'N/A'})</option>
+                    <option key={p.id} value={p.id}>{p.nom} [{p.poste || 'N/A'}]</option>
                   ))}
                 </select>
               </div>
