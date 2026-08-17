@@ -87,6 +87,7 @@ export default function App() {
   const [teamLineupPlayers, setTeamLineupPlayers] = useState([]);
   const [teamBenchPlayers, setTeamBenchPlayers] = useState([]);
   const [selectedSlot, setSelectedSlot] = useState(null);
+  const [savingLineup, setSavingLineup] = useState(false);
 
   // Formulaires Admin & Scores
   const [scoresInput, setScoresInput] = useState({});
@@ -405,7 +406,6 @@ export default function App() {
       } else {
         showNotif(`Logo de l'équipe "${editingTeamLogo.nom}" modifié avec succès !`);
         
-        // Mettre à jour les modales actives avec le nouveau logo
         if (selectedTeam && selectedTeam.id === editingTeamLogo.id) {
           setSelectedTeam({ ...selectedTeam, logo_url: logoUrl });
         }
@@ -579,12 +579,40 @@ export default function App() {
 
   const teamRoster = selectedTeam ? getSortedTeamPlayers(selectedTeam.id) : [];
 
-  // --- OUVERTURE DE LA MODALE TACTIQUE ---
+  // --- CHARGEMENT DU 11 SAUVEGARDÉ OU PAR DÉFAUT ---
   function openTeamLineup(team) {
     setSelectedLineupTeam(team);
     setSelectedSlot(null);
-    const sorted = getSortedTeamPlayers(team.id);
-    buildLineupForFormation(sorted, '4-3-3');
+
+    const allTeamPlayers = getSortedTeamPlayers(team.id);
+    const savedFormation = team.formation || '4-3-3';
+    setCurrentFormation(savedFormation);
+
+    // Si une composition a déjà été enregistrée dans Supabase
+    if (team.lineup_ids && Array.isArray(team.lineup_ids) && team.lineup_ids.length > 0) {
+      const playerMap = new Map(allTeamPlayers.map(p => [p.id, p]));
+      const savedStarters = [];
+      const usedIds = new Set();
+
+      team.lineup_ids.forEach(id => {
+        if (playerMap.has(id)) {
+          savedStarters.push(playerMap.get(id));
+          usedIds.add(id);
+        }
+      });
+
+      const remainingBench = allTeamPlayers.filter(p => !usedIds.has(p.id));
+
+      // Si le 11 est complet
+      if (savedStarters.length >= 11) {
+        setTeamLineupPlayers(savedStarters.slice(0, 11));
+        setTeamBenchPlayers([...savedStarters.slice(11), ...remainingBench]);
+        return;
+      }
+    }
+
+    // Sinon, génération automatique de la meilleure équipe
+    buildLineupForFormation(allTeamPlayers, savedFormation);
   }
 
   function buildLineupForFormation(allPlayers, formationKey) {
@@ -625,6 +653,38 @@ export default function App() {
     buildLineupForFormation(allCombined, newFmt);
   }
 
+  // --- SAUVEGARDE DÉFINITIVE DE LA COMPOSITION DANS SUPABASE ---
+  async function handleSaveLineup() {
+    if (!selectedLineupTeam) return;
+
+    setSavingLineup(true);
+    const starterIds = teamLineupPlayers.map(p => p.id);
+
+    try {
+      const { error } = await supabase
+        .from('teams')
+        .update({
+          formation: currentFormation,
+          lineup_ids: starterIds
+        })
+        .eq('id', selectedLineupTeam.id);
+
+      if (error) {
+        showNotif(`Erreur : ${error.message}`);
+      } else {
+        showNotif(`Composition de "${selectedLineupTeam.nom}" (${currentFormation}) sauvegardée pour toutes les journées !`);
+        
+        // Mettre à jour l'état local des équipes
+        setTeams(prev => prev.map(t => t.id === selectedLineupTeam.id ? { ...t, formation: currentFormation, lineup_ids: starterIds } : t));
+        setSelectedLineupTeam(prev => ({ ...prev, formation: currentFormation, lineup_ids: starterIds }));
+      }
+    } catch (err) {
+      showNotif(`Erreur : ${err.message}`);
+    }
+
+    setSavingLineup(false);
+  }
+
   function handleSelectSlot(type, index) {
     if (!selectedSlot) {
       setSelectedSlot({ type, index });
@@ -644,7 +704,7 @@ export default function App() {
       updatedPitch[selectedSlot.index] = updatedPitch[index];
       updatedPitch[index] = temp;
       setTeamLineupPlayers(updatedPitch);
-      showNotif("Postes échangés sur le terrain !");
+      showNotif("Postes permutés ! N'oubliez pas d'enregistrer.");
     } else if (selectedSlot.type === 'bench' && type === 'pitch') {
       const benchP = updatedBench[selectedSlot.index];
       const pitchP = updatedPitch[index];
@@ -680,6 +740,7 @@ export default function App() {
     ? playersWithStats.filter(p => p.equipe_id === selectedMatch.equipe_domicile_id || p.equipe_id === selectedMatch.equipe_exterieur_id)
     : [];
 
+  // Composant bulle du joueur sur le terrain
   const PitchPlayerSlot = ({ player, globalIndex }) => {
     const isSelected = selectedSlot?.type === 'pitch' && selectedSlot?.index === globalIndex;
 
@@ -924,7 +985,7 @@ export default function App() {
             <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl flex flex-col sm:flex-row items-center justify-between gap-4">
               <div>
                 <h2 className="text-xl font-bold text-white flex items-center gap-2">📅 Calendrier des Rencontres</h2>
-                <p className="text-xs text-slate-400 mt-1">💡 Clique sur le logo ou nom d'une équipe pour <strong>modifier sa composition tactique</strong></p>
+                <p className="text-xs text-slate-400 mt-1">💡 Clique sur le logo ou nom d'une équipe pour <strong>modifier et sauvegarder son 11</strong></p>
               </div>
 
               <div className="flex items-center gap-3 bg-slate-950 p-2 rounded-xl border border-slate-800">
@@ -1434,7 +1495,7 @@ export default function App() {
         )}
       </main>
 
-      {/* --- MODALE 1 : TERRAIN TACTIQUE INTERACTIF --- */}
+      {/* --- MODALE 1 : TERRAIN TACTIQUE INTERACTIF AVEC BOUTON SAUVEGARDER --- */}
       {selectedLineupTeam && (
         <div className="fixed inset-0 bg-black/85 backdrop-blur-md z-50 flex items-center justify-center p-2 sm:p-4">
           <div className="bg-slate-900 border border-slate-800 rounded-3xl max-w-lg w-full p-4 sm:p-6 shadow-2xl relative max-h-[96vh] flex flex-col overflow-y-auto">
@@ -1471,7 +1532,7 @@ export default function App() {
             {/* SÉLECTEUR DE COMPOSITION TACTIQUE */}
             <div className="mb-3 flex items-center justify-between bg-slate-950 p-2.5 rounded-xl border border-slate-800">
               <span className="text-xs font-extrabold text-indigo-400 uppercase tracking-wider flex items-center gap-1">
-                <span>📋</span> Dispositif Tactique
+                <span>📋</span> Dispositif
               </span>
               <select
                 value={currentFormation}
@@ -1545,13 +1606,25 @@ export default function App() {
               </div>
             </div>
 
+            {/* BOUTON DE SAUVEGARDE DE LA COMPOSITION */}
+            <div className="mt-3">
+              <button
+                type="button"
+                onClick={handleSaveLineup}
+                disabled={savingLineup}
+                className="w-full bg-emerald-600 hover:bg-emerald-500 active:scale-[0.98] disabled:bg-slate-800 text-white font-extrabold py-2.5 rounded-xl text-sm transition-all shadow-lg shadow-emerald-600/30 flex items-center justify-center gap-2 cursor-pointer"
+              >
+                <span>💾</span> {savingLineup ? 'Sauvegarde en cours...' : 'Sauvegarder la Composition'}
+              </button>
+            </div>
+
             {/* BANC DES REMPLAÇANTS */}
             <div className="mt-4 bg-slate-950 p-3 rounded-2xl border border-slate-800">
               <div className="flex items-center justify-between mb-2">
                 <h4 className="text-[11px] font-extrabold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
                   <span>🪑</span> Banc des Remplaçants ({teamBenchPlayers.length})
                 </h4>
-                <span className="text-[10px] text-slate-500 italic">Cliquez pour faire entrer un joueur</span>
+                <span className="text-[10px] text-slate-500 italic">Cliquez pour permuter avec le 11</span>
               </div>
 
               {teamBenchPlayers.length === 0 ? (
@@ -1619,7 +1692,6 @@ export default function App() {
                 </div>
               </div>
 
-              {/* BOUTON MODIFICATION DU LOGO (ADMIN SEULEMENT) */}
               {userProfile?.is_admin && (
                 <button
                   onClick={() => setEditingTeamLogo(selectedTeam)}
@@ -1832,7 +1904,7 @@ export default function App() {
                     max="99"
                     value={editingPlayer.general !== undefined && editingPlayer.general !== null ? editingPlayer.general : 75}
                     onChange={(e) => setEditingPlayer({ ...editingPlayer, general: e.target.value })}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-indigo-500"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm text-white"
                   />
                 </div>
                 <div>
@@ -1843,7 +1915,7 @@ export default function App() {
                     max="45"
                     value={editingPlayer.age !== undefined && editingPlayer.age !== null ? editingPlayer.age : 22}
                     onChange={(e) => setEditingPlayer({ ...editingPlayer, age: e.target.value })}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-indigo-500"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm text-white"
                   />
                 </div>
                 <div>
@@ -1853,7 +1925,7 @@ export default function App() {
                     step="500000"
                     value={editingPlayer.valeur_marchande !== undefined && editingPlayer.valeur_marchande !== null ? editingPlayer.valeur_marchande : 10000000}
                     onChange={(e) => setEditingPlayer({ ...editingPlayer, valeur_marchande: e.target.value })}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-indigo-500"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm text-white"
                   />
                 </div>
               </div>
