@@ -323,27 +323,33 @@ export default function App() {
     }
   }
 
-  async function handleUpdatePlayer(e) {
+ async function handleUpdatePlayer(e) {
     e.preventDefault();
+    
+    // Vérification de sécurité Admin + présence du joueur
     if (!userProfile?.is_admin || !editingPlayer) return;
 
-    const { error } = await supabase
-      .from('players')
-      .update({
-        nom: editingPlayer.nom,
-        poste: editingPlayer.poste,
-        general: parseInt(editingPlayer.general),
-        age: parseInt(editingPlayer.age),
-        valeur_marchande: parseInt(editingPlayer.valeur_marchande)
-      })
-      .eq('id', editingPlayer.id);
+    try {
+      const { error } = await supabase
+        .from('players')
+        .update({
+          nom: editingPlayer.nom,
+          poste: editingPlayer.poste,
+          general: editingPlayer.general ? parseInt(editingPlayer.general, 10) : 75,
+          age: editingPlayer.age ? parseInt(editingPlayer.age, 10) : 22,
+          valeur_marchande: editingPlayer.valeur_marchande ? parseInt(editingPlayer.valeur_marchande, 10) : 10000000
+        })
+        .eq('id', editingPlayer.id);
 
-    if (error) {
-      showNotif(`Erreur : ${error.message}`);
-    } else {
-      showNotif(`Joueur "${editingPlayer.nom}" mis à jour !`);
-      setEditingPlayer(null);
-      fetchData();
+      if (error) {
+        showNotif(`Erreur : ${error.message}`);
+      } else {
+        showNotif(`Joueur "${editingPlayer.nom}" mis à jour avec succès !`);
+        setEditingPlayer(null); // Ferme la modale d'édition
+        await fetchData();       // Recharge la liste complète
+      }
+    } catch (err) {
+      showNotif(`Erreur inattendue : ${err.message}`);
     }
   }
 
