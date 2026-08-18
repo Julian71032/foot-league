@@ -43,6 +43,33 @@ function getSeasonLabel(seasonNum) {
   return `Saison ${seasonNum} (${startYear}/${startYear + 1})`;
 }
 
+// Calcul de la valeur marchande réaliste selon le GÉN et l'âge
+function calculateMarketValue(gen, age) {
+  const g = Math.max(45, Math.min(99, gen || 75));
+  const a = Math.max(15, Math.min(45, age || 24));
+
+  // Courbe de base exponentielle selon le général
+  let baseValue = Math.pow(g / 45, 6.2) * 500000;
+
+  // Facteur d'âge (Prime jeune < 24 ans, Dépréciation vétéran > 31 ans)
+  let ageMultiplier = 1.0;
+  if (a <= 21) ageMultiplier = 1.45;
+  else if (a <= 24) ageMultiplier = 1.25;
+  else if (a <= 28) ageMultiplier = 1.05;
+  else if (a <= 31) ageMultiplier = 0.85;
+  else if (a <= 34) ageMultiplier = 0.55;
+  else ageMultiplier = 0.30;
+
+  let finalVal = baseValue * ageMultiplier;
+
+  // Arrondi propre par paliers
+  if (finalVal > 20000000) finalVal = Math.round(finalVal / 1000000) * 1000000;
+  else if (finalVal > 5000000) finalVal = Math.round(finalVal / 500000) * 500000;
+  else finalVal = Math.round(finalVal / 100000) * 100000;
+
+  return Math.max(250000, finalVal);
+}
+
 const FORMATIONS = {
   '4-3-3': { name: '4-3-3 (Classique)', def: 4, mid: 3, att: 3 },
   '4-4-2': { name: '4-4-2 (Équilibré)', def: 4, mid: 4, att: 2 },
@@ -80,7 +107,7 @@ export default function App() {
   const [selectedTeam, setSelectedTeam] = useState(null);
   const [editingPlayer, setEditingPlayer] = useState(null);
 
-  // MODALE ÉVOLUTIONS DES JOUEURS (TOUTES LES 4 JOURNÉES)
+  // MODALE ÉVOLUTION DES JOUEURS (TOUTES LES 4 JOURNÉES)
   const [evolutionReport, setEvolutionReport] = useState(null);
 
   // MODALE LOGO
@@ -221,8 +248,8 @@ export default function App() {
       });
   };
 
-  function getTeamStarters(team) {
-    if (!team) return [];
+  function getTeamStartersAndBench(team) {
+    if (!team) return { starters: [], bench: [] };
     const all = getSortedTeamPlayers(team.id);
     let savedIds = team.lineup_ids;
     if (typeof savedIds === 'string') {
@@ -230,15 +257,18 @@ export default function App() {
     }
     if (Array.isArray(savedIds) && savedIds.length >= 11) {
       const map = new Map(all.map(p => [p.id, p]));
-      const list = savedIds.map(id => map.get(id)).filter(Boolean);
-      if (list.length >= 11) return list.slice(0, 11);
+      const starters = savedIds.map(id => map.get(id)).filter(Boolean);
+      const starterSet = new Set(starters.map(p => p.id));
+      const bench = all.filter(p => !starterSet.has(p.id));
+      if (starters.length >= 11) {
+        return { starters: starters.slice(0, 11), bench };
+      }
     }
-    return all.slice(0, 11);
+    return { starters: all.slice(0, 11), bench: all.slice(11) };
   }
 
-  // --- MOTEUR D'ÉVOLUTION DYNAMIQUE DES GÉNÉRAUX (TOUTES LES 4 JOURNÉES) ---
+  // --- MOTEUR D'ÉVOLUTION DYNAMIQUE DU GÉNÉRAL ET DE LA VALEUR (TOUTES LES 4 JOURNÉES) ---
   async function evaluateAndApplyPlayerEvolutions(targetJournee, currentSeasonNum) {
-    // Calculer sur le bloc des 4 dernières journées (ex: 1..4, 5..8, 9..12)
     const startJournee = targetJournee - 3;
     const endJournee = targetJournee;
 
@@ -254,7 +284,6 @@ export default function App() {
     const changedPlayers = [];
     const playerUpdates = [];
 
-    // Pour chaque équipe, calculer son bilan (victoires, buts encaissés)
     const teamRecords = {};
     teams.forEach(t => {
       teamRecords[t.id] = { wins: 0, losses: 0, draws: 0, goalsConceded: 0, cleanSheets: 0, matchCount: 0 };
@@ -281,7 +310,10 @@ export default function App() {
 
     for (const player of players) {
       const currentGen = player.general || 75;
+      const currentVal = player.valeur_marchande || 10000000;
+      const age = player.age || 24;
       const pos = player.poste || 'MC';
+
       const pEvents = blockEvents.filter(e => e.player_id === player.id);
       const buts = pEvents.filter(e => e.type === 'but').length;
       const passes = pEvents.filter(e => e.type === 'passe').length;
@@ -290,7 +322,6 @@ export default function App() {
 
       const tRec = teamRecords[player.equipe_id] || { wins: 0, losses: 0, goalsConceded: 4, cleanSheets: 0, matchCount: 4 };
 
-      // 1. Score de performance sur 4 matchs
       let perfScore = 0;
 
       if (['BU', 'AT', 'AD', 'AG', 'SA'].includes(pos)) {
@@ -313,31 +344,27 @@ export default function App() {
         perfScore -= (tRec.goalsConceded * 0.7);
       }
 
-      // Malus discipline
       perfScore -= (redCards * 3.0) + (yellowCards * 0.5);
 
-      // 2. Détermination de la variation en fonction du niveau actuel (Gros GÉN plus exigeants)
       let delta = 0;
 
+      // Paliers d'exigence : Les gros généraux ont besoin d'immenses performances et prennent rarement plus de +1
       if (currentGen >= 88) {
-        // SUPERSTARS (88+) : Ne peut prendre au max que +1 et seulement en cas de score exceptionnel
-        if (perfScore >= 9.0) delta = +1;
+        if (perfScore >= 9.5) delta = +1;
         else if (perfScore <= -2.5) delta = -2;
         else if (perfScore <= 0.5) delta = -1;
       } else if (currentGen >= 82) {
-        // TRÈS BONS JOUEURS (82-87) : Exigence forte
         if (perfScore >= 11.0) delta = +2;
         else if (perfScore >= 6.5) delta = +1;
         else if (perfScore <= -3.5) delta = -2;
         else if (perfScore <= 0.0) delta = -1;
       } else if (currentGen >= 74) {
-        // JOUEURS MOYENS (74-81) : Progression standard
         if (perfScore >= 9.5) delta = +2;
         else if (perfScore >= 4.5) delta = +1;
         else if (perfScore <= -3.0) delta = -2;
         else if (perfScore <= -0.5) delta = -1;
       } else {
-        // JEUNES / BAS GÉN (< 74) : Forte marge de progression (peut faire +3)
+        // Moins de 74 : Potentiel d'explosion jusqu'à +3
         if (perfScore >= 9.0) delta = +3;
         else if (perfScore >= 5.5) delta = +2;
         else if (perfScore >= 2.5) delta = +1;
@@ -345,12 +372,13 @@ export default function App() {
         else if (perfScore <= -1.5) delta = -1;
       }
 
-      // Limites absolues [-3, +3]
       delta = Math.max(-3, Math.min(3, delta));
 
       if (delta !== 0) {
         const newGen = Math.max(45, Math.min(99, currentGen + delta));
-        playerUpdates.push({ id: player.id, general: newGen });
+        const newVal = calculateMarketValue(newGen, age);
+
+        playerUpdates.push({ id: player.id, general: newGen, valeur_marchande: newVal });
         changedPlayers.push({
           id: player.id,
           nom: player.nom,
@@ -359,20 +387,23 @@ export default function App() {
           oldGen: currentGen,
           newGen: newGen,
           delta: delta,
+          oldVal: currentVal,
+          newVal: newVal,
           buts: buts,
           passes: passes
         });
       }
     }
 
-    // Sauvegarde des nouveaux généraux dans Supabase
     if (playerUpdates.length > 0) {
       for (const upd of playerUpdates) {
-        await supabase.from('players').update({ general: upd.general }).eq('id', upd.id);
+        await supabase
+          .from('players')
+          .update({ general: upd.general, valeur_marchande: upd.valeur_marchande })
+          .eq('id', upd.id);
       }
     }
 
-    // Affichage du rapport si des évolutions ont eu lieu
     if (changedPlayers.length > 0) {
       setEvolutionReport({
         journeesLabel: `Journées ${startJournee} à ${endJournee}`,
@@ -394,9 +425,9 @@ export default function App() {
     return Math.max(0, k - 1);
   }
 
-  function pickGoalScorer(starters) {
-    if (!starters || starters.length === 0) return null;
-    const weighted = starters.map(p => {
+  function pickGoalScorer(activePlayers) {
+    if (!activePlayers || activePlayers.length === 0) return null;
+    const weighted = activePlayers.map(p => {
       let w = 1;
       const pos = p.poste || 'MC';
       if (['BU', 'AT'].includes(pos)) w = 14;
@@ -416,12 +447,12 @@ export default function App() {
       if (randomVal < item.weight) return item.player;
       randomVal -= item.weight;
     }
-    return starters[0];
+    return activePlayers[0];
   }
 
-  function pickAssister(starters, scorer) {
-    if (!starters || starters.length < 2) return null;
-    const candidates = starters.filter(p => p.id !== scorer?.id);
+  function pickAssister(activePlayers, scorer) {
+    if (!activePlayers || activePlayers.length < 2) return null;
+    const candidates = activePlayers.filter(p => p.id !== scorer?.id);
     if (candidates.length === 0) return null;
 
     const weighted = candidates.map(p => {
@@ -447,9 +478,9 @@ export default function App() {
     return candidates[0];
   }
 
-  function pickCardPlayer(starters) {
-    if (!starters || starters.length === 0) return null;
-    const weighted = starters.map(p => {
+  function pickCardPlayer(activePlayers) {
+    if (!activePlayers || activePlayers.length === 0) return null;
+    const weighted = activePlayers.map(p => {
       let w = 1;
       const pos = p.poste || 'MC';
       if (['MDC', 'DC'].includes(pos)) w = 8;
@@ -464,10 +495,195 @@ export default function App() {
       if (randomVal < item.weight) return item.player;
       randomVal -= item.weight;
     }
-    return starters[0];
+    return activePlayers[0];
   }
 
-  // --- SIMULATION AUTOMATIQUE D'UNE JOURNÉE ---
+  // --- SIMULATION D'UN MATCH AVEC REMPLACEMENTS RÉALISTES ---
+  function simulateSingleMatchWithSubs(m, domTeam, extTeam, seasonNum, userId) {
+    const { starters: domStarters, bench: domBench } = getTeamStartersAndBench(domTeam);
+    const { starters: extStarters, bench: extBench } = getTeamStartersAndBench(extTeam);
+
+    const domGen = domStarters.length > 0 ? domStarters.reduce((acc, p) => acc + (p.general || 75), 0) / domStarters.length : 75;
+    const extGen = extStarters.length > 0 ? extStarters.reduce((acc, p) => acc + (p.general || 75), 0) / extStarters.length : 75;
+
+    const diff = (domGen + 1.5) - extGen;
+    const domLambda = Math.max(0.3, Math.min(4.5, 1.45 + (diff * 0.12)));
+    const extLambda = Math.max(0.2, Math.min(4.0, 1.10 - (diff * 0.10)));
+
+    const scoreDom = simulateGoals(domLambda);
+    const scoreExt = simulateGoals(extLambda);
+
+    const matchEventsList = [];
+
+    // 1. Simulation des 1 à 5 changements pour l'équipe Domicile
+    const domSubsCount = Math.min(domBench.length, Math.floor(Math.random() * 5) + 1);
+    const domSubstitutions = [];
+    const availableDomBench = [...domBench];
+    const currentDomActive = [...domStarters];
+
+    for (let s = 0; s < domSubsCount; s++) {
+      if (availableDomBench.length === 0) break;
+      const subMinute = Math.floor(Math.random() * 40) + 46; // Entre 46' et 86'
+      const playerIn = availableDomBench.splice(Math.floor(Math.random() * availableDomBench.length), 1)[0];
+      const outCandidates = currentDomActive.filter(p => p.poste !== 'G');
+      if (outCandidates.length === 0) break;
+      const playerOut = outCandidates[Math.floor(Math.random() * outCandidates.length)];
+
+      // Remplacement dans l'effectif actif sur le terrain
+      const outIdx = currentDomActive.findIndex(p => p.id === playerOut.id);
+      if (outIdx !== -1) currentDomActive[outIdx] = playerIn;
+
+      domSubstitutions.push({ minute: subMinute, playerIn, playerOut });
+      matchEventsList.push({
+        match_id: m.id,
+        player_id: playerIn.id,
+        sub_out_player_id: playerOut.id,
+        type: 'remplacement',
+        minute: subMinute,
+        saison: seasonNum,
+        user_id: userId
+      });
+    }
+
+    // 2. Simulation des 1 à 5 changements pour l'équipe Extérieure
+    const extSubsCount = Math.min(extBench.length, Math.floor(Math.random() * 5) + 1);
+    const extSubstitutions = [];
+    const availableExtBench = [...extBench];
+    const currentExtActive = [...extStarters];
+
+    for (let s = 0; s < extSubsCount; s++) {
+      if (availableExtBench.length === 0) break;
+      const subMinute = Math.floor(Math.random() * 40) + 46;
+      const playerIn = availableExtBench.splice(Math.floor(Math.random() * availableExtBench.length), 1)[0];
+      const outCandidates = currentExtActive.filter(p => p.poste !== 'G');
+      if (outCandidates.length === 0) break;
+      const playerOut = outCandidates[Math.floor(Math.random() * outCandidates.length)];
+
+      const outIdx = currentExtActive.findIndex(p => p.id === playerOut.id);
+      if (outIdx !== -1) currentExtActive[outIdx] = playerIn;
+
+      extSubstitutions.push({ minute: subMinute, playerIn, playerOut });
+      matchEventsList.push({
+        match_id: m.id,
+        player_id: playerIn.id,
+        sub_out_player_id: playerOut.id,
+        type: 'remplacement',
+        minute: subMinute,
+        saison: seasonNum,
+        user_id: userId
+      });
+    }
+
+    // Fonction pour récupérer les 11 joueurs sur le terrain à une minute M
+    const getActivePlayersAtMinute = (starters, substitutions, minute) => {
+      let active = [...starters];
+      substitutions.forEach(sub => {
+        if (minute >= sub.minute) {
+          const idx = active.findIndex(p => p.id === sub.playerOut.id);
+          if (idx !== -1) active[idx] = sub.playerIn;
+        }
+      });
+      return active;
+    };
+
+    // 3. Buteurs & Passeurs Domicile
+    for (let i = 0; i < scoreDom; i++) {
+      const minute = Math.floor(Math.random() * 90) + 1;
+      const activeAtMin = getActivePlayersAtMinute(domStarters, domSubstitutions, minute);
+      const scorer = pickGoalScorer(activeAtMin);
+      if (scorer) {
+        matchEventsList.push({
+          match_id: m.id,
+          player_id: scorer.id,
+          type: 'but',
+          minute: minute,
+          saison: seasonNum,
+          user_id: userId
+        });
+        if (Math.random() < 0.75) {
+          const assister = pickAssister(activeAtMin, scorer);
+          if (assister) {
+            matchEventsList.push({
+              match_id: m.id,
+              player_id: assister.id,
+              type: 'passe',
+              minute: minute,
+              saison: seasonNum,
+              user_id: userId
+            });
+          }
+        }
+      }
+    }
+
+    // 4. Buteurs & Passeurs Extérieur
+    for (let i = 0; i < scoreExt; i++) {
+      const minute = Math.floor(Math.random() * 90) + 1;
+      const activeAtMin = getActivePlayersAtMinute(extStarters, extSubstitutions, minute);
+      const scorer = pickGoalScorer(activeAtMin);
+      if (scorer) {
+        matchEventsList.push({
+          match_id: m.id,
+          player_id: scorer.id,
+          type: 'but',
+          minute: minute,
+          saison: seasonNum,
+          user_id: userId
+        });
+        if (Math.random() < 0.75) {
+          const assister = pickAssister(activeAtMin, scorer);
+          if (assister) {
+            matchEventsList.push({
+              match_id: m.id,
+              player_id: assister.id,
+              type: 'passe',
+              minute: minute,
+              saison: seasonNum,
+              user_id: userId
+            });
+          }
+        }
+      }
+    }
+
+    // 5. Cartons Jaunes / Rouges
+    const numYellowDom = Math.random() < 0.65 ? Math.floor(Math.random() * 3) + 1 : 0;
+    for (let y = 0; y < numYellowDom; y++) {
+      const minute = Math.floor(Math.random() * 88) + 2;
+      const activeAtMin = getActivePlayersAtMinute(domStarters, domSubstitutions, minute);
+      const carded = pickCardPlayer(activeAtMin);
+      if (carded) {
+        matchEventsList.push({
+          match_id: m.id,
+          player_id: carded.id,
+          type: 'carton_jaune',
+          minute: minute,
+          saison: seasonNum,
+          user_id: userId
+        });
+      }
+    }
+    const numYellowExt = Math.random() < 0.65 ? Math.floor(Math.random() * 3) + 1 : 0;
+    for (let y = 0; y < numYellowExt; y++) {
+      const minute = Math.floor(Math.random() * 88) + 2;
+      const activeAtMin = getActivePlayersAtMinute(extStarters, extSubstitutions, minute);
+      const carded = pickCardPlayer(activeAtMin);
+      if (carded) {
+        matchEventsList.push({
+          match_id: m.id,
+          player_id: carded.id,
+          type: 'carton_jaune',
+          minute: minute,
+          saison: seasonNum,
+          user_id: userId
+        });
+      }
+    }
+
+    return { scoreDom, scoreExt, events: matchEventsList };
+  }
+
+  // --- SIMULATION AUTOMATIQUE D'UNE JOURNÉE COMPLÈTE ---
   async function handleSimulateJournee() {
     const currentJourneeMatches = seasonMatches.filter(m => m.journee === parseInt(journeeFilter, 10));
     if (currentJourneeMatches.length === 0) {
@@ -478,7 +694,7 @@ export default function App() {
     const unplayedCount = currentJourneeMatches.filter(m => m.statut !== 'terminé').length;
     const confirmText = unplayedCount === 0
       ? `Tous les matchs de la Journée ${journeeFilter} sont déjà joués. Voulez-vous re-simuler cette journée ?`
-      : `Voulez-vous simuler automatiquement les ${currentJourneeMatches.length} matchs de la Journée ${journeeFilter} selon les notes GÉN des effectifs ?`;
+      : `Voulez-vous simuler automatiquement les ${currentJourneeMatches.length} matchs de la Journée ${journeeFilter} avec changements et probabilités de GÉN ?`;
 
     if (!window.confirm(confirmText)) return;
 
@@ -497,118 +713,16 @@ export default function App() {
         const domTeam = teams.find(t => t.id === m.equipe_domicile_id);
         const extTeam = teams.find(t => t.id === m.equipe_exterieur_id);
 
-        const domStarters = getTeamStarters(domTeam);
-        const extStarters = getTeamStarters(extTeam);
-
-        const domGen = domStarters.length > 0 
-          ? domStarters.reduce((acc, p) => acc + (p.general || 75), 0) / domStarters.length 
-          : 75;
-        const extGen = extStarters.length > 0 
-          ? extStarters.reduce((acc, p) => acc + (p.general || 75), 0) / extStarters.length 
-          : 75;
-
-        const diff = (domGen + 1.5) - extGen;
-
-        const domLambda = Math.max(0.3, Math.min(4.5, 1.45 + (diff * 0.12)));
-        const extLambda = Math.max(0.2, Math.min(4.0, 1.10 - (diff * 0.10)));
-
-        const scoreDom = simulateGoals(domLambda);
-        const scoreExt = simulateGoals(extLambda);
+        const simResult = simulateSingleMatchWithSubs(m, domTeam, extTeam, m.saison || 1, session.user.id);
 
         matchUpdates.push({
           id: m.id,
-          score_domicile: scoreDom,
-          score_exterieur: scoreExt,
+          score_domicile: simResult.scoreDom,
+          score_exterieur: simResult.scoreExt,
           statut: 'terminé'
         });
 
-        // Buteurs & Passeurs Domicile
-        for (let i = 0; i < scoreDom; i++) {
-          const scorer = pickGoalScorer(domStarters);
-          const minute = Math.floor(Math.random() * 90) + 1;
-          if (scorer) {
-            newEvents.push({
-              match_id: m.id,
-              player_id: scorer.id,
-              type: 'but',
-              minute: minute,
-              saison: m.saison || 1,
-              user_id: session.user.id
-            });
-            if (Math.random() < 0.75) {
-              const assister = pickAssister(domStarters, scorer);
-              if (assister) {
-                newEvents.push({
-                  match_id: m.id,
-                  player_id: assister.id,
-                  type: 'passe',
-                  minute: minute,
-                  saison: m.saison || 1,
-                  user_id: session.user.id
-                });
-              }
-            }
-          }
-        }
-
-        // Buteurs & Passeurs Extérieur
-        for (let i = 0; i < scoreExt; i++) {
-          const scorer = pickGoalScorer(extStarters);
-          const minute = Math.floor(Math.random() * 90) + 1;
-          if (scorer) {
-            newEvents.push({
-              match_id: m.id,
-              player_id: scorer.id,
-              type: 'but',
-              minute: minute,
-              saison: m.saison || 1,
-              user_id: session.user.id
-            });
-            if (Math.random() < 0.75) {
-              const assister = pickAssister(extStarters, scorer);
-              if (assister) {
-                newEvents.push({
-                  match_id: m.id,
-                  player_id: assister.id,
-                  type: 'passe',
-                  minute: minute,
-                  saison: m.saison || 1,
-                  user_id: session.user.id
-                });
-              }
-            }
-          }
-        }
-
-        // Cartons
-        const numYellowDom = Math.random() < 0.65 ? Math.floor(Math.random() * 3) + 1 : 0;
-        for (let y = 0; y < numYellowDom; y++) {
-          const carded = pickCardPlayer(domStarters);
-          if (carded) {
-            newEvents.push({
-              match_id: m.id,
-              player_id: carded.id,
-              type: 'carton_jaune',
-              minute: Math.floor(Math.random() * 88) + 2,
-              saison: m.saison || 1,
-              user_id: session.user.id
-            });
-          }
-        }
-        const numYellowExt = Math.random() < 0.65 ? Math.floor(Math.random() * 3) + 1 : 0;
-        for (let y = 0; y < numYellowExt; y++) {
-          const carded = pickCardPlayer(extStarters);
-          if (carded) {
-            newEvents.push({
-              match_id: m.id,
-              player_id: carded.id,
-              type: 'carton_jaune',
-              minute: Math.floor(Math.random() * 88) + 2,
-              saison: m.saison || 1,
-              user_id: session.user.id
-            });
-          }
-        }
+        newEvents.push(...simResult.events);
       }
 
       for (const u of matchUpdates) {
@@ -625,7 +739,7 @@ export default function App() {
       showNotif(`Journée ${journeeFilter} simulée avec succès !`);
       await fetchData();
 
-      // VÉRIFICATION DU PALIER DE 4 JOURNÉES POUR L'ÉVOLUTION DES JOUEURS (J4, J8, J12, J16, etc.)
+      // VÉRIFICATION DU PALIER DE 4 JOURNÉES (J4, J8, J12, J16, etc.)
       const currentJ = parseInt(journeeFilter, 10);
       if (currentJ % 4 === 0) {
         await evaluateAndApplyPlayerEvolutions(currentJ, parseInt(seasonFilter, 10));
@@ -763,7 +877,7 @@ export default function App() {
         } else if (m.equipe_exterieur_id === team.id) {
           joues++;
           if (m.score_exterieur > m.score_domicile) points += 3;
-          else if (m.score_exterieur === m.score_domicile) points += 1;
+          else if (m.score_domicile === m.score_exterieur) points += 1;
         }
       }
     });
@@ -871,21 +985,26 @@ export default function App() {
     if (!userProfile?.is_admin || !editingPlayer) return;
 
     try {
+      const newGen = editingPlayer.general ? parseInt(editingPlayer.general, 10) : 75;
+      const newAge = editingPlayer.age ? parseInt(editingPlayer.age, 10) : 22;
+      // Recalcul auto de la valeur si modifiée ou ajustée
+      const calculatedVal = calculateMarketValue(newGen, newAge);
+
       const { error } = await supabase
         .from('players')
         .update({
           nom: editingPlayer.nom,
           poste: editingPlayer.poste,
           numero: editingPlayer.numero ? parseInt(editingPlayer.numero, 10) : 10,
-          general: editingPlayer.general ? parseInt(editingPlayer.general, 10) : 75,
-          age: editingPlayer.age ? parseInt(editingPlayer.age, 10) : 22,
-          valeur_marchande: editingPlayer.valeur_marchande ? parseInt(editingPlayer.valeur_marchande, 10) : 10000000
+          general: newGen,
+          age: newAge,
+          valeur_marchande: calculatedVal
         })
         .eq('id', editingPlayer.id);
 
       if (error) showNotif(`Erreur : ${error.message}`);
       else {
-        showNotif(`Joueur "${editingPlayer.nom}" mis à jour !`);
+        showNotif(`Joueur "${editingPlayer.nom}" mis à jour avec une valeur de ${formatMoney(calculatedVal)} !`);
         setEditingPlayer(null);
         await fetchData();
       }
@@ -949,37 +1068,14 @@ export default function App() {
 
     const domTeam = teams.find(t => t.id === match.equipe_domicile_id);
     const extTeam = teams.find(t => t.id === match.equipe_exterieur_id);
-    const domStarters = getTeamStarters(domTeam);
-    const extStarters = getTeamStarters(extTeam);
 
     await supabase.from('match_events').delete().eq('match_id', match.id);
 
-    const newEvents = [];
-    for (let i = 0; i < scoreDom; i++) {
-      const scorer = pickGoalScorer(domStarters);
-      const minute = Math.floor(Math.random() * 90) + 1;
-      if (scorer) {
-        newEvents.push({ match_id: match.id, player_id: scorer.id, type: 'but', minute, saison: match.saison || 1, user_id: session.user.id });
-        if (Math.random() < 0.75) {
-          const assister = pickAssister(domStarters, scorer);
-          if (assister) newEvents.push({ match_id: match.id, player_id: assister.id, type: 'passe', minute, saison: match.saison || 1, user_id: session.user.id });
-        }
-      }
-    }
-    for (let i = 0; i < scoreExt; i++) {
-      const scorer = pickGoalScorer(extStarters);
-      const minute = Math.floor(Math.random() * 90) + 1;
-      if (scorer) {
-        newEvents.push({ match_id: match.id, player_id: scorer.id, type: 'but', minute, saison: match.saison || 1, user_id: session.user.id });
-        if (Math.random() < 0.75) {
-          const assister = pickAssister(extStarters, scorer);
-          if (assister) newEvents.push({ match_id: match.id, player_id: assister.id, type: 'passe', minute, saison: match.saison || 1, user_id: session.user.id });
-        }
-      }
-    }
+    // Simulation d'un match avec les remplacements
+    const simResult = simulateSingleMatchWithSubs(match, domTeam, extTeam, match.saison || 1, session.user.id);
 
-    if (newEvents.length > 0) {
-      await supabase.from('match_events').insert(newEvents);
+    if (simResult.events.length > 0) {
+      await supabase.from('match_events').insert(simResult.events);
     }
 
     const { error } = await supabase
@@ -993,7 +1089,6 @@ export default function App() {
       showNotif("Score et événements enregistrés !");
       await fetchData();
 
-      // Vérification palier 4 journées
       const currentJ = match.journee;
       if (currentJ % 4 === 0) {
         const otherMatchesInJ = seasonMatches.filter(m => m.journee === currentJ && m.id !== match.id);
@@ -1045,19 +1140,23 @@ export default function App() {
     e.preventDefault();
     if (!newPlayer.nom || !newPlayer.equipe_id || !userProfile?.is_admin) return;
 
+    const gen = parseInt(newPlayer.general, 10) || 75;
+    const age = parseInt(newPlayer.age, 10) || 22;
+    const calculatedVal = calculateMarketValue(gen, age);
+
     const { error } = await supabase.from('players').insert([{
       nom: newPlayer.nom,
       equipe_id: newPlayer.equipe_id,
       numero: parseInt(newPlayer.numero, 10) || 10,
       poste: newPlayer.poste,
-      general: parseInt(newPlayer.general, 10),
-      valeur_marchande: parseInt(newPlayer.valeur, 10),
-      age: parseInt(newPlayer.age, 10)
+      general: gen,
+      valeur_marchande: calculatedVal,
+      age: age
     }]);
 
     if (error) showNotif(`Erreur : ${error.message}`);
     else {
-      showNotif(`Joueur "${newPlayer.nom}" (#${newPlayer.numero || 10}) ajouté !`);
+      showNotif(`Joueur "${newPlayer.nom}" (#${newPlayer.numero || 10}) ajouté avec une valeur de ${formatMoney(calculatedVal)} !`);
       setNewPlayer({ nom: '', equipe_id: newPlayer.equipe_id, numero: 10, general: 75, valeur: 10000000, age: 22, poste: 'MC' });
       fetchData();
     }
@@ -1432,6 +1531,7 @@ export default function App() {
                 <span className="text-xs text-slate-400">💡 Clique sur une équipe pour voir son effectif complet</span>
               </div>
 
+              {/* SÉLECTEUR DE SAISON */}
               <div className="flex items-center gap-2 bg-slate-950 p-1.5 rounded-xl border border-slate-800">
                 <span className="text-xs font-bold text-slate-400 pl-2">Saison :</span>
                 <select
@@ -1497,7 +1597,7 @@ export default function App() {
             <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
               <div>
                 <h2 className="text-xl font-bold text-white flex items-center gap-2">📅 Calendrier des Rencontres</h2>
-                <p className="text-xs text-slate-400 mt-1">💡 Les GÉN des joueurs évoluent automatiquement toutes les 4 journées selon leurs performances !</p>
+                <p className="text-xs text-slate-400 mt-1">💡 1 à 5 remplacements par match avec impact direct sur les buts et passes !</p>
               </div>
 
               <div className="flex flex-wrap items-center gap-3 w-full md:w-auto justify-between md:justify-end">
@@ -1538,7 +1638,7 @@ export default function App() {
                   onClick={handleSimulateJournee}
                   disabled={simulating || seasonMatches.length === 0}
                   className="bg-emerald-600 hover:bg-emerald-500 active:scale-95 text-white font-extrabold text-xs px-3.5 py-2 rounded-xl transition-all shadow-md shadow-emerald-600/30 flex items-center gap-1.5 cursor-pointer"
-                  title="Simule tous les scores de la journée en calculant les probabilités selon le GÉN de chaque effectif"
+                  title="Simule tous les scores de la journée en effectuant des changements et en calculant les performances des joueurs"
                 >
                   <span>⚡</span> {simulating ? 'Simulation...' : 'Simuler la Journée'}
                 </button>
@@ -1622,7 +1722,7 @@ export default function App() {
                             type="button"
                             onClick={() => openMatchDetails(m)}
                             className="bg-indigo-600/20 hover:bg-indigo-600 text-indigo-300 hover:text-white border border-indigo-500/40 text-xs font-black tracking-widest px-3.5 py-2.5 rounded-xl transition-all cursor-pointer shadow-md active:scale-95 uppercase select-none"
-                            title="Cliquer pour voir les buteurs, passeurs et cartons de chaque équipe"
+                            title="Cliquer pour voir les buteurs, passeurs, cartons et changements"
                           >
                             VS
                           </button>
@@ -1829,7 +1929,7 @@ export default function App() {
                       <p className="text-sm font-bold text-white">#{selectedTransferPlayer.numero || 10} {selectedTransferPlayer.nom} <span className="text-indigo-400 font-normal">({selectedTransferPlayer.poste || 'Poste non défini'})</span></p>
                     </div>
                     <div className="text-right">
-                      <p className="text-xs text-slate-400">Valeur actuelle</p>
+                      <p className="text-xs text-slate-400">Valeur marchande actuelle</p>
                       <p className="text-sm font-bold text-emerald-400">{formatMoney(selectedTransferPlayer.valeur_marchande)}</p>
                     </div>
                   </div>
@@ -1913,7 +2013,7 @@ export default function App() {
           </div>
         )}
 
-        {/* 5. ADMIN */}
+        {/* 5. ADMIN (CRÉATEUR DE LIGUE) */}
         {tab === 'admin' && userProfile?.is_admin && (
           <div className="space-y-6">
             <h2 className="text-2xl font-extrabold text-white">⚙️ Panneau d'Administration (Créateur de Ligue)</h2>
@@ -2011,9 +2111,9 @@ export default function App() {
                     </div>
                   </div>
 
-                  <div className="grid grid-cols-3 gap-2">
+                  <div className="grid grid-cols-2 gap-2">
                     <div>
-                      <label className="block text-xs font-medium text-slate-400 mb-1">Général</label>
+                      <label className="block text-xs font-medium text-slate-400 mb-1">Général (45-99)</label>
                       <input
                         type="number"
                         min="40"
@@ -2031,16 +2131,6 @@ export default function App() {
                         max="45"
                         value={newPlayer.age}
                         onChange={(e) => setNewPlayer({ ...newPlayer, age: e.target.value })}
-                        className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm text-white"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-medium text-slate-400 mb-1">Valeur (€)</label>
-                      <input
-                        type="number"
-                        step="500000"
-                        value={newPlayer.valeur}
-                        onChange={(e) => setNewPlayer({ ...newPlayer, valeur: e.target.value })}
                         className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm text-white"
                       />
                     </div>
@@ -2094,7 +2184,7 @@ export default function App() {
         )}
       </main>
 
-      {/* --- MODALE NOUVELLE : RAPPORT D'ÉVOLUTION DES JOUEURS (TOUTES LES 4 JOURNÉES) --- */}
+      {/* --- MODALE RAPPORT D'ÉVOLUTION DES JOUEURS (TOUTES LES 4 JOURNÉES) --- */}
       {evolutionReport && (
         <div className="fixed inset-0 bg-black/85 backdrop-blur-md z-50 flex items-center justify-center p-4">
           <div className="bg-slate-900 border border-slate-800 rounded-3xl max-w-xl w-full p-6 shadow-2xl relative max-h-[90vh] flex flex-col">
@@ -2108,7 +2198,7 @@ export default function App() {
 
             <div className="text-center mb-4 pb-3 border-b border-slate-800">
               <div className="inline-block bg-indigo-600 text-white p-2 rounded-xl text-lg mb-2">📈</div>
-              <h3 className="text-lg font-black text-white tracking-tight">Rapport d'Évolution des Joueurs</h3>
+              <h3 className="text-lg font-black text-white tracking-tight">Rapport d'Évolution des Notes & Valeurs</h3>
               <p className="text-xs text-slate-400 mt-0.5">
                 Bilan des performances sur les <strong className="text-indigo-400">{evolutionReport.journeesLabel}</strong> ({evolutionReport.seasonLabel})
               </p>
@@ -2127,6 +2217,9 @@ export default function App() {
                         <p className="text-sm font-bold text-white">{p.nom}</p>
                         <p className="text-[11px] text-slate-400">
                           {p.teamName} {p.buts > 0 && `• ⚽ ${p.buts}`} {p.passes > 0 && `• 🎯 ${p.passes}`}
+                        </p>
+                        <p className="text-[10px] text-emerald-400 font-mono mt-0.5">
+                          Valeur : {formatMoney(p.newVal)}
                         </p>
                       </div>
                     </div>
@@ -2551,9 +2644,9 @@ export default function App() {
                 </select>
               </div>
 
-              <div className="grid grid-cols-3 gap-2">
+              <div className="grid grid-cols-2 gap-2">
                 <div>
-                  <label className="block text-xs font-medium text-slate-400 mb-1">Général</label>
+                  <label className="block text-xs font-medium text-slate-400 mb-1">Général (45-99)</label>
                   <input
                     type="number"
                     min="40"
@@ -2571,16 +2664,6 @@ export default function App() {
                     max="45"
                     value={editingPlayer.age !== undefined && editingPlayer.age !== null ? editingPlayer.age : 22}
                     onChange={(e) => setEditingPlayer({ ...editingPlayer, age: e.target.value })}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm text-white"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-slate-400 mb-1">Valeur (€)</label>
-                  <input
-                    type="number"
-                    step="500000"
-                    value={editingPlayer.valeur_marchande !== undefined && editingPlayer.valeur_marchande !== null ? editingPlayer.valeur_marchande : 10000000}
-                    onChange={(e) => setEditingPlayer({ ...editingPlayer, valeur_marchande: e.target.value })}
                     className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm text-white"
                   />
                 </div>
@@ -2668,6 +2751,10 @@ export default function App() {
                         icon = '🟥';
                         typeLabel = 'Rouge';
                         colorClass = 'text-rose-400';
+                      } else if (ev.type === 'remplacement') {
+                        icon = '🔄';
+                        typeLabel = 'Entrée';
+                        colorClass = 'text-emerald-400';
                       }
 
                       return (
@@ -2719,6 +2806,10 @@ export default function App() {
                         icon = '🟥';
                         typeLabel = 'Rouge';
                         colorClass = 'text-rose-400';
+                      } else if (ev.type === 'remplacement') {
+                        icon = '🔄';
+                        typeLabel = 'Entrée';
+                        colorClass = 'text-emerald-400';
                       }
 
                       return (
