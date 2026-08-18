@@ -226,10 +226,12 @@ export default function App() {
     const { data: dataEvents } = await supabase.from('match_events').select('*').eq('user_id', session.user.id);
     if (dataEvents) setMatchEvents(dataEvents);
 
+    // Limité aux 15 derniers transferts
     const { data: dataTransfers } = await supabase
       .from('transfers')
       .select('*, players(nom), old_team:teams!old_team_id(nom), new_team:teams!new_team_id(nom)')
-      .order('created_at', { ascending: false });
+      .order('created_at', { ascending: false })
+      .limit(15);
     if (dataTransfers) setTransfers(dataTransfers);
   }
 
@@ -1090,7 +1092,7 @@ export default function App() {
     fetchData();
   }
 
-  // --- NOUVEAU : ANNULER UN TRANSFERT UNIQUE ---
+  // --- ANNULER UN TRANSFERT UNIQUE ---
   async function handleCancelTransfer(transfer) {
     if (!window.confirm(`Voulez-vous annuler le transfert de "${transfer.players?.nom || 'ce joueur'}" et le renvoyer à ${transfer.old_team?.nom || 'son ancien club'} ?`)) {
       return;
@@ -1124,7 +1126,7 @@ export default function App() {
     }
   }
 
-  // --- NOUVEAU : RÉINITIALISER TOUS LES TRANSFERTS ---
+  // --- RÉINITIALISER TOUS LES TRANSFERTS ---
   async function handleResetAllTransfers() {
     if (transfers.length === 0) {
       showNotif("Aucun transfert à réinitialiser.");
@@ -1136,30 +1138,40 @@ export default function App() {
     }
 
     try {
-      const initialClubByPlayer = {};
-      const sortedChronological = [...transfers].reverse();
+      // 1. Récupérer TOUS les transferts de la base pour restaurer l'état initial
+      const { data: allUserTransfers } = await supabase
+        .from('transfers')
+        .select('*')
+        .eq('user_id', session.user.id)
+        .order('created_at', { ascending: true });
 
-      sortedChronological.forEach(t => {
-        if (!initialClubByPlayer[t.player_id]) {
-          initialClubByPlayer[t.player_id] = t.old_team_id;
+      if (allUserTransfers && allUserTransfers.length > 0) {
+        const initialClubByPlayer = {};
+        allUserTransfers.forEach(t => {
+          if (!initialClubByPlayer[t.player_id]) {
+            initialClubByPlayer[t.player_id] = t.old_team_id;
+          }
+        });
+
+        for (const [playerId, originalTeamId] of Object.entries(initialClubByPlayer)) {
+          await supabase
+            .from('players')
+            .update({ equipe_id: originalTeamId })
+            .eq('id', playerId);
         }
-      });
-
-      for (const [playerId, originalTeamId] of Object.entries(initialClubByPlayer)) {
-        await supabase
-          .from('players')
-          .update({ equipe_id: originalTeamId })
-          .eq('id', playerId);
       }
 
+      // 2. Supprimer TOUTES les lignes de transferts pour cet utilisateur
       const { error: deleteError } = await supabase
         .from('transfers')
         .delete()
-        .neq('id', '00000000-0000-0000-0000-000000000000');
+        .eq('user_id', session.user.id);
 
       if (deleteError) throw deleteError;
 
-      showNotif("Tous les transferts ont été réinitialisés avec succès !");
+      // 3. Vider immédiatement l'état local
+      setTransfers([]);
+      showNotif("Tous les transferts ont été réinitialisés et l'historique a été effacé !");
       await fetchData();
     } catch (err) {
       showNotif(`Erreur : ${err.message}`);
@@ -2267,10 +2279,13 @@ export default function App() {
               </form>
             </div>
 
-            {/* Historique des Transferts avec bouton Annuler */}
+            {/* Historique des 15 Derniers Transferts avec bouton Annuler */}
             {transfers.length > 0 && (
               <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl">
-                <h3 className="text-lg font-bold text-white mb-4">📋 Historique des Derniers Transferts</h3>
+                <div className="flex items-center justify-between mb-4">
+                  <h3 className="text-lg font-bold text-white">📋 Historique des 15 Derniers Transferts</h3>
+                  <span className="text-xs text-slate-400 font-mono">Affichage : {Math.min(transfers.length, 15)} / 15 max</span>
+                </div>
                 <div className="overflow-x-auto">
                   <table className="w-full text-left border-collapse">
                     <thead>
@@ -2283,7 +2298,7 @@ export default function App() {
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-800/60 text-sm">
-                      {transfers.map((t) => (
+                      {transfers.slice(0, 15).map((t) => (
                         <tr key={t.id} className="hover:bg-slate-800/30 transition-colors">
                           <td className="py-3.5 px-4 font-bold text-white">{t.players?.nom || 'Joueur inconnu'}</td>
                           <td className="py-3.5 px-4 text-rose-400 font-semibold">{t.old_team?.nom || '-'}</td>
