@@ -264,17 +264,21 @@ export default function App() {
     return { starters: all.slice(0, 11), bench: all.slice(11) };
   }
 
-  // --- MOTEUR DE TRANSFERTS AUTOMATIQUE MERCATO D'HIVER (JOURNÉES 19 À 23) ---
+  // --- MOTEUR DE TRANSFERTS MERCATO D'HIVER AVEC RÈGLES 16-28 JOUEURS ---
   async function triggerWinterMercato(journeeNum, currentSeasonNum) {
     if (!teams || teams.length < 2 || !players || players.length < 10) return;
 
-    // Trier les clubs par classement actuel
+    // Calcul dynamique de l'effectif actuel de chaque club
+    const teamCounts = {};
+    teams.forEach(t => {
+      teamCounts[t.id] = players.filter(p => p.equipe_id === t.id).length;
+    });
+
     const rankedTeams = [...classement];
     const topClubs = rankedTeams.slice(0, Math.max(1, Math.floor(rankedTeams.length * 0.4)));
     const midClubs = rankedTeams.slice(Math.floor(rankedTeams.length * 0.4), Math.floor(rankedTeams.length * 0.7));
     const bottomClubs = rankedTeams.slice(Math.max(1, Math.floor(rankedTeams.length * 0.7)));
 
-    // Pool de joueurs éligibles
     const availablePool = [...players].sort(() => Math.random() - 0.5);
     const completedTransfers = [];
     const transferInserts = [];
@@ -290,28 +294,36 @@ export default function App() {
       const originTeam = teams.find(t => t.id === originTeamId);
       if (!originTeam) continue;
 
+      // RÈGLE 1 : Si le club vendeur a <= 16 joueurs, il ne vend PLUS
+      if ((teamCounts[originTeamId] || 0) <= 16) {
+        continue;
+      }
+
       let destinationTeam = null;
       let reason = '';
 
-      // SCÉNARIO 1 : Jeune pépite qui explose ou gros joueur -> Signe dans un gros club
+      // Filtre destination : Le club acheteur doit avoir < 28 joueurs
+      const canBuy = (club) => club.id !== originTeamId && (teamCounts[club.id] || 0) < 28;
+
+      // SCÉNARIO 1 : Jeune pépite qui explose ou gros joueur -> Gros club
       if ((age <= 23 && currentGen >= 77) || currentGen >= 83) {
-        const candidateDest = topClubs.filter(t => t.id !== originTeamId);
+        const candidateDest = topClubs.filter(canBuy);
         if (candidateDest.length > 0) {
           destinationTeam = candidateDest[Math.floor(Math.random() * candidateDest.length)];
           reason = age <= 23 ? "Jeune pépite recrutée par un cador" : "Transfert star de haut niveau";
         }
       }
-      // SCÉNARIO 2 : Vétéran ou joueur en baisse / difficulté -> Part se relancer dans un plus petit club
+      // SCÉNARIO 2 : Vétéran ou joueur en difficulté -> Petit club
       else if (age >= 29 || currentGen <= 74) {
-        const candidateDest = bottomClubs.filter(t => t.id !== originTeamId);
+        const candidateDest = bottomClubs.filter(canBuy);
         if (candidateDest.length > 0) {
           destinationTeam = candidateDest[Math.floor(Math.random() * candidateDest.length)];
           reason = "En quête de temps de jeu et de relance";
         }
       }
-      // SCÉNARIO 3 : Transfert intermédiaire équilibré
+      // SCÉNARIO 3 : Transfert intermédiaire
       else {
-        const candidateDest = [...midClubs, ...topClubs, ...bottomClubs].filter(t => t.id !== originTeamId);
+        const candidateDest = [...midClubs, ...topClubs, ...bottomClubs].filter(canBuy);
         if (candidateDest.length > 0) {
           destinationTeam = candidateDest[Math.floor(Math.random() * candidateDest.length)];
           reason = "Renfort stratégique hivernal";
@@ -322,7 +334,10 @@ export default function App() {
         usedPlayerIds.add(player.id);
         const fee = player.valeur_marchande || calculateMarketValue(currentGen, age);
 
-        // Mettre à jour dans Supabase
+        // Mettre à jour les compteurs en temps réel
+        teamCounts[originTeamId]--;
+        teamCounts[destinationTeam.id]++;
+
         await supabase
           .from('players')
           .update({ equipe_id: destinationTeam.id })
@@ -343,9 +358,7 @@ export default function App() {
           general: currentGen,
           age: age,
           oldTeam: originTeam.nom,
-          oldTeamLogo: originTeam.logo_url,
           newTeam: destinationTeam.nom,
-          newTeamLogo: destinationTeam.logo_url,
           fee: fee,
           reason: reason
         });
@@ -509,7 +522,7 @@ export default function App() {
     }
   }
 
-  // --- MOTEUR PROBABILISTE DE BUTS / PASSES / CARTONS ---
+  // --- MOTEUR PROBABILISTE DE MATCHS ---
   function simulateGoals(lambda) {
     let L = Math.exp(-lambda);
     let k = 0;
@@ -594,7 +607,6 @@ export default function App() {
     return activePlayers[0];
   }
 
-  // --- SIMULATION D'UN MATCH AVEC CHANGEMENTS RÉALISTES ---
   function simulateSingleMatchWithSubs(m, domTeam, extTeam, seasonNum, userId) {
     const { starters: domStarters, bench: domBench } = getTeamStartersAndBench(domTeam);
     const { starters: extStarters, bench: extBench } = getTeamStartersAndBench(extTeam);
@@ -611,7 +623,6 @@ export default function App() {
 
     const matchEventsList = [];
 
-    // 1 à 5 changements Domicile
     const domSubsCount = Math.min(domBench.length, Math.floor(Math.random() * 5) + 1);
     const domSubstitutions = [];
     const availableDomBench = [...domBench];
@@ -640,7 +651,6 @@ export default function App() {
       });
     }
 
-    // 1 à 5 changements Extérieur
     const extSubsCount = Math.min(extBench.length, Math.floor(Math.random() * 5) + 1);
     const extSubstitutions = [];
     const availableExtBench = [...extBench];
@@ -680,7 +690,6 @@ export default function App() {
       return active;
     };
 
-    // Buteurs & Passeurs Domicile
     for (let i = 0; i < scoreDom; i++) {
       const minute = Math.floor(Math.random() * 90) + 1;
       const activeAtMin = getActivePlayersAtMinute(domStarters, domSubstitutions, minute);
@@ -710,7 +719,6 @@ export default function App() {
       }
     }
 
-    // Buteurs & Passeurs Extérieur
     for (let i = 0; i < scoreExt; i++) {
       const minute = Math.floor(Math.random() * 90) + 1;
       const activeAtMin = getActivePlayersAtMinute(extStarters, extSubstitutions, minute);
@@ -740,7 +748,6 @@ export default function App() {
       }
     }
 
-    // Cartons Jaunes / Rouges
     const numYellowDom = Math.random() < 0.65 ? Math.floor(Math.random() * 3) + 1 : 0;
     for (let y = 0; y < numYellowDom; y++) {
       const minute = Math.floor(Math.random() * 88) + 2;
@@ -836,13 +843,13 @@ export default function App() {
       const currentJ = parseInt(journeeFilter, 10);
       const currentS = parseInt(seasonFilter, 10);
 
-      // 1. DÉCLENCHEMENT DU MERCATO D'HIVER (JOURNÉES 19 À 23)
+      // 1. MERCATO D'HIVER (JOURNÉES 19 À 23)
       if (currentJ >= 19 && currentJ <= 23) {
         await triggerWinterMercato(currentJ, currentS);
         await fetchData();
       }
 
-      // 2. VÉRIFICATION DU PALIER DE 4 JOURNÉES (J4, J8, J12, J16, etc.)
+      // 2. ÉVOLUTION DES JOUEURS (TOUTES LES 4 JOURNÉES)
       if (currentJ % 4 === 0) {
         await evaluateAndApplyPlayerEvolutions(currentJ, currentS);
         await fetchData();
@@ -1001,8 +1008,20 @@ export default function App() {
     .filter(j => j.passes_decisives > 0)
     .sort((a, b) => b.passes_decisives - a.passes_decisives);
 
+  // FILTRES STRICTS DE TRANSFERT MANUEL : Vente bloquée si <= 16, Achat bloqué si >= 28
+  const availableSellerTeams = teams.filter(t => {
+    const count = players.filter(p => p.equipe_id === t.id).length;
+    return count > 16;
+  });
+
   const availablePlayersForTransfer = players.filter(p => p.equipe_id === transferFromTeamId);
-  const availableDestinationTeams = teams.filter(t => t.id !== transferFromTeamId);
+
+  const availableDestinationTeams = teams.filter(t => {
+    if (t.id === transferFromTeamId) return false;
+    const count = players.filter(p => p.equipe_id === t.id).length;
+    return count < 28;
+  });
+
   const selectedTransferPlayer = players.find(p => p.id === transferPlayerId);
 
   function handleFromTeamChange(e) {
@@ -1029,6 +1048,18 @@ export default function App() {
 
     if (transferFromTeamId === transferToTeamId) {
       showNotif("Le club de destination doit être différent du club d'origine !");
+      return;
+    }
+
+    const sellerCount = players.filter(p => p.equipe_id === transferFromTeamId).length;
+    if (sellerCount <= 16) {
+      showNotif("Ce club a 16 joueurs ou moins : il ne peut plus vendre de joueur !");
+      return;
+    }
+
+    const buyerCount = players.filter(p => p.equipe_id === transferToTeamId).length;
+    if (buyerCount >= 28) {
+      showNotif("Ce club a atteint le quota max de 28 joueurs : recrutement impossible !");
       return;
     }
 
@@ -1246,6 +1277,12 @@ export default function App() {
     e.preventDefault();
     if (!newPlayer.nom || !newPlayer.equipe_id || !userProfile?.is_admin) return;
 
+    const teamCount = players.filter(p => p.equipe_id === newPlayer.equipe_id).length;
+    if (teamCount >= 28) {
+      showNotif("Cette équipe a déjà atteint la limite maximale de 28 joueurs !");
+      return;
+    }
+
     const gen = parseInt(newPlayer.general, 10) || 75;
     const age = parseInt(newPlayer.age, 10) || 22;
     const calculatedVal = calculateMarketValue(gen, age);
@@ -1262,7 +1299,7 @@ export default function App() {
 
     if (error) showNotif(`Erreur : ${error.message}`);
     else {
-      showNotif(`Joueur "${newPlayer.nom}" (#${newPlayer.numero || 10}) ajouté avec une valeur de ${formatMoney(calculatedVal)} !`);
+      showNotif(`Joueur "${newPlayer.nom}" (#${newPlayer.numero || 10}) ajouté (${formatMoney(calculatedVal)}) !`);
       setNewPlayer({ nom: '', equipe_id: newPlayer.equipe_id, numero: 10, general: 75, valeur: 10000000, age: 22, poste: 'MC' });
       fetchData();
     }
@@ -1436,19 +1473,18 @@ export default function App() {
     ? Math.max(...seasonMatches.map(m => m.journee || 1))
     : (teams.length >= 2 ? (teams.length % 2 === 0 ? teams.length - 1 : teams.length) * 2 : 38);
 
-  // VÉRIFICATION : TOUS LES MATCHS DE LA JOURNÉE EN COURS SONT-ILS TERMINÉS ?
   const currentMatchesList = seasonMatches.filter(m => m.journee === parseInt(journeeFilter, 10));
   const isCurrentJourneeCompleted = currentMatchesList.length > 0 && currentMatchesList.every(m => m.statut === 'terminé');
 
   function handleNextJournee() {
     if (!isCurrentJourneeCompleted) {
-      showNotif("Vous devez d'abord jouer ou simuler tous les matchs de la journée en cours !");
+      showNotif("Jouez ou simulez d'abord tous les matchs de la journée avant d'avancer !");
       return;
     }
     if (journeeFilter < maxJourneesCount) {
       setJourneeFilter(prev => prev + 1);
     } else {
-      showNotif("Vous avez atteint la dernière journée de la saison !");
+      showNotif("Vous êtes sur la dernière journée de cette saison !");
     }
   }
 
@@ -1655,7 +1691,7 @@ export default function App() {
             <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-6">
               <div>
                 <h2 className="text-xl font-bold flex items-center gap-2 text-white">🏆 Classement Général</h2>
-                <span className="text-xs text-slate-400">💡 Clique sur une équipe pour voir son effectif complet</span>
+                <span className="text-xs text-slate-400">💡 Clique sur une équipe pour voir son effectif complet (16 à 28 joueurs max)</span>
               </div>
 
               {/* SÉLECTEUR DE SAISON */}
@@ -1682,36 +1718,49 @@ export default function App() {
                   <tr className="border-b border-slate-800 text-slate-400 text-xs font-semibold uppercase tracking-wider">
                     <th className="py-3 px-4">#</th>
                     <th className="py-3 px-4">Équipe</th>
+                    <th className="py-3 px-4 text-center">Effectif</th>
                     <th className="py-3 px-4 text-center">MJ</th>
                     <th className="py-3 px-4 text-center">Points</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-800/60 text-sm">
-                  {classement.map((eq, i) => (
-                    <tr
-                      key={eq.id}
-                      onClick={() => setSelectedTeam(eq)}
-                      className="hover:bg-slate-800/60 transition-colors cursor-pointer group"
-                    >
-                      <td className="py-4 px-4 font-mono font-bold text-slate-400 group-hover:text-indigo-400">{i + 1}</td>
-                      <td className="py-4 px-4">
-                        <div className="flex items-center gap-3">
-                          {eq.logo_url ? (
-                            <img src={eq.logo_url} alt="" className="w-8 h-8 object-contain rounded-full bg-slate-800 p-0.5" />
-                          ) : (
-                            <div className="w-8 h-8 bg-slate-800 rounded-full flex items-center justify-center text-xs">🛡️</div>
-                          )}
-                          <span className="font-bold text-white group-hover:text-indigo-400 transition-colors">{eq.nom}</span>
-                        </div>
-                      </td>
-                      <td className="py-4 px-4 text-center text-slate-400 font-semibold">{eq.joues}</td>
-                      <td className="py-4 px-4 text-center">
-                        <span className="inline-block bg-indigo-500/10 text-indigo-400 font-extrabold px-3 py-1 rounded-full border border-indigo-500/20">
-                          {eq.points} pts
-                        </span>
-                      </td>
-                    </tr>
-                  ))}
+                  {classement.map((eq, i) => {
+                    const count = players.filter(p => p.equipe_id === eq.id).length;
+                    return (
+                      <tr
+                        key={eq.id}
+                        onClick={() => setSelectedTeam(eq)}
+                        className="hover:bg-slate-800/60 transition-colors cursor-pointer group"
+                      >
+                        <td className="py-4 px-4 font-mono font-bold text-slate-400 group-hover:text-indigo-400">{i + 1}</td>
+                        <td className="py-4 px-4">
+                          <div className="flex items-center gap-3">
+                            {eq.logo_url ? (
+                              <img src={eq.logo_url} alt="" className="w-8 h-8 object-contain rounded-full bg-slate-800 p-0.5" />
+                            ) : (
+                              <div className="w-8 h-8 bg-slate-800 rounded-full flex items-center justify-center text-xs">🛡️</div>
+                            )}
+                            <span className="font-bold text-white group-hover:text-indigo-400 transition-colors">{eq.nom}</span>
+                          </div>
+                        </td>
+                        <td className="py-4 px-4 text-center text-xs font-mono">
+                          <span className={`px-2 py-0.5 rounded-lg border font-bold ${
+                            count <= 16 ? 'text-amber-400 bg-amber-500/10 border-amber-500/20' :
+                            count >= 28 ? 'text-rose-400 bg-rose-500/10 border-rose-500/20' :
+                            'text-slate-300 bg-slate-800 border-slate-700'
+                          }`}>
+                            {count} jrs
+                          </span>
+                        </td>
+                        <td className="py-4 px-4 text-center text-slate-400 font-semibold">{eq.joues}</td>
+                        <td className="py-4 px-4 text-center">
+                          <span className="inline-block bg-indigo-500/10 text-indigo-400 font-extrabold px-3 py-1 rounded-full border border-indigo-500/20">
+                            {eq.points} pts
+                          </span>
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -1726,9 +1775,9 @@ export default function App() {
                 <h2 className="text-xl font-bold text-white flex items-center gap-2">📅 Calendrier des Rencontres</h2>
                 <p className="text-xs text-slate-400 mt-1">
                   {!isCurrentJourneeCompleted ? (
-                    <span className="text-amber-400 font-semibold">⚠️ Jouez ou simulez la Journée {journeeFilter} pour pouvoir avancer</span>
+                    <span className="text-amber-400 font-semibold">⚠️ Jouez ou simulez la Journée {journeeFilter} avant d'avancer</span>
                   ) : (
-                    <span className="text-emerald-400 font-semibold">✓ Journée {journeeFilter} terminée ! Vous pouvez passer à la suivante</span>
+                    <span className="text-emerald-400 font-semibold">✓ Journée {journeeFilter} terminée ! Cliquez sur ▶ pour avancer</span>
                   )}
                 </p>
               </div>
@@ -1751,7 +1800,7 @@ export default function App() {
                   </select>
                 </div>
 
-                {/* PROGRESSION DES JOURNÉES (FLÈCHES ◀ / ▶ AVEC VÉRIFICATION) */}
+                {/* PROGRESSION DES JOURNÉES (FLÈCHES ◀ / ▶ ÉPURÉES AVEC BLOCAGE) */}
                 <div className="flex items-center gap-1 bg-slate-950 p-1 rounded-xl border border-slate-800 shadow-inner">
                   <button
                     type="button"
@@ -1840,7 +1889,7 @@ export default function App() {
                     return (
                       <div key={m.id} className="bg-slate-900 border border-slate-800 rounded-2xl p-4 sm:p-5 shadow-lg flex flex-col sm:flex-row items-center justify-between gap-4">
                         
-                        {/* ÉQUIPE DOMICILE (CLIQUABLE -> COMPO) */}
+                        {/* ÉQUIPE DOMICILE */}
                         <div 
                           onClick={() => openTeamLineup(m.dom)}
                           className="flex items-center gap-3 sm:w-5/12 justify-start w-full cursor-pointer group min-w-0"
@@ -1867,7 +1916,6 @@ export default function App() {
                             className="w-12 h-11 sm:w-14 sm:h-12 bg-slate-950 text-white font-mono font-black text-xl text-center rounded-xl border border-slate-700 focus:outline-none focus:border-indigo-500 shadow-inner [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                           />
 
-                          {/* BOUTON FIXE "VS" QUI OUVRE LA FEUILLE DE MATCH */}
                           <button
                             type="button"
                             onClick={() => openMatchDetails(m)}
@@ -1895,7 +1943,7 @@ export default function App() {
                           </button>
                         </div>
 
-                        {/* ÉQUIPE EXTÉRIEURE (CLIQUABLE -> COMPO) */}
+                        {/* ÉQUIPE EXTÉRIEURE */}
                         <div className="flex items-center gap-3 sm:w-5/12 justify-end w-full min-w-0">
                           <div 
                             onClick={() => openTeamLineup(m.ext)}
@@ -2019,19 +2067,19 @@ export default function App() {
           </div>
         )}
 
-        {/* 4. MARCHE DES TRANSFERTS */}
+        {/* 4. MARCHE DES TRANSFERTS (AVEC RÈGLES 16-28 JOUEURS) */}
         {tab === 'transferts' && (
           <div className="space-y-6">
             <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl">
               <h2 className="text-xl font-bold text-white mb-2 flex items-center gap-2">🔄 Marché des Transferts</h2>
               <p className="text-xs text-slate-400 mb-6">
-                Sélectionnez le club d'origine, le joueur concerné, puis son club de destination.
+                Règle officielle de la ligue : <strong>16 joueurs minimum</strong> (ventes bloquées si $\le 16$) et <strong>28 joueurs maximum</strong> (recrutement bloqué si $\ge 28$).
               </p>
 
               <form onSubmit={handleTransferPlayer} className="space-y-5 max-w-2xl">
                 <div>
                   <label className="block text-xs font-semibold text-amber-400 uppercase tracking-wider mb-1.5">
-                    1. Club de provenance
+                    1. Club de provenance (Seulement clubs avec &gt; 16 joueurs)
                   </label>
                   <select
                     value={transferFromTeamId}
@@ -2040,9 +2088,12 @@ export default function App() {
                     required
                   >
                     <option value="">-- Choisir l'équipe de départ --</option>
-                    {teams.map((t) => (
-                      <option key={t.id} value={t.id}>{t.nom}</option>
-                    ))}
+                    {availableSellerTeams.map((t) => {
+                      const count = players.filter(p => p.equipe_id === t.id).length;
+                      return (
+                        <option key={t.id} value={t.id}>{t.nom} ({count} joueurs)</option>
+                      );
+                    })}
                   </select>
                 </div>
 
@@ -2088,7 +2139,7 @@ export default function App() {
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div>
                     <label className="block text-xs font-semibold text-emerald-400 uppercase tracking-wider mb-1.5">
-                      3. Club de destination
+                      3. Club de destination (Seulement clubs avec &lt; 28 joueurs)
                     </label>
                     <select
                       value={transferToTeamId}
@@ -2098,9 +2149,12 @@ export default function App() {
                       required
                     >
                       <option value="">-- Choisir la nouvelle équipe --</option>
-                      {availableDestinationTeams.map((t) => (
-                        <option key={t.id} value={t.id}>{t.nom}</option>
-                      ))}
+                      {availableDestinationTeams.map((t) => {
+                        const count = players.filter(p => p.equipe_id === t.id).length;
+                        return (
+                          <option key={t.id} value={t.id}>{t.nom} ({count}/28 joueurs)</option>
+                        );
+                      })}
                     </select>
                   </div>
 
@@ -2210,7 +2264,12 @@ export default function App() {
                       required
                     >
                       <option value="">-- Choisir l'équipe --</option>
-                      {teams.map((t) => <option key={t.id} value={t.id}>{t.nom}</option>)}
+                      {teams.map((t) => {
+                        const count = players.filter(p => p.equipe_id === t.id).length;
+                        return (
+                          <option key={t.id} value={t.id}>{t.nom} ({count}/28 jrs)</option>
+                        );
+                      })}
                     </select>
                   </div>
 
@@ -2652,7 +2711,7 @@ export default function App() {
                 )}
                 <div>
                   <h3 className="text-xl font-extrabold text-white">{selectedTeam.nom}</h3>
-                  <p className="text-xs text-indigo-400 font-semibold">{teamRoster.length} joueurs dans l'effectif complet</p>
+                  <p className="text-xs text-indigo-400 font-semibold">{teamRoster.length} joueurs dans l'effectif complet ({teamRoster.length}/28)</p>
                 </div>
               </div>
 
@@ -2868,7 +2927,7 @@ export default function App() {
                     max="99"
                     value={editingPlayer.general !== undefined && editingPlayer.general !== null ? editingPlayer.general : 75}
                     onChange={(e) => setEditingPlayer({ ...editingPlayer, general: e.target.value })}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm text-white"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-indigo-500"
                   />
                 </div>
                 <div>
@@ -2879,7 +2938,7 @@ export default function App() {
                     max="45"
                     value={editingPlayer.age !== undefined && editingPlayer.age !== null ? editingPlayer.age : 22}
                     onChange={(e) => setEditingPlayer({ ...editingPlayer, age: e.target.value })}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm text-white"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-indigo-500"
                   />
                 </div>
               </div>
