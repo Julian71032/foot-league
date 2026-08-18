@@ -77,9 +77,6 @@ export default function App() {
   // Modales
   const [selectedMatch, setSelectedMatch] = useState(null);
   const [selectedMatchEvents, setSelectedMatchEvents] = useState([]);
-  const [eventPlayerId, setEventPlayerId] = useState('');
-  const [eventType, setEventType] = useState('but');
-  const [eventMinute, setEventMinute] = useState(45);
   const [selectedTeam, setSelectedTeam] = useState(null);
   const [editingPlayer, setEditingPlayer] = useState(null);
 
@@ -236,7 +233,7 @@ export default function App() {
     return all.slice(0, 11);
   }
 
-  // --- MOTEUR DE SIMULATION PROBABILISTE ---
+  // --- MOTEUR DE PROBABILITÉS ET STATS ---
   function simulateGoals(lambda) {
     let L = Math.exp(-lambda);
     let k = 0;
@@ -321,6 +318,7 @@ export default function App() {
     return starters[0];
   }
 
+  // --- SIMULATION AUTOMATIQUE D'UNE JOURNÉE ---
   async function handleSimulateJournee() {
     const currentJourneeMatches = seasonMatches.filter(m => m.journee === parseInt(journeeFilter, 10));
     if (currentJourneeMatches.length === 0) {
@@ -375,7 +373,7 @@ export default function App() {
           statut: 'terminé'
         });
 
-        // Buteurs & Passeurs Domicile
+        // Buteurs & Passeurs Domicile avec minutes aléatoires
         for (let i = 0; i < scoreDom; i++) {
           const scorer = pickGoalScorer(domStarters);
           const minute = Math.floor(Math.random() * 90) + 1;
@@ -404,7 +402,7 @@ export default function App() {
           }
         }
 
-        // Buteurs & Passeurs Extérieur
+        // Buteurs & Passeurs Extérieur avec minutes aléatoires
         for (let i = 0; i < scoreExt; i++) {
           const scorer = pickGoalScorer(extStarters);
           const minute = Math.floor(Math.random() * 90) + 1;
@@ -433,7 +431,7 @@ export default function App() {
           }
         }
 
-        // Cartons Jaunes / Rouges simulés
+        // Cartons Jaunes / Rouges aléatoires
         const numYellowDom = Math.random() < 0.65 ? Math.floor(Math.random() * 3) + 1 : 0;
         for (let y = 0; y < numYellowDom; y++) {
           const carded = pickCardPlayer(domStarters);
@@ -782,34 +780,6 @@ export default function App() {
     if (data) setSelectedMatchEvents(data);
   }
 
-  async function handleAddMatchEvent(e) {
-    e.preventDefault();
-    if (!eventPlayerId || !selectedMatch) return;
-
-    const { error } = await supabase.from('match_events').insert([{
-      match_id: selectedMatch.id,
-      player_id: eventPlayerId,
-      type: eventType,
-      minute: parseInt(eventMinute, 10) || 45,
-      saison: selectedMatch.saison || 1,
-      user_id: session.user.id
-    }]);
-
-    if (error) showNotif(`Erreur : ${error.message}`);
-    else {
-      showNotif("Action enregistrée !");
-      openMatchDetails(selectedMatch);
-      fetchData();
-    }
-  }
-
-  async function handleDeleteMatchEvent(event) {
-    await supabase.from('match_events').delete().eq('id', event.id);
-    showNotif("Événement retiré.");
-    openMatchDetails(selectedMatch);
-    fetchData();
-  }
-
   function handleScoreInputChange(matchId, teamType, val) {
     setScoresInput(prev => ({ ...prev, [matchId]: { ...prev[matchId], [teamType]: val } }));
   }
@@ -821,6 +791,42 @@ export default function App() {
 
     if (isNaN(scoreDom) || isNaN(scoreExt)) { showNotif("Saisissez un score valide."); return; }
 
+    const domTeam = teams.find(t => t.id === match.equipe_domicile_id);
+    const extTeam = teams.find(t => t.id === match.equipe_exterieur_id);
+    const domStarters = getTeamStarters(domTeam);
+    const extStarters = getTeamStarters(extTeam);
+
+    // Supprimer et générer automatiquement les événements associés
+    await supabase.from('match_events').delete().eq('match_id', match.id);
+
+    const newEvents = [];
+    for (let i = 0; i < scoreDom; i++) {
+      const scorer = pickGoalScorer(domStarters);
+      const minute = Math.floor(Math.random() * 90) + 1;
+      if (scorer) {
+        newEvents.push({ match_id: match.id, player_id: scorer.id, type: 'but', minute, saison: match.saison || 1, user_id: session.user.id });
+        if (Math.random() < 0.75) {
+          const assister = pickAssister(domStarters, scorer);
+          if (assister) newEvents.push({ match_id: match.id, player_id: assister.id, type: 'passe', minute, saison: match.saison || 1, user_id: session.user.id });
+        }
+      }
+    }
+    for (let i = 0; i < scoreExt; i++) {
+      const scorer = pickGoalScorer(extStarters);
+      const minute = Math.floor(Math.random() * 90) + 1;
+      if (scorer) {
+        newEvents.push({ match_id: match.id, player_id: scorer.id, type: 'but', minute, saison: match.saison || 1, user_id: session.user.id });
+        if (Math.random() < 0.75) {
+          const assister = pickAssister(extStarters, scorer);
+          if (assister) newEvents.push({ match_id: match.id, player_id: assister.id, type: 'passe', minute, saison: match.saison || 1, user_id: session.user.id });
+        }
+      }
+    }
+
+    if (newEvents.length > 0) {
+      await supabase.from('match_events').insert(newEvents);
+    }
+
     const { error } = await supabase
       .from('matches')
       .update({ score_domicile: scoreDom, score_exterieur: scoreExt, statut: 'terminé' })
@@ -829,7 +835,7 @@ export default function App() {
 
     if (error) showNotif(`Erreur : ${error.message}`);
     else {
-      showNotif("Score enregistré !");
+      showNotif("Score et statistiques de match enregistrés !");
       fetchData();
     }
   }
@@ -1054,10 +1060,6 @@ export default function App() {
   const pitchAvgGen = teamLineupPlayers.length > 0
     ? Math.round(teamLineupPlayers.reduce((acc, p) => acc + (p?.general || 75), 0) / teamLineupPlayers.length)
     : 0;
-
-  const matchPlayers = selectedMatch
-    ? playersWithStats.filter(p => p.equipe_id === selectedMatch.equipe_domicile_id || p.equipe_id === selectedMatch.equipe_exterieur_id)
-    : [];
 
   const maxJourneesCount = seasonMatches.length > 0
     ? Math.max(...seasonMatches.map(m => m.journee || 1))
@@ -1326,7 +1328,7 @@ export default function App() {
             <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
               <div>
                 <h2 className="text-xl font-bold text-white flex items-center gap-2">📅 Calendrier des Rencontres</h2>
-                <p className="text-xs text-slate-400 mt-1">💡 Clique sur le bouton central <strong>[Score / VS]</strong> pour afficher les buteurs, passeurs et cartons</p>
+                <p className="text-xs text-slate-400 mt-1">💡 Clique sur le bouton <strong>VS</strong> au milieu d'un match pour consulter les buteurs, passeurs et cartons</p>
               </div>
 
               <div className="flex flex-wrap items-center gap-3 w-full md:w-auto justify-between md:justify-end">
@@ -1415,7 +1417,6 @@ export default function App() {
                   .map((m) => {
                     const currentDomInput = scoresInput[m.id]?.dom !== undefined ? scoresInput[m.id].dom : (m.score_domicile ?? '');
                     const currentExtInput = scoresInput[m.id]?.ext !== undefined ? scoresInput[m.id].ext : (m.score_exterieur ?? '');
-                    const isPlayed = m.statut === 'terminé';
 
                     return (
                       <div key={m.id} className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-lg flex flex-col sm:flex-row items-center justify-between gap-4">
@@ -1436,7 +1437,7 @@ export default function App() {
                           </span>
                         </div>
 
-                        {/* CENTRE : INPUTS ET BOUTON VS/SCORE (CLIQUABLE -> FEUILLE DE MATCH) */}
+                        {/* CENTRE : INPUTS ET BOUTON VS FIXE CLIQUABLE */}
                         <div className="flex items-center gap-3 sm:w-4/12 justify-center my-2 sm:my-0">
                           <input
                             type="number"
@@ -1447,19 +1448,14 @@ export default function App() {
                             className="w-13 h-11 bg-slate-950 text-white font-mono font-bold text-lg text-center rounded-xl border border-slate-700 focus:outline-none focus:border-indigo-500 shadow-inner [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                           />
 
-                          {/* LE BOUTON VS / SCORE QUI OUVRE LES DÉTAILS */}
+                          {/* BOUTON FIXE "VS" QUI OUVRE LES DÉTAILS */}
                           <button
                             type="button"
                             onClick={() => openMatchDetails(m)}
-                            className={`px-3 py-2 rounded-xl text-xs font-black transition-all cursor-pointer shadow-md active:scale-95 flex items-center gap-1.5 border ${
-                              isPlayed 
-                                ? 'bg-indigo-600/30 hover:bg-indigo-600 text-indigo-300 hover:text-white border-indigo-500/50' 
-                                : 'bg-slate-800 hover:bg-slate-700 text-slate-300 border-slate-700'
-                            }`}
-                            title="Ouvrir la feuille de match (buteurs, passeurs, cartons, minutes)"
+                            className="bg-indigo-600/30 hover:bg-indigo-600 text-indigo-300 hover:text-white border border-indigo-500/40 text-xs font-black tracking-widest px-4 py-2.5 rounded-xl transition-all cursor-pointer shadow-md active:scale-95 uppercase select-none"
+                            title="Cliquer pour voir la feuille de match (buteurs, passeurs, cartons et minutes)"
                           >
-                            <span>{isPlayed ? '📊' : 'VS'}</span>
-                            <span>{isPlayed ? `${m.score_domicile} - ${m.score_exterieur}` : 'Détails'}</span>
+                            VS
                           </button>
 
                           <input
@@ -2322,7 +2318,7 @@ export default function App() {
 
               <div className="grid grid-cols-3 gap-2">
                 <div>
-                  <label className="block text-xs text-slate-400 mb-1">Général</label>
+                  <label className="block text-xs font-medium text-slate-400 mb-1">Général</label>
                   <input
                     type="number"
                     min="40"
@@ -2333,7 +2329,7 @@ export default function App() {
                   />
                 </div>
                 <div>
-                  <label className="block text-xs text-slate-400 mb-1">Âge</label>
+                  <label className="block text-xs font-medium text-slate-400 mb-1">Âge</label>
                   <input
                     type="number"
                     min="15"
@@ -2344,7 +2340,7 @@ export default function App() {
                   />
                 </div>
                 <div>
-                  <label className="block text-xs text-slate-400 mb-1">Valeur (€)</label>
+                  <label className="block text-xs font-medium text-slate-400 mb-1">Valeur (€)</label>
                   <input
                     type="number"
                     step="500000"
@@ -2366,7 +2362,7 @@ export default function App() {
         </div>
       )}
 
-      {/* --- MODALE FEUILLE DE MATCH DÉTAILLÉE --- */}
+      {/* --- MODALE FEUILLE DE MATCH ÉPURÉE & DÉTAILLÉE --- */}
       {selectedMatch && (
         <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-slate-900 border border-slate-800 rounded-3xl max-w-lg w-full p-6 shadow-2xl relative max-h-[90vh] flex flex-col overflow-y-auto">
@@ -2378,11 +2374,11 @@ export default function App() {
               ✕
             </button>
 
-            <h3 className="text-lg font-extrabold text-white text-center mb-1">Détails de la Rencontre</h3>
+            <h3 className="text-lg font-extrabold text-white text-center mb-1">Feuille de Match</h3>
             <p className="text-xs text-slate-400 text-center mb-4">{getSeasonLabel(selectedMatch.saison || 1)} - Journée {selectedMatch.journee}</p>
 
             {/* Scoreboard */}
-            <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800 flex items-center justify-between mb-6 shadow-inner">
+            <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800 flex items-center justify-between mb-5 shadow-inner">
               <div className="flex items-center gap-3 w-5/12 truncate">
                 {selectedMatch.dom?.logo_url ? (
                   <img src={selectedMatch.dom.logo_url} className="w-8 h-8 object-contain" alt="" />
@@ -2406,67 +2402,16 @@ export default function App() {
               </div>
             </div>
 
-            {/* Formulaire ajout d'événement manuel */}
-            <form onSubmit={handleAddMatchEvent} className="bg-slate-950 p-4 rounded-2xl border border-slate-800 mb-5 space-y-3">
-              <h4 className="text-xs font-bold uppercase text-slate-400 flex items-center gap-1.5">
-                <span>➕</span> Ajouter un événement au match
-              </h4>
-              
-              <div className="grid grid-cols-12 gap-2">
-                <div className="col-span-4">
-                  <select
-                    value={eventType}
-                    onChange={(e) => setEventType(e.target.value)}
-                    className="w-full bg-slate-900 border border-slate-800 text-white text-xs rounded-xl p-2.5 focus:outline-none focus:border-indigo-500"
-                  >
-                    <option value="but">⚽ But</option>
-                    <option value="passe">🎯 Passe D.</option>
-                    <option value="carton_jaune">🟨 Jaune</option>
-                    <option value="carton_rouge">🟥 Rouge</option>
-                  </select>
-                </div>
-
-                <div className="col-span-5">
-                  <select
-                    value={eventPlayerId}
-                    onChange={(e) => setEventPlayerId(e.target.value)}
-                    className="w-full bg-slate-900 border border-slate-800 text-white text-xs rounded-xl p-2.5 focus:outline-none focus:border-indigo-500"
-                    required
-                  >
-                    <option value="">-- Joueur --</option>
-                    {matchPlayers.map(p => (
-                      <option key={p.id} value={p.id}>#{p.numero || 10} {p.nom} [{p.poste || 'N/A'}]</option>
-                    ))}
-                  </select>
-                </div>
-
-                <div className="col-span-3">
-                  <input
-                    type="number"
-                    min="1"
-                    max="120"
-                    placeholder="Min"
-                    value={eventMinute}
-                    onChange={(e) => setEventMinute(e.target.value)}
-                    className="w-full bg-slate-900 border border-slate-800 text-white text-xs rounded-xl p-2.5 text-center font-mono focus:outline-none focus:border-indigo-500"
-                    title="Minute de l'événement"
-                  />
-                </div>
-              </div>
-
-              <button type="submit" className="w-full bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold py-2 rounded-xl transition-all cursor-pointer shadow-md shadow-indigo-600/30">
-                + Ajouter l'action
-              </button>
-            </form>
-
-            {/* Liste chronologique des événements */}
-            <h4 className="text-xs font-bold uppercase text-slate-400 mb-2 flex items-center gap-1.5">
+            {/* Liste chronologique des événements générés automatiquement */}
+            <h4 className="text-xs font-bold uppercase text-slate-400 mb-3 flex items-center gap-1.5">
               <span>⏱️</span> Fil du Match & Événements
             </h4>
             
-            <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
+            <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
               {selectedMatchEvents.length === 0 ? (
-                <p className="text-xs text-slate-500 text-center py-4">Aucun but ou carton enregistré pour cette rencontre.</p>
+                <div className="bg-slate-950/40 p-8 rounded-2xl border border-slate-800/40 text-center">
+                  <p className="text-xs text-slate-500">Aucun but ou événement enregistré pour cette rencontre.</p>
+                </div>
               ) : (
                 selectedMatchEvents.map(ev => {
                   let badge = '⚽ But';
@@ -2495,13 +2440,6 @@ export default function App() {
                           {ev.players?.nom} {ev.players?.numero && <span className="text-slate-400 font-mono text-[10px]">#{ev.players.numero}</span>}
                         </span>
                       </div>
-                      <button
-                        onClick={() => handleDeleteMatchEvent(ev)}
-                        className="text-rose-500 hover:text-rose-400 font-bold px-2 cursor-pointer transition-colors"
-                        title="Supprimer cet événement"
-                      >
-                        ✕
-                      </button>
                     </div>
                   );
                 })
