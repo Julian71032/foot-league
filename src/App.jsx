@@ -911,7 +911,7 @@ export default function App() {
     return [...allerMatches, ...retourMatches];
   }
 
-  // --- GESTION DES SAISONS ET RÉINITIALISATION DES GÉNÉRAUX D'ORIGINE ---
+  // --- GESTION DES SAISONS ---
   async function handleStartNewSeason(isNextSeason = false) {
     if (!teams || teams.length < 2) {
       showNotif("Il doit y avoir au moins 2 équipes créées pour lancer une saison.");
@@ -927,7 +927,7 @@ export default function App() {
 
     const confirmMsg = isNextSeason
       ? `Voulez-vous lancer la ${seasonLabel} ?\n\n- ${teams.length} Équipes\n- ${totalJournees} Journées Aller-Retour\n- ${totalMatchs} Matchs programmés\n\nL'historique des saisons précédentes restera consultable.`
-      : `Voulez-vous regénérer la ${seasonLabel} ?\n\n- Tous les matchs et stats de cette saison seront réinitialisés.\n- Les notes GÉNÉRALES et valeurs des joueurs retourneront à leurs valeurs d'origine.`;
+      : `Voulez-vous regénérer la ${seasonLabel} ?\n\n- Tous les matchs et événements de cette saison seront réinitialisés.`;
 
     if (!window.confirm(confirmMsg)) return;
 
@@ -935,24 +935,8 @@ export default function App() {
 
     try {
       if (!isNextSeason) {
-        // 1. Supprimer matchs et événements de la saison active
         await supabase.from('match_events').delete().eq('user_id', session.user.id).eq('saison', targetSeason);
         await supabase.from('matches').delete().eq('user_id', session.user.id).eq('saison', targetSeason);
-
-        // 2. Réinitialiser les notes GÉN des joueurs à leur valeur initiale
-        for (const p of players) {
-          const originalGen = p.general_initial || p.initial_general || p.general || 75;
-          const originalVal = calculateMarketValue(originalGen, p.age || 22);
-
-          await supabase
-            .from('players')
-            .update({
-              general: originalGen,
-              general_initial: originalGen,
-              valeur_marchande: originalVal
-            })
-            .eq('id', p.id);
-        }
       }
 
       const fixtures = buildRoundRobinFixtures(teams, session.user.id, targetSeason);
@@ -961,7 +945,7 @@ export default function App() {
       if (error) {
         showNotif(`Erreur : ${error.message}`);
       } else {
-        showNotif(!isNextSeason ? `${seasonLabel} et notes des joueurs réinitialisées avec succès !` : `${seasonLabel} lancée avec succès !`);
+        showNotif(!isNextSeason ? `${seasonLabel} réinitialisée avec succès !` : `${seasonLabel} lancée avec succès !`);
         setSeasonFilter(targetSeason);
         setJourneeFilter(1);
         await fetchData();
@@ -1218,7 +1202,6 @@ export default function App() {
           poste: editingPlayer.poste,
           numero: editingPlayer.numero ? parseInt(editingPlayer.numero, 10) : 10,
           general: newGen,
-          general_initial: newGen,
           age: newAge,
           valeur_marchande: calculatedVal
         })
@@ -1383,7 +1366,6 @@ export default function App() {
       numero: parseInt(newPlayer.numero, 10) || 10,
       poste: newPlayer.poste,
       general: gen,
-      general_initial: gen,
       valeur_marchande: val,
       age: age
     }]);
@@ -1976,7 +1958,7 @@ export default function App() {
                     onClick={() => handleStartNewSeason(false)}
                     disabled={generatingSchedule || teams.length < 2}
                     className="bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold px-2.5 py-2 rounded-xl transition-all cursor-pointer"
-                    title="Regénérer la saison active et réinitialiser les GÉN"
+                    title="Regénérer le calendrier de cette saison"
                   >
                     🎲
                   </button>
@@ -2533,7 +2515,7 @@ export default function App() {
                     <span>🎲</span> 3. Gestion des Saisons & Calendriers
                   </h3>
                   <p className="text-xs text-slate-400 mt-1 max-w-xl">
-                    Chaque saison génère un calendrier complet Aller-Retour. Regénérer la saison active réinitialise tous les matchs et remet le GÉN de chaque joueur à son niveau d'origine.
+                    Chaque saison génère un calendrier complet Aller-Retour. Regénérer la saison active réinitialise les matchs et scores de la saison sélectionnée.
                   </p>
                   <div className="flex items-center gap-4 mt-3 text-xs font-semibold text-slate-400">
                     <span>🛡️ Équipes : <strong className="text-indigo-400">{teams.length}</strong></span>
