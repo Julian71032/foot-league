@@ -48,10 +48,8 @@ function calculateMarketValue(gen, age) {
   const g = Math.max(45, Math.min(99, gen || 75));
   const a = Math.max(15, Math.min(45, age || 24));
 
-  // Courbe de base exponentielle selon le général
   let baseValue = Math.pow(g / 45, 6.2) * 500000;
 
-  // Facteur d'âge (Prime jeune < 24 ans, Dépréciation vétéran > 31 ans)
   let ageMultiplier = 1.0;
   if (a <= 21) ageMultiplier = 1.45;
   else if (a <= 24) ageMultiplier = 1.25;
@@ -62,7 +60,6 @@ function calculateMarketValue(gen, age) {
 
   let finalVal = baseValue * ageMultiplier;
 
-  // Arrondi propre par paliers
   if (finalVal > 20000000) finalVal = Math.round(finalVal / 1000000) * 1000000;
   else if (finalVal > 5000000) finalVal = Math.round(finalVal / 500000) * 500000;
   else finalVal = Math.round(finalVal / 100000) * 100000;
@@ -267,7 +264,7 @@ export default function App() {
     return { starters: all.slice(0, 11), bench: all.slice(11) };
   }
 
-  // --- MOTEUR D'ÉVOLUTION DYNAMIQUE DU GÉNÉRAL ET DE LA VALEUR (TOUTES LES 4 JOURNÉES) ---
+  // --- MOTEUR D'ÉVOLUTION DYNAMIQUE (TOUTES LES 4 JOURNÉES) ---
   async function evaluateAndApplyPlayerEvolutions(targetJournee, currentSeasonNum) {
     const startJournee = targetJournee - 3;
     const endJournee = targetJournee;
@@ -348,7 +345,6 @@ export default function App() {
 
       let delta = 0;
 
-      // Paliers d'exigence : Les gros généraux ont besoin d'immenses performances et prennent rarement plus de +1
       if (currentGen >= 88) {
         if (perfScore >= 9.5) delta = +1;
         else if (perfScore <= -2.5) delta = -2;
@@ -364,7 +360,6 @@ export default function App() {
         else if (perfScore <= -3.0) delta = -2;
         else if (perfScore <= -0.5) delta = -1;
       } else {
-        // Moins de 74 : Potentiel d'explosion jusqu'à +3
         if (perfScore >= 9.0) delta = +3;
         else if (perfScore >= 5.5) delta = +2;
         else if (perfScore >= 2.5) delta = +1;
@@ -515,7 +510,7 @@ export default function App() {
 
     const matchEventsList = [];
 
-    // 1. Simulation des 1 à 5 changements pour l'équipe Domicile
+    // 1 à 5 changements Domicile
     const domSubsCount = Math.min(domBench.length, Math.floor(Math.random() * 5) + 1);
     const domSubstitutions = [];
     const availableDomBench = [...domBench];
@@ -523,13 +518,12 @@ export default function App() {
 
     for (let s = 0; s < domSubsCount; s++) {
       if (availableDomBench.length === 0) break;
-      const subMinute = Math.floor(Math.random() * 40) + 46; // Entre 46' et 86'
+      const subMinute = Math.floor(Math.random() * 40) + 46;
       const playerIn = availableDomBench.splice(Math.floor(Math.random() * availableDomBench.length), 1)[0];
       const outCandidates = currentDomActive.filter(p => p.poste !== 'G');
       if (outCandidates.length === 0) break;
       const playerOut = outCandidates[Math.floor(Math.random() * outCandidates.length)];
 
-      // Remplacement dans l'effectif actif sur le terrain
       const outIdx = currentDomActive.findIndex(p => p.id === playerOut.id);
       if (outIdx !== -1) currentDomActive[outIdx] = playerIn;
 
@@ -545,7 +539,7 @@ export default function App() {
       });
     }
 
-    // 2. Simulation des 1 à 5 changements pour l'équipe Extérieure
+    // 1 à 5 changements Extérieur
     const extSubsCount = Math.min(extBench.length, Math.floor(Math.random() * 5) + 1);
     const extSubstitutions = [];
     const availableExtBench = [...extBench];
@@ -574,7 +568,6 @@ export default function App() {
       });
     }
 
-    // Fonction pour récupérer les 11 joueurs sur le terrain à une minute M
     const getActivePlayersAtMinute = (starters, substitutions, minute) => {
       let active = [...starters];
       substitutions.forEach(sub => {
@@ -586,7 +579,7 @@ export default function App() {
       return active;
     };
 
-    // 3. Buteurs & Passeurs Domicile
+    // Buteurs & Passeurs Domicile
     for (let i = 0; i < scoreDom; i++) {
       const minute = Math.floor(Math.random() * 90) + 1;
       const activeAtMin = getActivePlayersAtMinute(domStarters, domSubstitutions, minute);
@@ -616,7 +609,7 @@ export default function App() {
       }
     }
 
-    // 4. Buteurs & Passeurs Extérieur
+    // Buteurs & Passeurs Extérieur
     for (let i = 0; i < scoreExt; i++) {
       const minute = Math.floor(Math.random() * 90) + 1;
       const activeAtMin = getActivePlayersAtMinute(extStarters, extSubstitutions, minute);
@@ -646,7 +639,7 @@ export default function App() {
       }
     }
 
-    // 5. Cartons Jaunes / Rouges
+    // Cartons Jaunes / Rouges
     const numYellowDom = Math.random() < 0.65 ? Math.floor(Math.random() * 3) + 1 : 0;
     for (let y = 0; y < numYellowDom; y++) {
       const minute = Math.floor(Math.random() * 88) + 2;
@@ -987,7 +980,6 @@ export default function App() {
     try {
       const newGen = editingPlayer.general ? parseInt(editingPlayer.general, 10) : 75;
       const newAge = editingPlayer.age ? parseInt(editingPlayer.age, 10) : 22;
-      // Recalcul auto de la valeur si modifiée ou ajustée
       const calculatedVal = calculateMarketValue(newGen, newAge);
 
       const { error } = await supabase
@@ -1071,7 +1063,6 @@ export default function App() {
 
     await supabase.from('match_events').delete().eq('match_id', match.id);
 
-    // Simulation d'un match avec les remplacements
     const simResult = simulateSingleMatchWithSubs(match, domTeam, extTeam, match.saison || 1, session.user.id);
 
     if (simResult.events.length > 0) {
@@ -1330,6 +1321,21 @@ export default function App() {
     ? Math.max(...seasonMatches.map(m => m.journee || 1))
     : (teams.length >= 2 ? (teams.length % 2 === 0 ? teams.length - 1 : teams.length) * 2 : 38);
 
+  // Fonctions de progression des journées
+  function handleNextJournee() {
+    if (journeeFilter < maxJourneesCount) {
+      setJourneeFilter(prev => prev + 1);
+    } else {
+      showNotif("Vous êtes déjà à la dernière journée de cette saison !");
+    }
+  }
+
+  function handlePrevJournee() {
+    if (journeeFilter > 1) {
+      setJourneeFilter(prev => prev - 1);
+    }
+  }
+
   const PitchPlayerSlot = ({ player, globalIndex }) => {
     const isSelected = selectedSlot?.type === 'pitch' && selectedSlot?.index === globalIndex;
 
@@ -1380,7 +1386,6 @@ export default function App() {
     );
   };
 
-  // Séparation des événements pour la modale scindée
   const homeEvents = selectedMatch ? selectedMatchEvents.filter(ev => ev.players?.equipe_id === selectedMatch.equipe_domicile_id) : [];
   const awayEvents = selectedMatch ? selectedMatchEvents.filter(ev => ev.players?.equipe_id === selectedMatch.equipe_exterieur_id) : [];
 
@@ -1597,7 +1602,7 @@ export default function App() {
             <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
               <div>
                 <h2 className="text-xl font-bold text-white flex items-center gap-2">📅 Calendrier des Rencontres</h2>
-                <p className="text-xs text-slate-400 mt-1">💡 1 à 5 remplacements par match avec impact direct sur les buts et passes !</p>
+                <p className="text-xs text-slate-400 mt-1">💡 Jouez ou simulez la journée, puis passez à la suivante</p>
               </div>
 
               <div className="flex flex-wrap items-center gap-3 w-full md:w-auto justify-between md:justify-end">
@@ -1618,27 +1623,41 @@ export default function App() {
                   </select>
                 </div>
 
-                {/* SÉLECTEUR DE JOURNÉE */}
-                <div className="flex items-center gap-2 bg-slate-950 p-1.5 rounded-xl border border-slate-800">
-                  <span className="text-xs text-slate-400 font-medium pl-2">Journée</span>
-                  <input
-                    type="number"
-                    min="1"
-                    max={maxJourneesCount}
-                    value={journeeFilter}
-                    onChange={(e) => setJourneeFilter(e.target.value)}
-                    className="bg-slate-800 text-white font-bold w-14 px-2 py-1 rounded-lg border border-slate-700 focus:outline-none focus:border-indigo-500 text-center text-xs"
-                  />
-                  <span className="text-[11px] text-slate-500 pr-2">/ {maxJourneesCount}</span>
+                {/* NOUVELLE PROGRESSION DES JOURNÉES (BOUTON PASSER À LA JOURNÉE SUIVANTE) */}
+                <div className="flex items-center gap-1 bg-slate-950 p-1 rounded-xl border border-slate-800 shadow-inner">
+                  <button
+                    type="button"
+                    onClick={handlePrevJournee}
+                    disabled={journeeFilter <= 1}
+                    className="bg-slate-900 hover:bg-slate-800 disabled:opacity-30 disabled:hover:bg-slate-900 text-white text-xs font-bold px-2.5 py-1.5 rounded-lg transition-all cursor-pointer disabled:cursor-not-allowed"
+                    title="Journée précédente"
+                  >
+                    ◀
+                  </button>
+
+                  <span className="text-xs font-extrabold text-white px-3 font-mono">
+                    Journée <strong className="text-indigo-400">{journeeFilter}</strong> / {maxJourneesCount}
+                  </span>
+
+                  <button
+                    type="button"
+                    onClick={handleNextJournee}
+                    disabled={journeeFilter >= maxJourneesCount}
+                    className="bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-800 disabled:text-slate-600 text-white text-xs font-bold px-3.5 py-1.5 rounded-lg transition-all cursor-pointer shadow-md shadow-indigo-600/30 flex items-center gap-1 active:scale-95 disabled:cursor-not-allowed"
+                    title="Passer à la journée suivante"
+                  >
+                    <span>Passer à la journée suivante</span>
+                    <span>▶</span>
+                  </button>
                 </div>
 
-                {/* BOUTON DE SIMULATION */}
+                {/* BOUTON DE SIMULATION DE LA JOURNÉE */}
                 <button
                   type="button"
                   onClick={handleSimulateJournee}
                   disabled={simulating || seasonMatches.length === 0}
-                  className="bg-emerald-600 hover:bg-emerald-500 active:scale-95 text-white font-extrabold text-xs px-3.5 py-2 rounded-xl transition-all shadow-md shadow-emerald-600/30 flex items-center gap-1.5 cursor-pointer"
-                  title="Simule tous les scores de la journée en effectuant des changements et en calculant les performances des joueurs"
+                  className="bg-emerald-600 hover:bg-emerald-500 active:scale-95 text-white font-extrabold text-xs px-3.5 py-2.5 rounded-xl transition-all shadow-md shadow-emerald-600/30 flex items-center gap-1.5 cursor-pointer"
+                  title="Simule tous les scores de la journée en calculant les probabilités selon le GÉN de chaque effectif"
                 >
                   <span>⚡</span> {simulating ? 'Simulation...' : 'Simuler la Journée'}
                 </button>
@@ -1649,7 +1668,7 @@ export default function App() {
                     type="button"
                     onClick={() => handleStartNewSeason(false)}
                     disabled={generatingSchedule || teams.length < 2}
-                    className="bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold px-2.5 py-2 rounded-xl transition-all cursor-pointer"
+                    className="bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold px-2.5 py-2.5 rounded-xl transition-all cursor-pointer"
                     title="Regénérer le calendrier de cette saison"
                   >
                     🎲
@@ -1659,7 +1678,7 @@ export default function App() {
                     type="button"
                     onClick={() => handleStartNewSeason(true)}
                     disabled={generatingSchedule || teams.length < 2}
-                    className="bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold px-3 py-2 rounded-xl transition-all shadow-md flex items-center gap-1 cursor-pointer active:scale-95"
+                    className="bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold px-3 py-2.5 rounded-xl transition-all shadow-md flex items-center gap-1 cursor-pointer active:scale-95"
                     title="Lancer la saison suivante"
                   >
                     <span>🚀</span> Saison +1
@@ -2013,7 +2032,7 @@ export default function App() {
           </div>
         )}
 
-        {/* 5. ADMIN (CRÉATEUR DE LIGUE) */}
+        {/* 5. ADMIN */}
         {tab === 'admin' && userProfile?.is_admin && (
           <div className="space-y-6">
             <h2 className="text-2xl font-extrabold text-white">⚙️ Panneau d'Administration (Créateur de Ligue)</h2>
@@ -2453,8 +2472,8 @@ export default function App() {
 
             <div className="overflow-x-auto max-h-96 overflow-y-auto">
               <table className="w-full text-left border-collapse">
-                <thead className="sticky top-0 bg-slate-900 border-b border-slate-800 text-slate-400 text-xs font-semibold uppercase">
-                  <tr>
+                <thead>
+                  <tr className="border-b border-slate-800 text-slate-400 text-xs font-semibold uppercase">
                     <th className="py-2.5 px-3">#</th>
                     <th className="py-2.5 px-3">Joueur</th>
                     <th className="py-2.5 px-3">Poste</th>
