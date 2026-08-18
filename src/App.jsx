@@ -226,7 +226,6 @@ export default function App() {
     const { data: dataEvents } = await supabase.from('match_events').select('*').eq('user_id', session.user.id);
     if (dataEvents) setMatchEvents(dataEvents);
 
-    // Limité aux 15 derniers transferts
     const { data: dataTransfers } = await supabase
       .from('transfers')
       .select('*, players(nom), old_team:teams!old_team_id(nom), new_team:teams!new_team_id(nom)')
@@ -266,7 +265,7 @@ export default function App() {
     return { starters: all.slice(0, 11), bench: all.slice(11) };
   }
 
-  // --- MOTEUR DE TRANSFERTS MERCATO D'HIVER AVEC RÈGLES 16-28 JOUEURS ---
+  // --- MOTEUR DE TRANSFERTS MERCATO D'HIVER ---
   async function triggerWinterMercato(journeeNum, currentSeasonNum) {
     if (!teams || teams.length < 2 || !players || players.length < 10) return;
 
@@ -295,9 +294,7 @@ export default function App() {
       const originTeam = teams.find(t => t.id === originTeamId);
       if (!originTeam) continue;
 
-      if ((teamCounts[originTeamId] || 0) <= 16) {
-        continue;
-      }
+      if ((teamCounts[originTeamId] || 0) <= 16) continue;
 
       let destinationTeam = null;
       let reason = '';
@@ -914,6 +911,7 @@ export default function App() {
     return [...allerMatches, ...retourMatches];
   }
 
+  // --- GESTION DES SAISONS ET RÉINITIALISATION DES GÉNÉRAUX D'ORIGINE ---
   async function handleStartNewSeason(isNextSeason = false) {
     if (!teams || teams.length < 2) {
       showNotif("Il doit y avoir au moins 2 équipes créées pour lancer une saison.");
@@ -929,7 +927,7 @@ export default function App() {
 
     const confirmMsg = isNextSeason
       ? `Voulez-vous lancer la ${seasonLabel} ?\n\n- ${teams.length} Équipes\n- ${totalJournees} Journées Aller-Retour\n- ${totalMatchs} Matchs programmés\n\nL'historique des saisons précédentes restera consultable.`
-      : `Voulez-vous générer le calendrier pour la ${seasonLabel} ?\n\n- ${teams.length} Équipes\n- ${totalJournees} Journées Aller-Retour\n- ${totalMatchs} Matchs programmés`;
+      : `Voulez-vous regénérer la ${seasonLabel} ?\n\n- Tous les matchs et stats de cette saison seront réinitialisés.\n- Les notes GÉNÉRALES et valeurs des joueurs retourneront à leurs valeurs d'origine.`;
 
     if (!window.confirm(confirmMsg)) return;
 
@@ -937,8 +935,24 @@ export default function App() {
 
     try {
       if (!isNextSeason) {
+        // 1. Supprimer matchs et événements de la saison active
         await supabase.from('match_events').delete().eq('user_id', session.user.id).eq('saison', targetSeason);
         await supabase.from('matches').delete().eq('user_id', session.user.id).eq('saison', targetSeason);
+
+        // 2. Réinitialiser les notes GÉN des joueurs à leur valeur initiale
+        for (const p of players) {
+          const originalGen = p.general_initial || p.initial_general || p.general || 75;
+          const originalVal = calculateMarketValue(originalGen, p.age || 22);
+
+          await supabase
+            .from('players')
+            .update({
+              general: originalGen,
+              general_initial: originalGen,
+              valeur_marchande: originalVal
+            })
+            .eq('id', p.id);
+        }
       }
 
       const fixtures = buildRoundRobinFixtures(teams, session.user.id, targetSeason);
@@ -947,7 +961,7 @@ export default function App() {
       if (error) {
         showNotif(`Erreur : ${error.message}`);
       } else {
-        showNotif(`${seasonLabel} lancée avec succès !`);
+        showNotif(!isNextSeason ? `${seasonLabel} et notes des joueurs réinitialisées avec succès !` : `${seasonLabel} lancée avec succès !`);
         setSeasonFilter(targetSeason);
         setJourneeFilter(1);
         await fetchData();
@@ -1001,7 +1015,6 @@ export default function App() {
     .filter(j => j.passes_decisives > 0)
     .sort((a, b) => b.passes_decisives - a.passes_decisives);
 
-  // FILTRES STRICTS DE TRANSFERT MANUEL : Vente bloquée si <= 16, Achat bloqué si >= 28
   const availableSellerTeams = teams.filter(t => {
     const count = players.filter(p => p.equipe_id === t.id).length;
     return count > 16;
@@ -1092,7 +1105,6 @@ export default function App() {
     fetchData();
   }
 
-  // --- ANNULER UN TRANSFERT UNIQUE ---
   async function handleCancelTransfer(transfer) {
     if (!window.confirm(`Voulez-vous annuler le transfert de "${transfer.players?.nom || 'ce joueur'}" et le renvoyer à ${transfer.old_team?.nom || 'son ancien club'} ?`)) {
       return;
@@ -1126,7 +1138,6 @@ export default function App() {
     }
   }
 
-  // --- RÉINITIALISER TOUS LES TRANSFERTS ---
   async function handleResetAllTransfers() {
     if (transfers.length === 0) {
       showNotif("Aucun transfert à réinitialiser.");
@@ -1138,7 +1149,6 @@ export default function App() {
     }
 
     try {
-      // 1. Récupérer TOUS les transferts de la base pour restaurer l'état initial
       const { data: allUserTransfers } = await supabase
         .from('transfers')
         .select('*')
@@ -1161,7 +1171,6 @@ export default function App() {
         }
       }
 
-      // 2. Supprimer TOUTES les lignes de transferts pour cet utilisateur
       const { error: deleteError } = await supabase
         .from('transfers')
         .delete()
@@ -1169,7 +1178,6 @@ export default function App() {
 
       if (deleteError) throw deleteError;
 
-      // 3. Vider immédiatement l'état local
       setTransfers([]);
       showNotif("Tous les transferts ont été réinitialisés et l'historique a été effacé !");
       await fetchData();
@@ -1210,6 +1218,7 @@ export default function App() {
           poste: editingPlayer.poste,
           numero: editingPlayer.numero ? parseInt(editingPlayer.numero, 10) : 10,
           general: newGen,
+          general_initial: newGen,
           age: newAge,
           valeur_marchande: calculatedVal
         })
@@ -1374,6 +1383,7 @@ export default function App() {
       numero: parseInt(newPlayer.numero, 10) || 10,
       poste: newPlayer.poste,
       general: gen,
+      general_initial: gen,
       valeur_marchande: val,
       age: age
     }]);
@@ -1772,7 +1782,10 @@ export default function App() {
             <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-6">
               <div>
                 <h2 className="text-xl font-bold flex items-center gap-2 text-white">🏆 Classement Général</h2>
-                <span className="text-xs text-slate-400">💡 Clique sur une équipe pour voir son effectif complet (16 à 28 joueurs max)</span>
+                <div className="flex flex-wrap items-center gap-3 mt-1.5 text-xs text-slate-400">
+                  <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full bg-emerald-500 inline-block"></span> Top 4 : Qualification européenne</span>
+                  <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full bg-rose-500 inline-block"></span> 3 Derniers : Zone rouge</span>
+                </div>
               </div>
 
               {/* SÉLECTEUR DE SAISON */}
@@ -1807,13 +1820,32 @@ export default function App() {
                 <tbody className="divide-y divide-slate-800/60 text-sm">
                   {classement.map((eq, i) => {
                     const count = players.filter(p => p.equipe_id === eq.id).length;
+                    const isTopFour = i < 4;
+                    const isBottomThree = classement.length >= 4 && i >= classement.length - 3;
+
                     return (
                       <tr
                         key={eq.id}
                         onClick={() => setSelectedTeam(eq)}
-                        className="hover:bg-slate-800/60 transition-colors cursor-pointer group"
+                        className={`transition-colors cursor-pointer group ${
+                          isTopFour 
+                            ? 'border-l-4 border-emerald-500 bg-emerald-500/5 hover:bg-emerald-500/10' 
+                            : isBottomThree 
+                            ? 'border-l-4 border-rose-500 bg-rose-500/5 hover:bg-rose-500/10' 
+                            : 'hover:bg-slate-800/60 border-l-4 border-transparent'
+                        }`}
                       >
-                        <td className="py-4 px-4 font-mono font-bold text-slate-400 group-hover:text-indigo-400">{i + 1}</td>
+                        <td className="py-4 px-4 font-mono font-bold">
+                          <span className={`inline-flex items-center justify-center w-6 h-6 rounded-md text-xs ${
+                            isTopFour 
+                              ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' 
+                              : isBottomThree 
+                              ? 'bg-rose-500/20 text-rose-400 border border-rose-500/30' 
+                              : 'text-slate-400 group-hover:text-indigo-400'
+                          }`}>
+                            {i + 1}
+                          </span>
+                        </td>
                         <td className="py-4 px-4">
                           <div className="flex items-center gap-3">
                             {eq.logo_url ? (
@@ -1821,7 +1853,15 @@ export default function App() {
                             ) : (
                               <div className="w-8 h-8 bg-slate-800 rounded-full flex items-center justify-center text-xs">🛡️</div>
                             )}
-                            <span className="font-bold text-white group-hover:text-indigo-400 transition-colors">{eq.nom}</span>
+                            <span className={`font-bold transition-colors ${
+                              isTopFour 
+                                ? 'text-emerald-300 group-hover:text-emerald-200' 
+                                : isBottomThree 
+                                ? 'text-rose-300 group-hover:text-rose-200' 
+                                : 'text-white group-hover:text-indigo-400'
+                            }`}>
+                              {eq.nom}
+                            </span>
                           </div>
                         </td>
                         <td className="py-4 px-4 text-center text-xs font-mono">
@@ -1835,7 +1875,13 @@ export default function App() {
                         </td>
                         <td className="py-4 px-4 text-center text-slate-400 font-semibold">{eq.joues}</td>
                         <td className="py-4 px-4 text-center">
-                          <span className="inline-block bg-indigo-500/10 text-indigo-400 font-extrabold px-3 py-1 rounded-full border border-indigo-500/20">
+                          <span className={`inline-block font-extrabold px-3 py-1 rounded-full border ${
+                            isTopFour 
+                              ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30' 
+                              : isBottomThree 
+                              ? 'bg-rose-500/10 text-rose-400 border-rose-500/30' 
+                              : 'bg-indigo-500/10 text-indigo-400 border-indigo-500/20'
+                          }`}>
                             {eq.points} pts
                           </span>
                         </td>
@@ -1930,7 +1976,7 @@ export default function App() {
                     onClick={() => handleStartNewSeason(false)}
                     disabled={generatingSchedule || teams.length < 2}
                     className="bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold px-2.5 py-2 rounded-xl transition-all cursor-pointer"
-                    title="Regénérer le calendrier de cette saison"
+                    title="Regénérer la saison active et réinitialiser les GÉN"
                   >
                     🎲
                   </button>
@@ -2147,7 +2193,7 @@ export default function App() {
           </div>
         )}
 
-        {/* 4. MARCHE DES TRANSFERTS AVEC ANNULATION ET RÉINITIALISATION */}
+        {/* 4. MARCHE DES TRANSFERTS */}
         {tab === 'transferts' && (
           <div className="space-y-6">
             <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl">
@@ -2279,7 +2325,7 @@ export default function App() {
               </form>
             </div>
 
-            {/* Historique des 15 Derniers Transferts avec bouton Annuler */}
+            {/* Historique des 15 Derniers Transferts */}
             {transfers.length > 0 && (
               <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl">
                 <div className="flex items-center justify-between mb-4">
@@ -2487,7 +2533,7 @@ export default function App() {
                     <span>🎲</span> 3. Gestion des Saisons & Calendriers
                   </h3>
                   <p className="text-xs text-slate-400 mt-1 max-w-xl">
-                    Chaque saison génère un calendrier complet Aller-Retour de championnat. Les saisons passées restent archivées et consultables.
+                    Chaque saison génère un calendrier complet Aller-Retour. Regénérer la saison active réinitialise tous les matchs et remet le GÉN de chaque joueur à son niveau d'origine.
                   </p>
                   <div className="flex items-center gap-4 mt-3 text-xs font-semibold text-slate-400">
                     <span>🛡️ Équipes : <strong className="text-indigo-400">{teams.length}</strong></span>
