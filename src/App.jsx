@@ -82,7 +82,7 @@ export default function App() {
   const [selectedTeam, setSelectedTeam] = useState(null);
   const [editingPlayer, setEditingPlayer] = useState(null);
 
-  // MODALE MODIFICATION DU LOGO DE L'ÉQUIPE
+  // MODALE MODIFICATION DU LOGO
   const [editingTeamLogo, setEditingTeamLogo] = useState(null);
   const [newLogoFile, setNewLogoFile] = useState(null);
   const [logoUpdating, setLogoUpdating] = useState(false);
@@ -220,7 +220,6 @@ export default function App() {
       });
   };
 
-  // Récupère les 11 titulaires effectifs d'une équipe
   function getTeamStarters(team) {
     if (!team) return [];
     const all = getSortedTeamPlayers(team.id);
@@ -238,7 +237,6 @@ export default function App() {
 
   // --- MOTEUR DE SIMULATION PROBABILISTE BASÉ SUR LE GÉN ---
   function simulateGoals(lambda) {
-    // Loi de Poisson approximée
     let L = Math.exp(-lambda);
     let k = 0;
     let p = 1;
@@ -251,19 +249,17 @@ export default function App() {
 
   function pickGoalScorer(starters) {
     if (!starters || starters.length === 0) return null;
-    // Pondération des chances de marquer selon le poste
     const weighted = starters.map(p => {
       let w = 1;
       const pos = p.poste || 'MC';
-      if (['BU', 'AT'].includes(pos)) w = 12;
-      else if (['AD', 'AG', 'SA'].includes(pos)) w = 9;
+      if (['BU', 'AT'].includes(pos)) w = 14;
+      else if (['AD', 'AG', 'SA'].includes(pos)) w = 10;
       else if (['MOC', 'MD', 'MG'].includes(pos)) w = 5;
-      else if (['MC', 'MDC'].includes(pos)) w = 3;
+      else if (['MC', 'MDC'].includes(pos)) w = 2.5;
       else if (['DD', 'DG', 'DLD', 'DLG', 'DC'].includes(pos)) w = 1;
-      else if (pos === 'G') w = 0.05;
+      else if (pos === 'G') w = 0.01;
 
-      // Bonus lié au général
-      w *= (p.general || 75) / 75;
+      w *= Math.pow((p.general || 75) / 75, 1.5);
       return { player: p, weight: w };
     });
 
@@ -278,17 +274,20 @@ export default function App() {
 
   function pickAssister(starters, scorer) {
     if (!starters || starters.length < 2) return null;
-    const candidates = starters.filter(p => p.id !== scorer?.id && p.poste !== 'G');
+    const candidates = starters.filter(p => p.id !== scorer?.id);
     if (candidates.length === 0) return null;
 
     const weighted = candidates.map(p => {
       let w = 1;
       const pos = p.poste || 'MC';
-      if (['MOC', 'MD', 'MG', 'MC'].includes(pos)) w = 10;
-      else if (['AD', 'AG', 'SA'].includes(pos)) w = 8;
-      else if (['DD', 'DG', 'DLD', 'DLG'].includes(pos)) w = 5;
+      if (['MOC', 'MC', 'MD', 'MG'].includes(pos)) w = 12;
+      else if (['AD', 'AG', 'SA'].includes(pos)) w = 10;
+      else if (['DD', 'DG', 'DLD', 'DLG'].includes(pos)) w = 6;
       else if (['BU', 'AT'].includes(pos)) w = 4;
-      else w = 2;
+      else if (['MDC', 'DC'].includes(pos)) w = 2;
+      else if (pos === 'G') w = 0.1;
+
+      w *= (p.general || 75) / 75;
       return { player: p, weight: w };
     });
 
@@ -322,12 +321,10 @@ export default function App() {
       const newEvents = [];
       const matchIdsToClear = currentJourneeMatches.map(m => m.id);
 
-      // 1. Supprimer les événements déjà enregistrés pour ces matchs
       for (const mId of matchIdsToClear) {
         await supabase.from('match_events').delete().eq('match_id', mId);
       }
 
-      // 2. Simuler chaque match
       for (const m of currentJourneeMatches) {
         const domTeam = teams.find(t => t.id === m.equipe_domicile_id);
         const extTeam = teams.find(t => t.id === m.equipe_exterieur_id);
@@ -342,10 +339,8 @@ export default function App() {
           ? extStarters.reduce((acc, p) => acc + (p.general || 75), 0) / extStarters.length 
           : 75;
 
-        // Écart de force + avantage domicile (+1.5 GEN virtuel)
         const diff = (domGen + 1.5) - extGen;
 
-        // Espérance de buts (lambda)
         const domLambda = Math.max(0.3, Math.min(4.5, 1.45 + (diff * 0.12)));
         const extLambda = Math.max(0.2, Math.min(4.0, 1.10 - (diff * 0.10)));
 
@@ -359,7 +354,7 @@ export default function App() {
           statut: 'terminé'
         });
 
-        // Génération des buteurs & passeurs Domicile
+        // Buteurs & Passeurs Domicile
         for (let i = 0; i < scoreDom; i++) {
           const scorer = pickGoalScorer(domStarters);
           if (scorer) {
@@ -370,8 +365,7 @@ export default function App() {
               saison: m.saison || 1,
               user_id: session.user.id
             });
-            // 70% de chance d'avoir une passe décisive
-            if (Math.random() < 0.70) {
+            if (Math.random() < 0.75) {
               const assister = pickAssister(domStarters, scorer);
               if (assister) {
                 newEvents.push({
@@ -386,7 +380,7 @@ export default function App() {
           }
         }
 
-        // Génération des buteurs & passeurs Extérieur
+        // Buteurs & Passeurs Extérieur
         for (let i = 0; i < scoreExt; i++) {
           const scorer = pickGoalScorer(extStarters);
           if (scorer) {
@@ -397,7 +391,7 @@ export default function App() {
               saison: m.saison || 1,
               user_id: session.user.id
             });
-            if (Math.random() < 0.70) {
+            if (Math.random() < 0.75) {
               const assister = pickAssister(extStarters, scorer);
               if (assister) {
                 newEvents.push({
@@ -413,7 +407,6 @@ export default function App() {
         }
       }
 
-      // 3. Sauvegarder les scores des matchs
       for (const u of matchUpdates) {
         await supabase
           .from('matches')
@@ -421,7 +414,6 @@ export default function App() {
           .eq('id', u.id);
       }
 
-      // 4. Insérer les événements
       if (newEvents.length > 0) {
         await supabase.from('match_events').insert(newEvents);
       }
@@ -560,7 +552,7 @@ export default function App() {
         } else if (m.equipe_exterieur_id === team.id) {
           joues++;
           if (m.score_exterieur > m.score_domicile) points += 3;
-          else if (m.score_exterieur === m.score_domicile) points += 1;
+          else if (m.score_domicile === m.score_exterieur) points += 1;
         }
       }
     });
@@ -798,7 +790,7 @@ export default function App() {
           reader.readAsDataURL(logoFile);
         });
       } catch (err) {
-        showNotif(`Erreur : ${err.message}`);
+        showNotif(`Erreur image : ${err.message}`);
         setUploading(false);
         return;
       }
