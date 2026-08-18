@@ -264,120 +264,6 @@ export default function App() {
     return { starters: all.slice(0, 11), bench: all.slice(11) };
   }
 
-  // --- MOTEUR DE TRANSFERTS MERCATO D'HIVER AVEC RÈGLES 16-28 JOUEURS ---
-  async function triggerWinterMercato(journeeNum, currentSeasonNum) {
-    if (!teams || teams.length < 2 || !players || players.length < 10) return;
-
-    // Calcul dynamique de l'effectif actuel de chaque club
-    const teamCounts = {};
-    teams.forEach(t => {
-      teamCounts[t.id] = players.filter(p => p.equipe_id === t.id).length;
-    });
-
-    const rankedTeams = [...classement];
-    const topClubs = rankedTeams.slice(0, Math.max(1, Math.floor(rankedTeams.length * 0.4)));
-    const midClubs = rankedTeams.slice(Math.floor(rankedTeams.length * 0.4), Math.floor(rankedTeams.length * 0.7));
-    const bottomClubs = rankedTeams.slice(Math.max(1, Math.floor(rankedTeams.length * 0.7)));
-
-    const availablePool = [...players].sort(() => Math.random() - 0.5);
-    const completedTransfers = [];
-    const transferInserts = [];
-    const usedPlayerIds = new Set();
-
-    for (const player of availablePool) {
-      if (completedTransfers.length >= 5) break;
-      if (usedPlayerIds.has(player.id)) continue;
-
-      const currentGen = player.general || 75;
-      const age = player.age || 24;
-      const originTeamId = player.equipe_id;
-      const originTeam = teams.find(t => t.id === originTeamId);
-      if (!originTeam) continue;
-
-      // RÈGLE 1 : Si le club vendeur a <= 16 joueurs, il ne vend PLUS
-      if ((teamCounts[originTeamId] || 0) <= 16) {
-        continue;
-      }
-
-      let destinationTeam = null;
-      let reason = '';
-
-      // Filtre destination : Le club acheteur doit avoir < 28 joueurs
-      const canBuy = (club) => club.id !== originTeamId && (teamCounts[club.id] || 0) < 28;
-
-      // SCÉNARIO 1 : Jeune pépite qui explose ou gros joueur -> Gros club
-      if ((age <= 23 && currentGen >= 77) || currentGen >= 83) {
-        const candidateDest = topClubs.filter(canBuy);
-        if (candidateDest.length > 0) {
-          destinationTeam = candidateDest[Math.floor(Math.random() * candidateDest.length)];
-          reason = age <= 23 ? "Jeune pépite recrutée par un cador" : "Transfert star de haut niveau";
-        }
-      }
-      // SCÉNARIO 2 : Vétéran ou joueur en difficulté -> Petit club
-      else if (age >= 29 || currentGen <= 74) {
-        const candidateDest = bottomClubs.filter(canBuy);
-        if (candidateDest.length > 0) {
-          destinationTeam = candidateDest[Math.floor(Math.random() * candidateDest.length)];
-          reason = "En quête de temps de jeu et de relance";
-        }
-      }
-      // SCÉNARIO 3 : Transfert intermédiaire
-      else {
-        const candidateDest = [...midClubs, ...topClubs, ...bottomClubs].filter(canBuy);
-        if (candidateDest.length > 0) {
-          destinationTeam = candidateDest[Math.floor(Math.random() * candidateDest.length)];
-          reason = "Renfort stratégique hivernal";
-        }
-      }
-
-      if (destinationTeam) {
-        usedPlayerIds.add(player.id);
-        const fee = player.valeur_marchande || calculateMarketValue(currentGen, age);
-
-        // Mettre à jour les compteurs en temps réel
-        teamCounts[originTeamId]--;
-        teamCounts[destinationTeam.id]++;
-
-        await supabase
-          .from('players')
-          .update({ equipe_id: destinationTeam.id })
-          .eq('id', player.id);
-
-        transferInserts.push({
-          player_id: player.id,
-          old_team_id: originTeam.id,
-          new_team_id: destinationTeam.id,
-          fee: fee,
-          user_id: session.user.id
-        });
-
-        completedTransfers.push({
-          id: player.id,
-          nom: player.nom,
-          poste: player.poste,
-          general: currentGen,
-          age: age,
-          oldTeam: originTeam.nom,
-          newTeam: destinationTeam.nom,
-          fee: fee,
-          reason: reason
-        });
-      }
-    }
-
-    if (transferInserts.length > 0) {
-      await supabase.from('transfers').insert(transferInserts);
-    }
-
-    if (completedTransfers.length > 0) {
-      setMercatoReport({
-        journee: journeeNum,
-        seasonLabel: getSeasonLabel(currentSeasonNum),
-        transfers: completedTransfers
-      });
-    }
-  }
-
   // --- MOTEUR D'ÉVOLUTION DYNAMIQUE (TOUTES LES 4 JOURNÉES) ---
   async function evaluateAndApplyPlayerEvolutions(targetJournee, currentSeasonNum) {
     const startJournee = targetJournee - 3;
@@ -598,6 +484,7 @@ export default function App() {
       else w = 1;
       return { player: p, weight: w };
     });
+
     const totalWeight = weighted.reduce((acc, item) => acc + item.weight, 0);
     let randomVal = Math.random() * totalWeight;
     for (const item of weighted) {
@@ -733,7 +620,7 @@ export default function App() {
           user_id: userId
         });
         if (Math.random() < 0.75) {
-          const assister = pickAssister(extStarters, scorer);
+          const assister = pickAssister(activeAtMin, scorer);
           if (assister) {
             matchEventsList.push({
               match_id: m.id,
@@ -768,7 +655,7 @@ export default function App() {
     for (let y = 0; y < numYellowExt; y++) {
       const minute = Math.floor(Math.random() * 88) + 2;
       const activeAtMin = getActivePlayersAtMinute(extStarters, extSubstitutions, minute);
-      const carded = pickCardPlayer(activeAtMin);
+      const carded = pickCardPlayer(extStarters);
       if (carded) {
         matchEventsList.push({
           match_id: m.id,
@@ -843,13 +730,11 @@ export default function App() {
       const currentJ = parseInt(journeeFilter, 10);
       const currentS = parseInt(seasonFilter, 10);
 
-      // 1. MERCATO D'HIVER (JOURNÉES 19 À 23)
       if (currentJ >= 19 && currentJ <= 23) {
         await triggerWinterMercato(currentJ, currentS);
         await fetchData();
       }
 
-      // 2. ÉVOLUTION DES JOUEURS (TOUTES LES 4 JOURNÉES)
       if (currentJ % 4 === 0) {
         await evaluateAndApplyPlayerEvolutions(currentJ, currentS);
         await fetchData();
@@ -986,7 +871,7 @@ export default function App() {
         } else if (m.equipe_exterieur_id === team.id) {
           joues++;
           if (m.score_exterieur > m.score_domicile) points += 3;
-          else if (m.score_domicile === m.score_exterieur) points += 1;
+          else if (m.score_exterieur === m.score_domicile) points += 1;
         }
       }
     });
@@ -1008,7 +893,6 @@ export default function App() {
     .filter(j => j.passes_decisives > 0)
     .sort((a, b) => b.passes_decisives - a.passes_decisives);
 
-  // FILTRES STRICTS DE TRANSFERT MANUEL : Vente bloquée si <= 16, Achat bloqué si >= 28
   const availableSellerTeams = teams.filter(t => {
     const count = players.filter(p => p.equipe_id === t.id).length;
     return count > 16;
@@ -1473,27 +1357,6 @@ export default function App() {
     ? Math.max(...seasonMatches.map(m => m.journee || 1))
     : (teams.length >= 2 ? (teams.length % 2 === 0 ? teams.length - 1 : teams.length) * 2 : 38);
 
-  const currentMatchesList = seasonMatches.filter(m => m.journee === parseInt(journeeFilter, 10));
-  const isCurrentJourneeCompleted = currentMatchesList.length > 0 && currentMatchesList.every(m => m.statut === 'terminé');
-
-  function handleNextJournee() {
-    if (!isCurrentJourneeCompleted) {
-      showNotif("Jouez ou simulez d'abord tous les matchs de la journée avant d'avancer !");
-      return;
-    }
-    if (journeeFilter < maxJourneesCount) {
-      setJourneeFilter(prev => prev + 1);
-    } else {
-      showNotif("Vous êtes sur la dernière journée de cette saison !");
-    }
-  }
-
-  function handlePrevJournee() {
-    if (journeeFilter > 1) {
-      setJourneeFilter(prev => prev - 1);
-    }
-  }
-
   const PitchPlayerSlot = ({ player, globalIndex }) => {
     const isSelected = selectedSlot?.type === 'pitch' && selectedSlot?.index === globalIndex;
 
@@ -1605,7 +1468,7 @@ export default function App() {
             <button
               type="submit"
               disabled={authLoading}
-              className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-3 rounded-xl text-sm transition-all shadow-lg shadow-indigo-600/30 cursor-pointer"
+              className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-3 rounded-xl text-sm transition-all shadow-lg shadow-indigo-600/30"
             >
               {authLoading ? 'Chargement...' : authMode === 'login' ? 'Se connecter' : 'Créer un compte'}
             </button>
@@ -1685,13 +1548,16 @@ export default function App() {
 
       {/* Content */}
       <main className="max-w-6xl mx-auto px-4 mt-8">
-        {/* 1. CLASSEMENT ÉQUIPES */}
+        {/* 1. CLASSEMENT ÉQUIPES (TOP 4 VERT / BOTTOM 3 ROUGE) */}
         {tab === 'classement' && (
           <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl">
-            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-6">
+            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-4">
               <div>
                 <h2 className="text-xl font-bold flex items-center gap-2 text-white">🏆 Classement Général</h2>
-                <span className="text-xs text-slate-400">💡 Clique sur une équipe pour voir son effectif complet (16 à 28 joueurs max)</span>
+                <div className="flex items-center gap-4 mt-1 text-xs text-slate-400">
+                  <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full bg-emerald-500 inline-block"></span> Top 4 (Européen / Podiums)</span>
+                  <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full bg-rose-500 inline-block"></span> Bottom 3 (Zone rouge)</span>
+                </div>
               </div>
 
               {/* SÉLECTEUR DE SAISON */}
@@ -1726,13 +1592,24 @@ export default function App() {
                 <tbody className="divide-y divide-slate-800/60 text-sm">
                   {classement.map((eq, i) => {
                     const count = players.filter(p => p.equipe_id === eq.id).length;
+                    const isTop4 = i < 4;
+                    const isBottom3 = i >= classement.length - 3 && classement.length >= 4;
+
                     return (
                       <tr
                         key={eq.id}
                         onClick={() => setSelectedTeam(eq)}
-                        className="hover:bg-slate-800/60 transition-colors cursor-pointer group"
+                        className={`hover:bg-slate-800/60 transition-colors cursor-pointer group ${
+                          isTop4 ? 'bg-emerald-950/20' : isBottom3 ? 'bg-rose-950/20' : ''
+                        }`}
                       >
-                        <td className="py-4 px-4 font-mono font-bold text-slate-400 group-hover:text-indigo-400">{i + 1}</td>
+                        <td className="py-4 px-4 font-mono font-bold relative">
+                          {isTop4 && <span className="absolute left-0 top-0 bottom-0 w-1 bg-emerald-500 rounded-r"></span>}
+                          {isBottom3 && <span className="absolute left-0 top-0 bottom-0 w-1 bg-rose-500 rounded-r"></span>}
+                          <span className={isTop4 ? 'text-emerald-400' : isBottom3 ? 'text-rose-400' : 'text-slate-400'}>
+                            {i + 1}
+                          </span>
+                        </td>
                         <td className="py-4 px-4">
                           <div className="flex items-center gap-3">
                             {eq.logo_url ? (
@@ -1800,13 +1677,13 @@ export default function App() {
                   </select>
                 </div>
 
-                {/* PROGRESSION DES JOURNÉES (FLÈCHES ◀ / ▶ ÉPURÉES AVEC BLOCAGE) */}
+                {/* PROGRESSION DES JOURNÉES (FLÈCHES ◀ / ▶ SANS TEXTE) */}
                 <div className="flex items-center gap-1 bg-slate-950 p-1 rounded-xl border border-slate-800 shadow-inner">
                   <button
                     type="button"
                     onClick={handlePrevJournee}
                     disabled={journeeFilter <= 1}
-                    className="bg-slate-900 hover:bg-slate-800 disabled:opacity-30 disabled:hover:bg-slate-900 text-white text-xs font-bold w-8 h-8 rounded-lg transition-all cursor-pointer disabled:cursor-not-allowed flex items-center justify-center"
+                    className="bg-slate-900 hover:bg-slate-800 disabled:opacity-30 disabled:hover:bg-slate-900 text-white text-xs font-bold w-9 h-9 rounded-lg transition-all cursor-pointer disabled:cursor-not-allowed flex items-center justify-center"
                     title="Journée précédente"
                   >
                     ◀
@@ -1820,7 +1697,7 @@ export default function App() {
                     type="button"
                     onClick={handleNextJournee}
                     disabled={journeeFilter >= maxJourneesCount || !isCurrentJourneeCompleted}
-                    className={`w-8 h-8 rounded-lg text-xs font-black transition-all flex items-center justify-center shadow-md ${
+                    className={`w-9 h-9 rounded-lg text-xs font-black transition-all flex items-center justify-center shadow-md ${
                       !isCurrentJourneeCompleted
                         ? 'bg-slate-800 text-slate-600 cursor-not-allowed opacity-40'
                         : 'bg-indigo-600 hover:bg-indigo-500 text-white cursor-pointer active:scale-95 shadow-indigo-600/30'
@@ -1836,8 +1713,8 @@ export default function App() {
                   type="button"
                   onClick={handleSimulateJournee}
                   disabled={simulating || seasonMatches.length === 0}
-                  className="bg-emerald-600 hover:bg-emerald-500 active:scale-95 text-white font-extrabold text-xs px-3.5 py-2 rounded-xl transition-all shadow-md shadow-emerald-600/30 flex items-center gap-1.5 cursor-pointer"
-                  title="Simule tous les scores de la journée en calculant les probabilités selon le GÉN de chaque effectif"
+                  className="bg-emerald-600 hover:bg-emerald-500 active:scale-95 text-white font-extrabold text-xs px-3.5 py-2.5 rounded-xl transition-all shadow-md shadow-emerald-600/30 flex items-center gap-1.5 cursor-pointer"
+                  title="Simule tous les scores de la journée"
                 >
                   <span>⚡</span> {simulating ? 'Simulation...' : 'Simuler la Journée'}
                 </button>
@@ -1848,7 +1725,7 @@ export default function App() {
                     type="button"
                     onClick={() => handleStartNewSeason(false)}
                     disabled={generatingSchedule || teams.length < 2}
-                    className="bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold px-2.5 py-2 rounded-xl transition-all cursor-pointer"
+                    className="bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold px-2.5 py-2.5 rounded-xl transition-all cursor-pointer"
                     title="Regénérer le calendrier de cette saison"
                   >
                     🎲
@@ -1858,7 +1735,7 @@ export default function App() {
                     type="button"
                     onClick={() => handleStartNewSeason(true)}
                     disabled={generatingSchedule || teams.length < 2}
-                    className="bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold px-3 py-2 rounded-xl transition-all shadow-md flex items-center gap-1 cursor-pointer active:scale-95"
+                    className="bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold px-3.5 py-2.5 rounded-xl transition-all shadow-md flex items-center gap-1 cursor-pointer active:scale-95"
                     title="Lancer la saison suivante"
                   >
                     <span>🚀</span> Saison +1
@@ -1889,7 +1766,7 @@ export default function App() {
                     return (
                       <div key={m.id} className="bg-slate-900 border border-slate-800 rounded-2xl p-4 sm:p-5 shadow-lg flex flex-col sm:flex-row items-center justify-between gap-4">
                         
-                        {/* ÉQUIPE DOMICILE */}
+                        {/* ÉQUIPE DOMICILE (CLIQUABLE -> COMPO) */}
                         <div 
                           onClick={() => openTeamLineup(m.dom)}
                           className="flex items-center gap-3 sm:w-5/12 justify-start w-full cursor-pointer group min-w-0"
@@ -1916,6 +1793,7 @@ export default function App() {
                             className="w-12 h-11 sm:w-14 sm:h-12 bg-slate-950 text-white font-mono font-black text-xl text-center rounded-xl border border-slate-700 focus:outline-none focus:border-indigo-500 shadow-inner [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                           />
 
+                          {/* BOUTON FIXE "VS" QUI OUVRE LA FEUILLE DE MATCH */}
                           <button
                             type="button"
                             onClick={() => openMatchDetails(m)}
@@ -1943,7 +1821,7 @@ export default function App() {
                           </button>
                         </div>
 
-                        {/* ÉQUIPE EXTÉRIEURE */}
+                        {/* ÉQUIPE EXTÉRIEURE (CLIQUABLE -> COMPO) */}
                         <div className="flex items-center gap-3 sm:w-5/12 justify-end w-full min-w-0">
                           <div 
                             onClick={() => openTeamLineup(m.ext)}
@@ -2067,7 +1945,7 @@ export default function App() {
           </div>
         )}
 
-        {/* 4. MARCHE DES TRANSFERTS (AVEC RÈGLES 16-28 JOUEURS) */}
+        {/* 4. MARCHE DES TRANSFERTS */}
         {tab === 'transferts' && (
           <div className="space-y-6">
             <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl">
@@ -2159,7 +2037,7 @@ export default function App() {
                   </div>
 
                   <div>
-                    <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1.5">
+                    <label className="block text-xs font-semibold text-emerald-400 uppercase tracking-wider mb-1.5">
                       Montant du transfert (€)
                     </label>
                     <input
@@ -2393,7 +2271,7 @@ export default function App() {
         )}
       </main>
 
-      {/* --- MODALE MERCATO D'HIVER (5 TRANSFERTS AUTOMATIQUES PAR JOURNÉE ENTRE J19 ET J23) --- */}
+      {/* --- MODALE MERCATO D'HIVER --- */}
       {mercatoReport && (
         <div className="fixed inset-0 bg-black/85 backdrop-blur-md z-50 flex items-center justify-center p-4">
           <div className="bg-slate-900 border border-slate-800 rounded-3xl max-w-2xl w-full p-6 shadow-2xl relative max-h-[90vh] flex flex-col">
@@ -2450,7 +2328,7 @@ export default function App() {
             <button
               type="button"
               onClick={() => setMercatoReport(null)}
-              className="mt-5 w-full bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-3 rounded-xl text-sm transition-all shadow-lg shadow-indigo-600/30 cursor-pointer"
+              className="mt-5 w-full bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-2.5 rounded-xl text-sm transition-all shadow-lg shadow-indigo-600/30 cursor-pointer"
             >
               Fermer le Point Mercato
             </button>
@@ -2458,7 +2336,7 @@ export default function App() {
         </div>
       )}
 
-      {/* --- MODALE RAPPORT D'ÉVOLUTION DES JOUEURS (TOUTES LES 4 JOURNÉES) --- */}
+      {/* --- MODALE RAPPORT D'ÉVOLUTION DES JOUEURS --- */}
       {evolutionReport && (
         <div className="fixed inset-0 bg-black/85 backdrop-blur-md z-50 flex items-center justify-center p-4">
           <div className="bg-slate-900 border border-slate-800 rounded-3xl max-w-xl w-full p-6 shadow-2xl relative max-h-[90vh] flex flex-col">
@@ -2727,8 +2605,8 @@ export default function App() {
 
             <div className="overflow-x-auto max-h-96 overflow-y-auto">
               <table className="w-full text-left border-collapse">
-                <thead>
-                  <tr className="border-b border-slate-800 text-slate-400 text-xs font-semibold uppercase">
+                <thead className="sticky top-0 bg-slate-900 border-b border-slate-800 text-slate-400 text-xs font-semibold uppercase">
+                  <tr>
                     <th className="py-2.5 px-3">#</th>
                     <th className="py-2.5 px-3">Joueur</th>
                     <th className="py-2.5 px-3">Poste</th>
