@@ -39,7 +39,7 @@ function getPositionRank(posteStr) {
 }
 
 function getSeasonLabel(seasonNum) {
-  const startYear = 2026 + (parseInt(seasonNum) - 1);
+  const startYear = 2026 + (parseInt(seasonNum, 10) - 1);
   return `Saison ${seasonNum} (${startYear}/${startYear + 1})`;
 }
 
@@ -79,10 +79,11 @@ export default function App() {
   const [selectedMatchEvents, setSelectedMatchEvents] = useState([]);
   const [eventPlayerId, setEventPlayerId] = useState('');
   const [eventType, setEventType] = useState('but');
+  const [eventMinute, setEventMinute] = useState(45);
   const [selectedTeam, setSelectedTeam] = useState(null);
   const [editingPlayer, setEditingPlayer] = useState(null);
 
-  // MODALE MODIFICATION DU LOGO
+  // MODALE MODIFICATION DU LOGO DE L'ÉQUIPE
   const [editingTeamLogo, setEditingTeamLogo] = useState(null);
   const [newLogoFile, setNewLogoFile] = useState(null);
   const [logoUpdating, setLogoUpdating] = useState(false);
@@ -235,7 +236,7 @@ export default function App() {
     return all.slice(0, 11);
   }
 
-  // --- MOTEUR DE SIMULATION PROBABILISTE BASÉ SUR LE GÉN ---
+  // --- MOTEUR DE SIMULATION PROBABILISTE ---
   function simulateGoals(lambda) {
     let L = Math.exp(-lambda);
     let k = 0;
@@ -300,8 +301,28 @@ export default function App() {
     return candidates[0];
   }
 
+  function pickCardPlayer(starters) {
+    if (!starters || starters.length === 0) return null;
+    const weighted = starters.map(p => {
+      let w = 1;
+      const pos = p.poste || 'MC';
+      if (['MDC', 'DC'].includes(pos)) w = 8;
+      else if (['DD', 'DG', 'DLD', 'DLG', 'MC'].includes(pos)) w = 5;
+      else if (['MOC', 'MD', 'MG'].includes(pos)) w = 3;
+      else w = 1;
+      return { player: p, weight: w };
+    });
+    const totalWeight = weighted.reduce((acc, item) => acc + item.weight, 0);
+    let randomVal = Math.random() * totalWeight;
+    for (const item of weighted) {
+      if (randomVal < item.weight) return item.player;
+      randomVal -= item.weight;
+    }
+    return starters[0];
+  }
+
   async function handleSimulateJournee() {
-    const currentJourneeMatches = seasonMatches.filter(m => m.journee === parseInt(journeeFilter));
+    const currentJourneeMatches = seasonMatches.filter(m => m.journee === parseInt(journeeFilter, 10));
     if (currentJourneeMatches.length === 0) {
       showNotif("Aucun match à simuler pour cette journée.");
       return;
@@ -357,11 +378,13 @@ export default function App() {
         // Buteurs & Passeurs Domicile
         for (let i = 0; i < scoreDom; i++) {
           const scorer = pickGoalScorer(domStarters);
+          const minute = Math.floor(Math.random() * 90) + 1;
           if (scorer) {
             newEvents.push({
               match_id: m.id,
               player_id: scorer.id,
               type: 'but',
+              minute: minute,
               saison: m.saison || 1,
               user_id: session.user.id
             });
@@ -372,6 +395,7 @@ export default function App() {
                   match_id: m.id,
                   player_id: assister.id,
                   type: 'passe',
+                  minute: minute,
                   saison: m.saison || 1,
                   user_id: session.user.id
                 });
@@ -383,11 +407,13 @@ export default function App() {
         // Buteurs & Passeurs Extérieur
         for (let i = 0; i < scoreExt; i++) {
           const scorer = pickGoalScorer(extStarters);
+          const minute = Math.floor(Math.random() * 90) + 1;
           if (scorer) {
             newEvents.push({
               match_id: m.id,
               player_id: scorer.id,
               type: 'but',
+              minute: minute,
               saison: m.saison || 1,
               user_id: session.user.id
             });
@@ -398,11 +424,42 @@ export default function App() {
                   match_id: m.id,
                   player_id: assister.id,
                   type: 'passe',
+                  minute: minute,
                   saison: m.saison || 1,
                   user_id: session.user.id
                 });
               }
             }
+          }
+        }
+
+        // Cartons Jaunes / Rouges simulés
+        const numYellowDom = Math.random() < 0.65 ? Math.floor(Math.random() * 3) + 1 : 0;
+        for (let y = 0; y < numYellowDom; y++) {
+          const carded = pickCardPlayer(domStarters);
+          if (carded) {
+            newEvents.push({
+              match_id: m.id,
+              player_id: carded.id,
+              type: 'carton_jaune',
+              minute: Math.floor(Math.random() * 88) + 2,
+              saison: m.saison || 1,
+              user_id: session.user.id
+            });
+          }
+        }
+        const numYellowExt = Math.random() < 0.65 ? Math.floor(Math.random() * 3) + 1 : 0;
+        for (let y = 0; y < numYellowExt; y++) {
+          const carded = pickCardPlayer(extStarters);
+          if (carded) {
+            newEvents.push({
+              match_id: m.id,
+              player_id: carded.id,
+              type: 'carton_jaune',
+              minute: Math.floor(Math.random() * 88) + 2,
+              saison: m.saison || 1,
+              user_id: session.user.id
+            });
           }
         }
       }
@@ -532,8 +589,8 @@ export default function App() {
     setGeneratingSchedule(false);
   }
 
-  const seasonMatches = matches.filter(m => (m.saison || 1) === parseInt(seasonFilter));
-  const seasonEvents = matchEvents.filter(e => (e.saison || 1) === parseInt(seasonFilter));
+  const seasonMatches = matches.filter(m => (m.saison || 1) === parseInt(seasonFilter, 10));
+  const seasonEvents = matchEvents.filter(e => (e.saison || 1) === parseInt(seasonFilter, 10));
 
   const availableSeasons = Array.from(
     new Set([...matches.map(m => m.saison || 1), 1])
@@ -614,7 +671,7 @@ export default function App() {
       .from('players')
       .update({
         equipe_id: transferToTeamId,
-        valeur_marchande: parseInt(transferFee)
+        valeur_marchande: parseInt(transferFee, 10)
       })
       .eq('id', transferPlayerId);
 
@@ -628,7 +685,7 @@ export default function App() {
       player_id: transferPlayerId,
       old_team_id: transferFromTeamId,
       new_team_id: transferToTeamId,
-      fee: parseInt(transferFee),
+      fee: parseInt(transferFee, 10),
       user_id: session.user.id
     }]);
 
@@ -718,9 +775,10 @@ export default function App() {
     setSelectedMatch(match);
     const { data } = await supabase
       .from('match_events')
-      .select('*, players(nom)')
+      .select('*, players(nom, poste, numero)')
       .eq('match_id', match.id)
-      .eq('user_id', session.user.id);
+      .eq('user_id', session.user.id)
+      .order('minute', { ascending: true });
     if (data) setSelectedMatchEvents(data);
   }
 
@@ -732,6 +790,7 @@ export default function App() {
       match_id: selectedMatch.id,
       player_id: eventPlayerId,
       type: eventType,
+      minute: parseInt(eventMinute, 10) || 45,
       saison: selectedMatch.saison || 1,
       user_id: session.user.id
     }]);
@@ -757,8 +816,8 @@ export default function App() {
 
   async function handleSaveMatchScore(match) {
     const matchScores = scoresInput[match.id] || {};
-    const scoreDom = parseInt(matchScores.dom !== undefined ? matchScores.dom : match.score_domicile);
-    const scoreExt = parseInt(matchScores.ext !== undefined ? matchScores.ext : match.score_exterieur);
+    const scoreDom = parseInt(matchScores.dom !== undefined ? matchScores.dom : match.score_domicile, 10);
+    const scoreExt = parseInt(matchScores.ext !== undefined ? matchScores.ext : match.score_exterieur, 10);
 
     if (isNaN(scoreDom) || isNaN(scoreExt)) { showNotif("Saisissez un score valide."); return; }
 
@@ -817,11 +876,11 @@ export default function App() {
     const { error } = await supabase.from('players').insert([{
       nom: newPlayer.nom,
       equipe_id: newPlayer.equipe_id,
-      numero: parseInt(newPlayer.numero) || 10,
+      numero: parseInt(newPlayer.numero, 10) || 10,
       poste: newPlayer.poste,
-      general: parseInt(newPlayer.general),
-      valeur_marchande: parseInt(newPlayer.valeur),
-      age: parseInt(newPlayer.age)
+      general: parseInt(newPlayer.general, 10),
+      valeur_marchande: parseInt(newPlayer.valeur, 10),
+      age: parseInt(newPlayer.age, 10)
     }]);
 
     if (error) showNotif(`Erreur : ${error.message}`);
@@ -1201,12 +1260,13 @@ export default function App() {
                 <span className="text-xs text-slate-400">💡 Clique sur une équipe pour voir son effectif complet</span>
               </div>
 
+              {/* SÉLECTEUR DE SAISON */}
               <div className="flex items-center gap-2 bg-slate-950 p-1.5 rounded-xl border border-slate-800">
                 <span className="text-xs font-bold text-slate-400 pl-2">Saison :</span>
                 <select
                   value={seasonFilter}
                   onChange={(e) => {
-                    setSeasonFilter(parseInt(e.target.value));
+                    setSeasonFilter(parseInt(e.target.value, 10));
                     setJourneeFilter(1);
                   }}
                   className="bg-slate-900 border border-slate-700 text-indigo-400 font-bold text-xs rounded-lg px-3 py-1.5 focus:outline-none focus:border-indigo-500 cursor-pointer"
@@ -1266,18 +1326,17 @@ export default function App() {
             <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
               <div>
                 <h2 className="text-xl font-bold text-white flex items-center gap-2">📅 Calendrier des Rencontres</h2>
-                <p className="text-xs text-slate-400 mt-1">💡 Clique sur une équipe pour voir son 11 ou simulez la journée selon la force de l'effectif</p>
+                <p className="text-xs text-slate-400 mt-1">💡 Clique sur le bouton central <strong>[Score / VS]</strong> pour afficher les buteurs, passeurs et cartons</p>
               </div>
 
               <div className="flex flex-wrap items-center gap-3 w-full md:w-auto justify-between md:justify-end">
-                
                 {/* SÉLECTEUR DE SAISON */}
                 <div className="flex items-center gap-1.5 bg-slate-950 p-1.5 rounded-xl border border-slate-800">
                   <span className="text-[11px] font-bold text-slate-400 pl-1.5">Saison :</span>
                   <select
                     value={seasonFilter}
                     onChange={(e) => {
-                      setSeasonFilter(parseInt(e.target.value));
+                      setSeasonFilter(parseInt(e.target.value, 10));
                       setJourneeFilter(1);
                     }}
                     className="bg-slate-900 border border-slate-700 text-indigo-400 font-bold text-xs rounded-lg px-2.5 py-1 focus:outline-none focus:border-indigo-500 cursor-pointer"
@@ -1339,7 +1398,7 @@ export default function App() {
             </div>
 
             <div className="grid gap-4 sm:grid-cols-1">
-              {seasonMatches.filter((m) => m.journee === parseInt(journeeFilter)).length === 0 ? (
+              {seasonMatches.filter((m) => m.journee === parseInt(journeeFilter, 10)).length === 0 ? (
                 <div className="bg-slate-900 border border-slate-800 rounded-2xl p-12 text-center">
                   <p className="text-slate-400 font-medium text-sm mb-4">Aucun match programmé pour cette journée dans la {getSeasonLabel(seasonFilter)}.</p>
                   <button
@@ -1352,18 +1411,19 @@ export default function App() {
                 </div>
               ) : (
                 seasonMatches
-                  .filter((m) => m.journee === parseInt(journeeFilter))
+                  .filter((m) => m.journee === parseInt(journeeFilter, 10))
                   .map((m) => {
                     const currentDomInput = scoresInput[m.id]?.dom !== undefined ? scoresInput[m.id].dom : (m.score_domicile ?? '');
                     const currentExtInput = scoresInput[m.id]?.ext !== undefined ? scoresInput[m.id].ext : (m.score_exterieur ?? '');
+                    const isPlayed = m.statut === 'terminé';
 
                     return (
                       <div key={m.id} className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-lg flex flex-col sm:flex-row items-center justify-between gap-4">
                         
-                        {/* ÉQUIPE DOMICILE */}
+                        {/* ÉQUIPE DOMICILE (CLIQUABLE -> COMPO) */}
                         <div 
                           onClick={() => openTeamLineup(m.dom)}
-                          className="flex items-center gap-3 sm:w-3/12 justify-start w-full cursor-pointer group"
+                          className="flex items-center gap-3 sm:w-4/12 justify-start w-full cursor-pointer group"
                           title="Voir & modifier la composition (11 de départ)"
                         >
                           {m.dom?.logo_url ? (
@@ -1376,7 +1436,7 @@ export default function App() {
                           </span>
                         </div>
 
-                        {/* SCORE & VS */}
+                        {/* CENTRE : INPUTS ET BOUTON VS/SCORE (CLIQUABLE -> FEUILLE DE MATCH) */}
                         <div className="flex items-center gap-3 sm:w-4/12 justify-center my-2 sm:my-0">
                           <input
                             type="number"
@@ -1384,12 +1444,23 @@ export default function App() {
                             placeholder="0"
                             value={currentDomInput}
                             onChange={(e) => handleScoreInputChange(m.id, 'dom', e.target.value)}
-                            className="w-14 h-11 bg-slate-950 text-white font-mono font-bold text-lg text-center rounded-xl border border-slate-700 focus:outline-none focus:border-indigo-500 shadow-inner [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                            className="w-13 h-11 bg-slate-950 text-white font-mono font-bold text-lg text-center rounded-xl border border-slate-700 focus:outline-none focus:border-indigo-500 shadow-inner [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                           />
 
-                          <span className="text-xs font-black bg-indigo-600/30 text-indigo-400 px-3 py-1.5 rounded-lg border border-indigo-500/20 uppercase tracking-widest">
-                            VS
-                          </span>
+                          {/* LE BOUTON VS / SCORE QUI OUVRE LES DÉTAILS */}
+                          <button
+                            type="button"
+                            onClick={() => openMatchDetails(m)}
+                            className={`px-3 py-2 rounded-xl text-xs font-black transition-all cursor-pointer shadow-md active:scale-95 flex items-center gap-1.5 border ${
+                              isPlayed 
+                                ? 'bg-indigo-600/30 hover:bg-indigo-600 text-indigo-300 hover:text-white border-indigo-500/50' 
+                                : 'bg-slate-800 hover:bg-slate-700 text-slate-300 border-slate-700'
+                            }`}
+                            title="Ouvrir la feuille de match (buteurs, passeurs, cartons, minutes)"
+                          >
+                            <span>{isPlayed ? '📊' : 'VS'}</span>
+                            <span>{isPlayed ? `${m.score_domicile} - ${m.score_exterieur}` : 'Détails'}</span>
+                          </button>
 
                           <input
                             type="number"
@@ -1397,15 +1468,23 @@ export default function App() {
                             placeholder="0"
                             value={currentExtInput}
                             onChange={(e) => handleScoreInputChange(m.id, 'ext', e.target.value)}
-                            className="w-14 h-11 bg-slate-950 text-white font-mono font-bold text-lg text-center rounded-xl border border-slate-700 focus:outline-none focus:border-indigo-500 shadow-inner [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                            className="w-13 h-11 bg-slate-950 text-white font-mono font-bold text-lg text-center rounded-xl border border-slate-700 focus:outline-none focus:border-indigo-500 shadow-inner [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                           />
+
+                          <button
+                            onClick={() => handleSaveMatchScore(m)}
+                            className="bg-emerald-600/20 hover:bg-emerald-600 text-emerald-300 hover:text-white border border-emerald-500/30 text-xs font-bold px-2.5 py-2.5 rounded-xl transition-all cursor-pointer active:scale-95 ml-1"
+                            title="Enregistrer le score manuellement"
+                          >
+                            ✓
+                          </button>
                         </div>
 
-                        {/* ÉQUIPE EXTÉRIEURE */}
-                        <div className="flex items-center gap-2 sm:w-5/12 justify-end w-full">
+                        {/* ÉQUIPE EXTÉRIEURE (CLIQUABLE -> COMPO) */}
+                        <div className="flex items-center gap-3 sm:w-4/12 justify-end w-full">
                           <div 
                             onClick={() => openTeamLineup(m.ext)}
-                            className="flex items-center gap-2 cursor-pointer group mr-3"
+                            className="flex items-center gap-3 cursor-pointer group"
                             title="Voir & modifier la composition (11 de départ)"
                           >
                             <span className="font-bold text-base text-white group-hover:text-indigo-400 transition-colors truncate text-right">
@@ -1417,20 +1496,6 @@ export default function App() {
                               <div className="w-10 h-10 bg-slate-800 rounded-full flex items-center justify-center text-xs group-hover:bg-slate-700">🛡️</div>
                             )}
                           </div>
-
-                          <button
-                            onClick={() => handleSaveMatchScore(m)}
-                            className="bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold px-3 py-2.5 rounded-xl transition-all shadow-md shadow-emerald-600/20 active:scale-95 cursor-pointer"
-                          >
-                            Valider
-                          </button>
-
-                          <button
-                            onClick={() => openMatchDetails(m)}
-                            className="bg-slate-800 hover:bg-slate-700 text-indigo-400 border border-slate-700 text-xs font-bold px-3 py-2.5 rounded-xl transition-all active:scale-95 cursor-pointer"
-                          >
-                            Détails 📝
-                          </button>
                         </div>
                       </div>
                     );
@@ -1453,7 +1518,7 @@ export default function App() {
                 <span className="text-xs font-bold text-slate-400 pl-2">Saison :</span>
                 <select
                   value={seasonFilter}
-                  onChange={(e) => setSeasonFilter(parseInt(e.target.value))}
+                  onChange={(e) => setSeasonFilter(parseInt(e.target.value, 10))}
                   className="bg-slate-900 border border-slate-700 text-indigo-400 font-bold text-xs rounded-lg px-3 py-1.5 focus:outline-none focus:border-indigo-500 cursor-pointer"
                 >
                   {availableSeasons.map((s) => (
@@ -1683,7 +1748,7 @@ export default function App() {
           </div>
         )}
 
-        {/* 5. ADMIN */}
+        {/* 5. ADMIN (CRÉATEUR DE LIGUE) */}
         {tab === 'admin' && userProfile?.is_admin && (
           <div className="space-y-6">
             <h2 className="text-2xl font-extrabold text-white">⚙️ Panneau d'Administration (Créateur de Ligue)</h2>
@@ -1864,7 +1929,7 @@ export default function App() {
         )}
       </main>
 
-      {/* --- MODALE 1 : TERRAIN TACTIQUE INTERACTIF --- */}
+      {/* --- MODALE 1 : TERRAIN TACTIQUE INTERACTIF AVEC BOUTON SAUVEGARDER --- */}
       {selectedLineupTeam && (
         <div className="fixed inset-0 bg-black/85 backdrop-blur-md z-50 flex items-center justify-center p-2 sm:p-4">
           <div className="bg-slate-900 border border-slate-800 rounded-3xl max-w-lg w-full p-4 sm:p-6 shadow-2xl relative max-h-[96vh] flex flex-col overflow-y-auto">
@@ -2301,10 +2366,10 @@ export default function App() {
         </div>
       )}
 
-      {/* --- MODALE FEUILLE DE MATCH --- */}
+      {/* --- MODALE FEUILLE DE MATCH DÉTAILLÉE --- */}
       {selectedMatch && (
         <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-lg w-full p-6 shadow-2xl relative">
+          <div className="bg-slate-900 border border-slate-800 rounded-3xl max-w-lg w-full p-6 shadow-2xl relative max-h-[90vh] flex flex-col overflow-y-auto">
             <button
               type="button"
               onClick={() => setSelectedMatch(null)}
@@ -2313,60 +2378,133 @@ export default function App() {
               ✕
             </button>
 
-            <h3 className="text-lg font-bold text-white mb-2 text-center">Feuille de Match</h3>
-            <p className="text-center text-sm font-semibold text-indigo-400 mb-6">
-              {selectedMatch.dom?.nom} ({selectedMatch.score_domicile ?? 0}) VS ({selectedMatch.score_exterieur ?? 0}) {selectedMatch.ext?.nom}
-            </p>
+            <h3 className="text-lg font-extrabold text-white text-center mb-1">Détails de la Rencontre</h3>
+            <p className="text-xs text-slate-400 text-center mb-4">{getSeasonLabel(selectedMatch.saison || 1)} - Journée {selectedMatch.journee}</p>
 
-            <form onSubmit={handleAddMatchEvent} className="bg-slate-950 p-4 rounded-xl border border-slate-800 mb-6 space-y-3">
-              <h4 className="text-xs font-bold uppercase text-slate-400">Ajouter une action</h4>
-              
-              <div className="grid grid-cols-2 gap-2">
-                <select
-                  value={eventType}
-                  onChange={(e) => setEventType(e.target.value)}
-                  className="bg-slate-900 border border-slate-800 text-white text-xs rounded-lg p-2.5"
-                >
-                  <option value="but">⚽ But</option>
-                  <option value="passe">🎯 Passe décisive</option>
-                </select>
-
-                <select
-                  value={eventPlayerId}
-                  onChange={(e) => setEventPlayerId(e.target.value)}
-                  className="bg-slate-900 border border-slate-800 text-white text-xs rounded-lg p-2.5"
-                  required
-                >
-                  <option value="">-- Choisir le joueur --</option>
-                  {matchPlayers.map(p => (
-                    <option key={p.id} value={p.id}>#{p.numero || 10} {p.nom} [{p.poste || 'N/A'}]</option>
-                  ))}
-                </select>
+            {/* Scoreboard */}
+            <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800 flex items-center justify-between mb-6 shadow-inner">
+              <div className="flex items-center gap-3 w-5/12 truncate">
+                {selectedMatch.dom?.logo_url ? (
+                  <img src={selectedMatch.dom.logo_url} className="w-8 h-8 object-contain" alt="" />
+                ) : (
+                  <span className="text-lg">🛡️</span>
+                )}
+                <span className="font-bold text-white text-sm truncate">{selectedMatch.dom?.nom}</span>
               </div>
 
-              <button type="submit" className="w-full bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold py-2 rounded-lg cursor-pointer">
-                + Enregistrer l'action
+              <div className="text-center font-mono font-black text-xl text-emerald-400 px-3 py-1 bg-emerald-500/10 border border-emerald-500/20 rounded-xl">
+                {selectedMatch.score_domicile ?? 0} - {selectedMatch.score_exterieur ?? 0}
+              </div>
+
+              <div className="flex items-center gap-3 w-5/12 justify-end truncate">
+                <span className="font-bold text-white text-sm truncate text-right">{selectedMatch.ext?.nom}</span>
+                {selectedMatch.ext?.logo_url ? (
+                  <img src={selectedMatch.ext.logo_url} className="w-8 h-8 object-contain" alt="" />
+                ) : (
+                  <span className="text-lg">🛡️</span>
+                )}
+              </div>
+            </div>
+
+            {/* Formulaire ajout d'événement manuel */}
+            <form onSubmit={handleAddMatchEvent} className="bg-slate-950 p-4 rounded-2xl border border-slate-800 mb-5 space-y-3">
+              <h4 className="text-xs font-bold uppercase text-slate-400 flex items-center gap-1.5">
+                <span>➕</span> Ajouter un événement au match
+              </h4>
+              
+              <div className="grid grid-cols-12 gap-2">
+                <div className="col-span-4">
+                  <select
+                    value={eventType}
+                    onChange={(e) => setEventType(e.target.value)}
+                    className="w-full bg-slate-900 border border-slate-800 text-white text-xs rounded-xl p-2.5 focus:outline-none focus:border-indigo-500"
+                  >
+                    <option value="but">⚽ But</option>
+                    <option value="passe">🎯 Passe D.</option>
+                    <option value="carton_jaune">🟨 Jaune</option>
+                    <option value="carton_rouge">🟥 Rouge</option>
+                  </select>
+                </div>
+
+                <div className="col-span-5">
+                  <select
+                    value={eventPlayerId}
+                    onChange={(e) => setEventPlayerId(e.target.value)}
+                    className="w-full bg-slate-900 border border-slate-800 text-white text-xs rounded-xl p-2.5 focus:outline-none focus:border-indigo-500"
+                    required
+                  >
+                    <option value="">-- Joueur --</option>
+                    {matchPlayers.map(p => (
+                      <option key={p.id} value={p.id}>#{p.numero || 10} {p.nom} [{p.poste || 'N/A'}]</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="col-span-3">
+                  <input
+                    type="number"
+                    min="1"
+                    max="120"
+                    placeholder="Min"
+                    value={eventMinute}
+                    onChange={(e) => setEventMinute(e.target.value)}
+                    className="w-full bg-slate-900 border border-slate-800 text-white text-xs rounded-xl p-2.5 text-center font-mono focus:outline-none focus:border-indigo-500"
+                    title="Minute de l'événement"
+                  />
+                </div>
+              </div>
+
+              <button type="submit" className="w-full bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold py-2 rounded-xl transition-all cursor-pointer shadow-md shadow-indigo-600/30">
+                + Ajouter l'action
               </button>
             </form>
 
-            <h4 className="text-xs font-bold uppercase text-slate-400 mb-2">Événements enregistrés</h4>
-            <div className="space-y-2 max-h-48 overflow-y-auto">
+            {/* Liste chronologique des événements */}
+            <h4 className="text-xs font-bold uppercase text-slate-400 mb-2 flex items-center gap-1.5">
+              <span>⏱️</span> Fil du Match & Événements
+            </h4>
+            
+            <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
               {selectedMatchEvents.length === 0 ? (
-                <p className="text-xs text-slate-500 text-center py-4">Aucun événement enregistré.</p>
+                <p className="text-xs text-slate-500 text-center py-4">Aucun but ou carton enregistré pour cette rencontre.</p>
               ) : (
-                selectedMatchEvents.map(ev => (
-                  <div key={ev.id} className="flex items-center justify-between bg-slate-950/50 p-2.5 rounded-lg border border-slate-800/50 text-xs">
-                    <span className="font-semibold text-white">
-                      {ev.type === 'but' ? '⚽ But' : '🎯 Passe D.'} - {ev.players?.nom}
-                    </span>
-                    <button
-                      onClick={() => handleDeleteMatchEvent(ev)}
-                      className="text-rose-500 hover:text-rose-400 font-bold px-2 cursor-pointer"
-                    >
-                      Supprimer
-                    </button>
-                  </div>
-                ))
+                selectedMatchEvents.map(ev => {
+                  let badge = '⚽ But';
+                  let badgeClass = 'text-amber-400 bg-amber-500/10 border-amber-500/20';
+                  if (ev.type === 'passe') {
+                    badge = '🎯 Passe D.';
+                    badgeClass = 'text-indigo-400 bg-indigo-500/10 border-indigo-500/20';
+                  } else if (ev.type === 'carton_jaune') {
+                    badge = '🟨 Carton Jaune';
+                    badgeClass = 'text-yellow-400 bg-yellow-500/10 border-yellow-500/20';
+                  } else if (ev.type === 'carton_rouge') {
+                    badge = '🟥 Carton Rouge';
+                    badgeClass = 'text-rose-400 bg-rose-500/10 border-rose-500/20';
+                  }
+
+                  return (
+                    <div key={ev.id} className="flex items-center justify-between bg-slate-950/70 p-2.5 rounded-xl border border-slate-800/60 text-xs">
+                      <div className="flex items-center gap-2.5 truncate">
+                        <span className="font-mono font-bold text-slate-400 bg-slate-900 px-2 py-0.5 rounded border border-slate-800">
+                          {ev.minute ? `${ev.minute}'` : "45'"}
+                        </span>
+                        <span className={`font-bold px-2 py-0.5 rounded border text-[11px] ${badgeClass}`}>
+                          {badge}
+                        </span>
+                        <span className="font-semibold text-white truncate">
+                          {ev.players?.nom} {ev.players?.numero && <span className="text-slate-400 font-mono text-[10px]">#{ev.players.numero}</span>}
+                        </span>
+                      </div>
+                      <button
+                        onClick={() => handleDeleteMatchEvent(ev)}
+                        className="text-rose-500 hover:text-rose-400 font-bold px-2 cursor-pointer transition-colors"
+                        title="Supprimer cet événement"
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  );
+                })
               )}
             </div>
           </div>
