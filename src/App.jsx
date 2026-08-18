@@ -268,7 +268,6 @@ export default function App() {
   async function triggerWinterMercato(journeeNum, currentSeasonNum) {
     if (!teams || teams.length < 2 || !players || players.length < 10) return;
 
-    // Calcul dynamique de l'effectif actuel de chaque club
     const teamCounts = {};
     teams.forEach(t => {
       teamCounts[t.id] = players.filter(p => p.equipe_id === t.id).length;
@@ -294,7 +293,6 @@ export default function App() {
       const originTeam = teams.find(t => t.id === originTeamId);
       if (!originTeam) continue;
 
-      // RÈGLE 1 : Si le club vendeur a <= 16 joueurs, il ne vend PLUS
       if ((teamCounts[originTeamId] || 0) <= 16) {
         continue;
       }
@@ -302,27 +300,21 @@ export default function App() {
       let destinationTeam = null;
       let reason = '';
 
-      // Filtre destination : Le club acheteur doit avoir < 28 joueurs
       const canBuy = (club) => club.id !== originTeamId && (teamCounts[club.id] || 0) < 28;
 
-      // SCÉNARIO 1 : Jeune pépite qui explose ou gros joueur -> Gros club
       if ((age <= 23 && currentGen >= 77) || currentGen >= 83) {
         const candidateDest = topClubs.filter(canBuy);
         if (candidateDest.length > 0) {
           destinationTeam = candidateDest[Math.floor(Math.random() * candidateDest.length)];
           reason = age <= 23 ? "Jeune pépite recrutée par un cador" : "Transfert star de haut niveau";
         }
-      }
-      // SCÉNARIO 2 : Vétéran ou joueur en difficulté -> Petit club
-      else if (age >= 29 || currentGen <= 74) {
+      } else if (age >= 29 || currentGen <= 74) {
         const candidateDest = bottomClubs.filter(canBuy);
         if (candidateDest.length > 0) {
           destinationTeam = candidateDest[Math.floor(Math.random() * candidateDest.length)];
           reason = "En quête de temps de jeu et de relance";
         }
-      }
-      // SCÉNARIO 3 : Transfert intermédiaire
-      else {
+      } else {
         const candidateDest = [...midClubs, ...topClubs, ...bottomClubs].filter(canBuy);
         if (candidateDest.length > 0) {
           destinationTeam = candidateDest[Math.floor(Math.random() * candidateDest.length)];
@@ -334,7 +326,6 @@ export default function App() {
         usedPlayerIds.add(player.id);
         const fee = player.valeur_marchande || calculateMarketValue(currentGen, age);
 
-        // Mettre à jour les compteurs en temps réel
         teamCounts[originTeamId]--;
         teamCounts[destinationTeam.id]++;
 
@@ -378,7 +369,7 @@ export default function App() {
     }
   }
 
-  // --- MOTEUR D'ÉVOLUTION DYNAMIQUE (TOUTES LES 4 JOURNÉES) ---
+  // --- MOTEUR D'ÉVOLUTION DYNAMIQUE ---
   async function evaluateAndApplyPlayerEvolutions(targetJournee, currentSeasonNum) {
     const startJournee = targetJournee - 3;
     const endJournee = targetJournee;
@@ -1099,6 +1090,82 @@ export default function App() {
     fetchData();
   }
 
+  // --- NOUVEAU : ANNULER UN TRANSFERT UNIQUE ---
+  async function handleCancelTransfer(transfer) {
+    if (!window.confirm(`Voulez-vous annuler le transfert de "${transfer.players?.nom || 'ce joueur'}" et le renvoyer à ${transfer.old_team?.nom || 'son ancien club'} ?`)) {
+      return;
+    }
+
+    const originClubCount = players.filter(p => p.equipe_id === transfer.old_team_id).length;
+    if (originClubCount >= 28) {
+      showNotif(`Impossible : ${transfer.old_team?.nom || "L'ancien club"} a déjà 28 joueurs !`);
+      return;
+    }
+
+    try {
+      const { error: updateError } = await supabase
+        .from('players')
+        .update({ equipe_id: transfer.old_team_id })
+        .eq('id', transfer.player_id);
+
+      if (updateError) throw updateError;
+
+      const { error: deleteError } = await supabase
+        .from('transfers')
+        .delete()
+        .eq('id', transfer.id);
+
+      if (deleteError) throw deleteError;
+
+      showNotif(`Transfert annulé : ${transfer.players?.nom || 'Joueur'} est retourné à ${transfer.old_team?.nom || 'son club'}.`);
+      await fetchData();
+    } catch (err) {
+      showNotif(`Erreur : ${err.message}`);
+    }
+  }
+
+  // --- NOUVEAU : RÉINITIALISER TOUS LES TRANSFERTS ---
+  async function handleResetAllTransfers() {
+    if (transfers.length === 0) {
+      showNotif("Aucun transfert à réinitialiser.");
+      return;
+    }
+
+    if (!window.confirm("Êtes-vous sûr de vouloir annuler TOUS les transferts ? Tous les joueurs retourneront dans leur club initial et l'historique sera effacé.")) {
+      return;
+    }
+
+    try {
+      const initialClubByPlayer = {};
+      const sortedChronological = [...transfers].reverse();
+
+      sortedChronological.forEach(t => {
+        if (!initialClubByPlayer[t.player_id]) {
+          initialClubByPlayer[t.player_id] = t.old_team_id;
+        }
+      });
+
+      for (const [playerId, originalTeamId] of Object.entries(initialClubByPlayer)) {
+        await supabase
+          .from('players')
+          .update({ equipe_id: originalTeamId })
+          .eq('id', playerId);
+      }
+
+      const { error: deleteError } = await supabase
+        .from('transfers')
+        .delete()
+        .neq('id', '00000000-0000-0000-0000-000000000000');
+
+      if (deleteError) throw deleteError;
+
+      showNotif("Tous les transferts ont été réinitialisés avec succès !");
+      await fetchData();
+    } catch (err) {
+      showNotif(`Erreur : ${err.message}`);
+    }
+  }
+
   async function handleDeletePlayer(playerId, playerNom) {
     if (!userProfile?.is_admin) return;
     if (!window.confirm(`Supprimer définitivement le joueur "${playerNom}" ?`)) return;
@@ -1120,7 +1187,9 @@ export default function App() {
     try {
       const newGen = editingPlayer.general ? parseInt(editingPlayer.general, 10) : 75;
       const newAge = editingPlayer.age ? parseInt(editingPlayer.age, 10) : 22;
-      const calculatedVal = calculateMarketValue(newGen, newAge);
+      const calculatedVal = editingPlayer.valeur_marchande !== undefined 
+        ? parseInt(editingPlayer.valeur_marchande, 10) 
+        : calculateMarketValue(newGen, newAge);
 
       const { error } = await supabase
         .from('players')
@@ -1285,7 +1354,7 @@ export default function App() {
 
     const gen = parseInt(newPlayer.general, 10) || 75;
     const age = parseInt(newPlayer.age, 10) || 22;
-    const calculatedVal = calculateMarketValue(gen, age);
+    const val = parseInt(newPlayer.valeur, 10) || calculateMarketValue(gen, age);
 
     const { error } = await supabase.from('players').insert([{
       nom: newPlayer.nom,
@@ -1293,13 +1362,13 @@ export default function App() {
       numero: parseInt(newPlayer.numero, 10) || 10,
       poste: newPlayer.poste,
       general: gen,
-      valeur_marchande: calculatedVal,
+      valeur_marchande: val,
       age: age
     }]);
 
     if (error) showNotif(`Erreur : ${error.message}`);
     else {
-      showNotif(`Joueur "${newPlayer.nom}" (#${newPlayer.numero || 10}) ajouté (${formatMoney(calculatedVal)}) !`);
+      showNotif(`Joueur "${newPlayer.nom}" (#${newPlayer.numero || 10}) ajouté (${formatMoney(val)}) !`);
       setNewPlayer({ nom: '', equipe_id: newPlayer.equipe_id, numero: 10, general: 75, valeur: 10000000, age: 22, poste: 'MC' });
       fetchData();
     }
@@ -1800,7 +1869,7 @@ export default function App() {
                   </select>
                 </div>
 
-                {/* PROGRESSION DES JOURNÉES (FLÈCHES ◀ / ▶ ÉPURÉES AVEC BLOCAGE) */}
+                {/* PROGRESSION DES JOURNÉES */}
                 <div className="flex items-center gap-1 bg-slate-950 p-1 rounded-xl border border-slate-800 shadow-inner">
                   <button
                     type="button"
@@ -1888,7 +1957,6 @@ export default function App() {
 
                     return (
                       <div key={m.id} className="bg-slate-900 border border-slate-800 rounded-2xl p-4 sm:p-5 shadow-lg flex flex-col sm:flex-row items-center justify-between gap-4">
-                        
                         {/* ÉQUIPE DOMICILE */}
                         <div 
                           onClick={() => openTeamLineup(m.dom)}
@@ -1905,7 +1973,7 @@ export default function App() {
                           </span>
                         </div>
 
-                        {/* CENTRE : INPUTS ET BOUTON VS FIXE CLIQUABLE */}
+                        {/* CENTRE : INPUTS ET BOUTON VS FIXE */}
                         <div className="flex items-center justify-center gap-2 sm:gap-3 shrink-0 my-2 sm:my-0">
                           <input
                             type="number"
@@ -2067,16 +2135,31 @@ export default function App() {
           </div>
         )}
 
-        {/* 4. MARCHE DES TRANSFERTS (AVEC RÈGLES 16-28 JOUEURS) */}
+        {/* 4. MARCHE DES TRANSFERTS AVEC ANNULATION ET RÉINITIALISATION */}
         {tab === 'transferts' && (
           <div className="space-y-6">
             <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl">
-              <h2 className="text-xl font-bold text-white mb-2 flex items-center gap-2">🔄 Marché des Transferts</h2>
-              <p className="text-xs text-slate-400 mb-6">
-                Règle officielle de la ligue : <strong>16 joueurs minimum</strong> (ventes bloquées si $\le 16$) et <strong>28 joueurs maximum</strong> (recrutement bloqué si $\ge 28$).
-              </p>
+              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-4">
+                <div>
+                  <h2 className="text-xl font-bold text-white flex items-center gap-2">🔄 Marché des Transferts</h2>
+                  <p className="text-xs text-slate-400 mt-1">
+                    Règle officielle : <strong>16 joueurs min</strong> et <strong>28 joueurs max</strong>.
+                  </p>
+                </div>
 
-              <form onSubmit={handleTransferPlayer} className="space-y-5 max-w-2xl">
+                {transfers.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={handleResetAllTransfers}
+                    className="bg-rose-600/20 hover:bg-rose-600 text-rose-300 hover:text-white border border-rose-500/30 text-xs font-bold px-4 py-2 rounded-xl transition-all flex items-center gap-2 cursor-pointer shadow-md active:scale-95"
+                    title="Annuler tous les transferts et réassigner les joueurs à leur équipe initiale"
+                  >
+                    <span>🗑️</span> Réinitialiser tous les transferts
+                  </button>
+                )}
+              </div>
+
+              <form onSubmit={handleTransferPlayer} className="space-y-5 max-w-2xl mt-4">
                 <div>
                   <label className="block text-xs font-semibold text-amber-400 uppercase tracking-wider mb-1.5">
                     1. Club de provenance (Seulement clubs avec &gt; 16 joueurs)
@@ -2184,7 +2267,7 @@ export default function App() {
               </form>
             </div>
 
-            {/* Historique des Transferts */}
+            {/* Historique des Transferts avec bouton Annuler */}
             {transfers.length > 0 && (
               <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl">
                 <h3 className="text-lg font-bold text-white mb-4">📋 Historique des Derniers Transferts</h3>
@@ -2196,16 +2279,27 @@ export default function App() {
                         <th className="py-3 px-4">Ancien Club</th>
                         <th className="py-3 px-4">Nouveau Club</th>
                         <th className="py-3 px-4 text-right">Montant</th>
+                        <th className="py-3 px-4 text-center">Action</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-800/60 text-sm">
                       {transfers.map((t) => (
-                        <tr key={t.id} className="hover:bg-slate-800/30">
+                        <tr key={t.id} className="hover:bg-slate-800/30 transition-colors">
                           <td className="py-3.5 px-4 font-bold text-white">{t.players?.nom || 'Joueur inconnu'}</td>
                           <td className="py-3.5 px-4 text-rose-400 font-semibold">{t.old_team?.nom || '-'}</td>
                           <td className="py-3.5 px-4 text-emerald-400 font-semibold">{t.new_team?.nom || '-'}</td>
                           <td className="py-3.5 px-4 text-right font-mono font-bold text-indigo-300">
                             {formatMoney(t.fee)}
+                          </td>
+                          <td className="py-3.5 px-4 text-center">
+                            <button
+                              type="button"
+                              onClick={() => handleCancelTransfer(t)}
+                              className="bg-rose-500/10 hover:bg-rose-600 text-rose-400 hover:text-white border border-rose-500/30 text-xs font-bold px-3 py-1.5 rounded-lg transition-all cursor-pointer active:scale-95"
+                              title="Annuler ce transfert et renvoyer le joueur dans son ancien club"
+                            >
+                              ↩ Annuler
+                            </button>
                           </td>
                         </tr>
                       ))}
@@ -2252,6 +2346,7 @@ export default function App() {
                 </form>
               </div>
 
+              {/* CRÉATION DE JOUEUR AVEC CHAMP VALEUR MARCHANDE */}
               <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl">
                 <h3 className="text-lg font-bold text-white mb-4">2. Ajouter un Joueur</h3>
                 <form onSubmit={handleAddPlayer} className="space-y-3">
@@ -2320,7 +2415,7 @@ export default function App() {
                     </div>
                   </div>
 
-                  <div className="grid grid-cols-2 gap-2">
+                  <div className="grid grid-cols-3 gap-2">
                     <div>
                       <label className="block text-xs font-medium text-slate-400 mb-1">Général (45-99)</label>
                       <input
@@ -2328,7 +2423,10 @@ export default function App() {
                         min="40"
                         max="99"
                         value={newPlayer.general}
-                        onChange={(e) => setNewPlayer({ ...newPlayer, general: e.target.value })}
+                        onChange={(e) => {
+                          const g = parseInt(e.target.value, 10) || 75;
+                          setNewPlayer({ ...newPlayer, general: g, valeur: calculateMarketValue(g, newPlayer.age) });
+                        }}
                         className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm text-white"
                       />
                     </div>
@@ -2339,20 +2437,34 @@ export default function App() {
                         min="15"
                         max="45"
                         value={newPlayer.age}
-                        onChange={(e) => setNewPlayer({ ...newPlayer, age: e.target.value })}
+                        onChange={(e) => {
+                          const a = parseInt(e.target.value, 10) || 22;
+                          setNewPlayer({ ...newPlayer, age: a, valeur: calculateMarketValue(newPlayer.general, a) });
+                        }}
                         className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm text-white"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-slate-400 mb-1">Valeur (€)</label>
+                      <input
+                        type="number"
+                        step="100000"
+                        value={newPlayer.valeur}
+                        onChange={(e) => setNewPlayer({ ...newPlayer, valeur: e.target.value })}
+                        className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm text-emerald-400 font-mono font-bold"
+                        required
                       />
                     </div>
                   </div>
 
                   <button type="submit" className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-semibold py-2.5 rounded-xl text-sm mt-2 cursor-pointer">
-                    + Ajouter le joueur
+                    + Ajouter le joueur ({formatMoney(newPlayer.valeur)})
                   </button>
                 </form>
               </div>
             </div>
 
-            {/* SECTION 3 : GESTION DES SAISONS ADMIN */}
+            {/* GESTION DES SAISONS */}
             <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl">
               <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
                 <div>
@@ -2393,7 +2505,7 @@ export default function App() {
         )}
       </main>
 
-      {/* --- MODALE MERCATO D'HIVER (5 TRANSFERTS AUTOMATIQUES PAR JOURNÉE ENTRE J19 ET J23) --- */}
+      {/* --- MODALE MERCATO D'HIVER --- */}
       {mercatoReport && (
         <div className="fixed inset-0 bg-black/85 backdrop-blur-md z-50 flex items-center justify-center p-4">
           <div className="bg-slate-900 border border-slate-800 rounded-3xl max-w-2xl w-full p-6 shadow-2xl relative max-h-[90vh] flex flex-col">
@@ -2458,7 +2570,7 @@ export default function App() {
         </div>
       )}
 
-      {/* --- MODALE RAPPORT D'ÉVOLUTION DES JOUEURS (TOUTES LES 4 JOURNÉES) --- */}
+      {/* --- MODALE RAPPORT D'ÉVOLUTION --- */}
       {evolutionReport && (
         <div className="fixed inset-0 bg-black/85 backdrop-blur-md z-50 flex items-center justify-center p-4">
           <div className="bg-slate-900 border border-slate-800 rounded-3xl max-w-xl w-full p-6 shadow-2xl relative max-h-[90vh] flex flex-col">
@@ -2527,7 +2639,7 @@ export default function App() {
         </div>
       )}
 
-      {/* --- MODALE 1 : TERRAIN TACTIQUE INTERACTIF --- */}
+      {/* --- MODALE TERRAIN TACTIQUE --- */}
       {selectedLineupTeam && (
         <div className="fixed inset-0 bg-black/85 backdrop-blur-md z-50 flex items-center justify-center p-2 sm:p-4">
           <div className="bg-slate-900 border border-slate-800 rounded-3xl max-w-lg w-full p-4 sm:p-6 shadow-2xl relative max-h-[96vh] flex flex-col overflow-y-auto">
@@ -2690,7 +2802,7 @@ export default function App() {
         </div>
       )}
 
-      {/* --- MODALE 2 : EFFECTIF COMPLET ÉQUIPE & MODIFICATION DU LOGO --- */}
+      {/* --- MODALE EFFECTIF ÉQUIPE --- */}
       {selectedTeam && (
         <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-3xl w-full p-6 shadow-2xl relative">
@@ -2943,6 +3055,17 @@ export default function App() {
                 </div>
               </div>
 
+              <div>
+                <label className="block text-xs font-medium text-slate-400 mb-1">Valeur marchande (€)</label>
+                <input
+                  type="number"
+                  step="500000"
+                  value={editingPlayer.valeur_marchande || ''}
+                  onChange={(e) => setEditingPlayer({ ...editingPlayer, valeur_marchande: e.target.value })}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm text-emerald-400 font-mono font-bold"
+                />
+              </div>
+
               <button
                 type="submit"
                 className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-2.5 rounded-xl text-sm mt-2 transition-all shadow-lg shadow-indigo-600/30 cursor-pointer"
@@ -2954,7 +3077,7 @@ export default function App() {
         </div>
       )}
 
-      {/* --- MODALE FEUILLE DE MATCH SCINDÉE EN 2 COLONNES (DOMICILE & EXTÉRIEUR) --- */}
+      {/* --- MODALE FEUILLE DE MATCH --- */}
       {selectedMatch && (
         <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-slate-900 border border-slate-800 rounded-3xl max-w-2xl w-full p-6 shadow-2xl relative max-h-[90vh] flex flex-col overflow-y-auto">
@@ -2969,7 +3092,6 @@ export default function App() {
             <h3 className="text-lg font-extrabold text-white text-center mb-1">Détails de la Rencontre</h3>
             <p className="text-xs text-slate-400 text-center mb-4">{getSeasonLabel(selectedMatch.saison || 1)} - Journée {selectedMatch.journee}</p>
 
-            {/* Scoreboard Principal */}
             <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800 flex items-center justify-between mb-6 shadow-inner">
               <div className="flex items-center gap-3 w-5/12 truncate">
                 {selectedMatch.dom?.logo_url ? (
@@ -2994,9 +3116,7 @@ export default function App() {
               </div>
             </div>
 
-            {/* CONTENU SCINDÉ EN 2 COLONNES */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              
               {/* COLONNE 1 : ÉVÉNEMENTS ÉQUIPE DOMICILE */}
               <div className="bg-slate-950/60 p-4 rounded-2xl border border-slate-800/80">
                 <div className="flex items-center gap-2 mb-3 pb-2 border-b border-slate-800">
@@ -3106,7 +3226,6 @@ export default function App() {
                   )}
                 </div>
               </div>
-
             </div>
           </div>
         </div>
