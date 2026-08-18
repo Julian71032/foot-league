@@ -80,12 +80,12 @@ export default function App() {
   const [selectedTeam, setSelectedTeam] = useState(null);
   const [editingPlayer, setEditingPlayer] = useState(null);
 
-  // MODALE MODIFICATION DU LOGO DE L'ÉQUIPE
+  // MODALE LOGO
   const [editingTeamLogo, setEditingTeamLogo] = useState(null);
   const [newLogoFile, setNewLogoFile] = useState(null);
   const [logoUpdating, setLogoUpdating] = useState(false);
 
-  // ÉTAT TACTIQUE / COMPOSITION EN DIRECT
+  // COMPOSITION TACTIQUE
   const [selectedLineupTeam, setSelectedLineupTeam] = useState(null);
   const [currentFormation, setCurrentFormation] = useState('4-3-3');
   const [teamLineupPlayers, setTeamLineupPlayers] = useState([]);
@@ -101,7 +101,7 @@ export default function App() {
   const [newPlayer, setNewPlayer] = useState({ nom: '', equipe_id: '', numero: 10, general: 75, valeur: 10000000, age: 22, poste: 'MC' });
   const [generatingSchedule, setGeneratingSchedule] = useState(false);
 
-  // Formulaire Transfert
+  // Transferts
   const [transferFromTeamId, setTransferFromTeamId] = useState('');
   const [transferPlayerId, setTransferPlayerId] = useState('');
   const [transferToTeamId, setTransferToTeamId] = useState('');
@@ -233,7 +233,7 @@ export default function App() {
     return all.slice(0, 11);
   }
 
-  // --- MOTEUR DE PROBABILITÉS ET STATS ---
+  // --- MOTEUR PROBABILISTE DE BUTS / PASSES / CARTONS ---
   function simulateGoals(lambda) {
     let L = Math.exp(-lambda);
     let k = 0;
@@ -431,7 +431,7 @@ export default function App() {
           }
         }
 
-        // Cartons Jaunes / Rouges aléatoires
+        // Cartons Jaunes / Rouges
         const numYellowDom = Math.random() < 0.65 ? Math.floor(Math.random() * 3) + 1 : 0;
         for (let y = 0; y < numYellowDom; y++) {
           const carded = pickCardPlayer(domStarters);
@@ -796,7 +796,6 @@ export default function App() {
     const domStarters = getTeamStarters(domTeam);
     const extStarters = getTeamStarters(extTeam);
 
-    // Supprimer et générer automatiquement les événements associés
     await supabase.from('match_events').delete().eq('match_id', match.id);
 
     const newEvents = [];
@@ -835,7 +834,7 @@ export default function App() {
 
     if (error) showNotif(`Erreur : ${error.message}`);
     else {
-      showNotif("Score et statistiques de match enregistrés !");
+      showNotif("Score et événements enregistrés !");
       fetchData();
     }
   }
@@ -1173,7 +1172,7 @@ export default function App() {
             <button
               type="submit"
               disabled={authLoading}
-              className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-3 rounded-xl text-sm transition-all shadow-lg shadow-indigo-600/30"
+              className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-3 rounded-xl text-sm transition-all shadow-lg shadow-indigo-600/30 cursor-pointer"
             >
               {authLoading ? 'Chargement...' : authMode === 'login' ? 'Se connecter' : 'Créer un compte'}
             </button>
@@ -1419,40 +1418,40 @@ export default function App() {
                     const currentExtInput = scoresInput[m.id]?.ext !== undefined ? scoresInput[m.id].ext : (m.score_exterieur ?? '');
 
                     return (
-                      <div key={m.id} className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-lg flex flex-col sm:flex-row items-center justify-between gap-4">
+                      <div key={m.id} className="bg-slate-900 border border-slate-800 rounded-2xl p-4 sm:p-5 shadow-lg flex flex-col sm:flex-row items-center justify-between gap-4">
                         
                         {/* ÉQUIPE DOMICILE (CLIQUABLE -> COMPO) */}
                         <div 
                           onClick={() => openTeamLineup(m.dom)}
-                          className="flex items-center gap-3 sm:w-4/12 justify-start w-full cursor-pointer group"
+                          className="flex items-center gap-3 sm:w-5/12 justify-start w-full cursor-pointer group min-w-0"
                           title="Voir & modifier la composition (11 de départ)"
                         >
                           {m.dom?.logo_url ? (
-                            <img src={m.dom.logo_url} className="w-10 h-10 object-contain group-hover:scale-110 transition-transform" alt="" />
+                            <img src={m.dom.logo_url} className="w-10 h-10 object-contain group-hover:scale-110 transition-transform shrink-0" alt="" />
                           ) : (
-                            <div className="w-10 h-10 bg-slate-800 rounded-full flex items-center justify-center text-xs group-hover:bg-slate-700">🛡️</div>
+                            <div className="w-10 h-10 bg-slate-800 rounded-full flex items-center justify-center text-xs group-hover:bg-slate-700 shrink-0">🛡️</div>
                           )}
                           <span className="font-bold text-base text-white group-hover:text-indigo-400 transition-colors truncate">
                             {m.dom?.nom}
                           </span>
                         </div>
 
-                        {/* CENTRE : INPUTS ET BOUTON VS FIXE CLIQUABLE */}
-                        <div className="flex items-center gap-3 sm:w-4/12 justify-center my-2 sm:my-0">
+                        {/* CENTRE : INPUTS ET BOUTON VS FIXE CLIQUABLE (SCORE PROPRE SANS ÉCRASEMENT) */}
+                        <div className="flex items-center justify-center gap-2 sm:gap-3 shrink-0 my-2 sm:my-0">
                           <input
                             type="number"
                             min="0"
                             placeholder="0"
                             value={currentDomInput}
                             onChange={(e) => handleScoreInputChange(m.id, 'dom', e.target.value)}
-                            className="w-13 h-11 bg-slate-950 text-white font-mono font-bold text-lg text-center rounded-xl border border-slate-700 focus:outline-none focus:border-indigo-500 shadow-inner [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                            className="w-12 h-11 sm:w-14 sm:h-12 bg-slate-950 text-white font-mono font-black text-xl text-center rounded-xl border border-slate-700 focus:outline-none focus:border-indigo-500 shadow-inner [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                           />
 
-                          {/* BOUTON FIXE "VS" QUI OUVRE LES DÉTAILS */}
+                          {/* BOUTON FIXE "VS" QUI OUVRE LA FEUILLE DE MATCH */}
                           <button
                             type="button"
                             onClick={() => openMatchDetails(m)}
-                            className="bg-indigo-600/30 hover:bg-indigo-600 text-indigo-300 hover:text-white border border-indigo-500/40 text-xs font-black tracking-widest px-4 py-2.5 rounded-xl transition-all cursor-pointer shadow-md active:scale-95 uppercase select-none"
+                            className="bg-indigo-600/20 hover:bg-indigo-600 text-indigo-300 hover:text-white border border-indigo-500/40 text-xs font-black tracking-widest px-3.5 py-2.5 rounded-xl transition-all cursor-pointer shadow-md active:scale-95 uppercase select-none"
                             title="Cliquer pour voir la feuille de match (buteurs, passeurs, cartons et minutes)"
                           >
                             VS
@@ -1464,12 +1463,12 @@ export default function App() {
                             placeholder="0"
                             value={currentExtInput}
                             onChange={(e) => handleScoreInputChange(m.id, 'ext', e.target.value)}
-                            className="w-13 h-11 bg-slate-950 text-white font-mono font-bold text-lg text-center rounded-xl border border-slate-700 focus:outline-none focus:border-indigo-500 shadow-inner [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                            className="w-12 h-11 sm:w-14 sm:h-12 bg-slate-950 text-white font-mono font-black text-xl text-center rounded-xl border border-slate-700 focus:outline-none focus:border-indigo-500 shadow-inner [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                           />
 
                           <button
                             onClick={() => handleSaveMatchScore(m)}
-                            className="bg-emerald-600/20 hover:bg-emerald-600 text-emerald-300 hover:text-white border border-emerald-500/30 text-xs font-bold px-2.5 py-2.5 rounded-xl transition-all cursor-pointer active:scale-95 ml-1"
+                            className="bg-emerald-600/20 hover:bg-emerald-600 text-emerald-300 hover:text-white border border-emerald-500/30 text-xs font-bold w-9 h-11 sm:w-10 sm:h-12 rounded-xl transition-all cursor-pointer active:scale-95 flex items-center justify-center ml-1"
                             title="Enregistrer le score manuellement"
                           >
                             ✓
@@ -1477,19 +1476,19 @@ export default function App() {
                         </div>
 
                         {/* ÉQUIPE EXTÉRIEURE (CLIQUABLE -> COMPO) */}
-                        <div className="flex items-center gap-3 sm:w-4/12 justify-end w-full">
+                        <div className="flex items-center gap-3 sm:w-5/12 justify-end w-full min-w-0">
                           <div 
                             onClick={() => openTeamLineup(m.ext)}
-                            className="flex items-center gap-3 cursor-pointer group"
+                            className="flex items-center gap-3 cursor-pointer group justify-end min-w-0"
                             title="Voir & modifier la composition (11 de départ)"
                           >
                             <span className="font-bold text-base text-white group-hover:text-indigo-400 transition-colors truncate text-right">
                               {m.ext?.nom}
                             </span>
                             {m.ext?.logo_url ? (
-                              <img src={m.ext.logo_url} className="w-10 h-10 object-contain group-hover:scale-110 transition-transform" alt="" />
+                              <img src={m.ext.logo_url} className="w-10 h-10 object-contain group-hover:scale-110 transition-transform shrink-0" alt="" />
                             ) : (
-                              <div className="w-10 h-10 bg-slate-800 rounded-full flex items-center justify-center text-xs group-hover:bg-slate-700">🛡️</div>
+                              <div className="w-10 h-10 bg-slate-800 rounded-full flex items-center justify-center text-xs group-hover:bg-slate-700 shrink-0">🛡️</div>
                             )}
                           </div>
                         </div>
@@ -1925,7 +1924,7 @@ export default function App() {
         )}
       </main>
 
-      {/* --- MODALE 1 : TERRAIN TACTIQUE INTERACTIF AVEC BOUTON SAUVEGARDER --- */}
+      {/* --- MODALE 1 : TERRAIN TACTIQUE INTERACTIF --- */}
       {selectedLineupTeam && (
         <div className="fixed inset-0 bg-black/85 backdrop-blur-md z-50 flex items-center justify-center p-2 sm:p-4">
           <div className="bg-slate-900 border border-slate-800 rounded-3xl max-w-lg w-full p-4 sm:p-6 shadow-2xl relative max-h-[96vh] flex flex-col overflow-y-auto">
@@ -2362,7 +2361,7 @@ export default function App() {
         </div>
       )}
 
-      {/* --- MODALE FEUILLE DE MATCH ÉPURÉE & DÉTAILLÉE --- */}
+      {/* --- MODALE FEUILLE DE MATCH DÉTAILLÉE --- */}
       {selectedMatch && (
         <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-slate-900 border border-slate-800 rounded-3xl max-w-lg w-full p-6 shadow-2xl relative max-h-[90vh] flex flex-col overflow-y-auto">
@@ -2374,35 +2373,35 @@ export default function App() {
               ✕
             </button>
 
-            <h3 className="text-lg font-extrabold text-white text-center mb-1">Feuille de Match</h3>
+            <h3 className="text-lg font-extrabold text-white text-center mb-1">Détails de la Rencontre</h3>
             <p className="text-xs text-slate-400 text-center mb-4">{getSeasonLabel(selectedMatch.saison || 1)} - Journée {selectedMatch.journee}</p>
 
             {/* Scoreboard */}
             <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800 flex items-center justify-between mb-5 shadow-inner">
               <div className="flex items-center gap-3 w-5/12 truncate">
                 {selectedMatch.dom?.logo_url ? (
-                  <img src={selectedMatch.dom.logo_url} className="w-8 h-8 object-contain" alt="" />
+                  <img src={selectedMatch.dom.logo_url} className="w-8 h-8 object-contain shrink-0" alt="" />
                 ) : (
-                  <span className="text-lg">🛡️</span>
+                  <span className="text-lg shrink-0">🛡️</span>
                 )}
                 <span className="font-bold text-white text-sm truncate">{selectedMatch.dom?.nom}</span>
               </div>
 
-              <div className="text-center font-mono font-black text-xl text-emerald-400 px-3 py-1 bg-emerald-500/10 border border-emerald-500/20 rounded-xl">
+              <div className="text-center font-mono font-black text-xl text-emerald-400 px-3 py-1 bg-emerald-500/10 border border-emerald-500/20 rounded-xl shrink-0">
                 {selectedMatch.score_domicile ?? 0} - {selectedMatch.score_exterieur ?? 0}
               </div>
 
               <div className="flex items-center gap-3 w-5/12 justify-end truncate">
                 <span className="font-bold text-white text-sm truncate text-right">{selectedMatch.ext?.nom}</span>
                 {selectedMatch.ext?.logo_url ? (
-                  <img src={selectedMatch.ext.logo_url} className="w-8 h-8 object-contain" alt="" />
+                  <img src={selectedMatch.ext.logo_url} className="w-8 h-8 object-contain shrink-0" alt="" />
                 ) : (
-                  <span className="text-lg">🛡️</span>
+                  <span className="text-lg shrink-0">🛡️</span>
                 )}
               </div>
             </div>
 
-            {/* Liste chronologique des événements générés automatiquement */}
+            {/* Fil des événements */}
             <h4 className="text-xs font-bold uppercase text-slate-400 mb-3 flex items-center gap-1.5">
               <span>⏱️</span> Fil du Match & Événements
             </h4>
