@@ -373,7 +373,7 @@ export default function App() {
           statut: 'terminé'
         });
 
-        // Buteurs & Passeurs Domicile avec minutes aléatoires
+        // Buteurs & Passeurs Domicile
         for (let i = 0; i < scoreDom; i++) {
           const scorer = pickGoalScorer(domStarters);
           const minute = Math.floor(Math.random() * 90) + 1;
@@ -402,7 +402,7 @@ export default function App() {
           }
         }
 
-        // Buteurs & Passeurs Extérieur avec minutes aléatoires
+        // Buteurs & Passeurs Extérieur
         for (let i = 0; i < scoreExt; i++) {
           const scorer = pickGoalScorer(extStarters);
           const minute = Math.floor(Math.random() * 90) + 1;
@@ -773,7 +773,7 @@ export default function App() {
     setSelectedMatch(match);
     const { data } = await supabase
       .from('match_events')
-      .select('*, players(nom, poste, numero)')
+      .select('*, players(id, nom, poste, numero, equipe_id)')
       .eq('match_id', match.id)
       .eq('user_id', session.user.id)
       .order('minute', { ascending: true });
@@ -1114,6 +1114,10 @@ export default function App() {
     );
   };
 
+  // Séparation des événements pour la modale scindée (Domicile / Extérieur)
+  const homeEvents = selectedMatch ? selectedMatchEvents.filter(ev => ev.players?.equipe_id === selectedMatch.equipe_domicile_id) : [];
+  const awayEvents = selectedMatch ? selectedMatchEvents.filter(ev => ev.players?.equipe_id === selectedMatch.equipe_exterieur_id) : [];
+
   if (!session) {
     return (
       <div className="min-h-screen bg-slate-950 text-slate-100 flex items-center justify-center p-4 font-sans">
@@ -1327,7 +1331,7 @@ export default function App() {
             <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
               <div>
                 <h2 className="text-xl font-bold text-white flex items-center gap-2">📅 Calendrier des Rencontres</h2>
-                <p className="text-xs text-slate-400 mt-1">💡 Clique sur le bouton <strong>VS</strong> au milieu d'un match pour consulter les buteurs, passeurs et cartons</p>
+                <p className="text-xs text-slate-400 mt-1">💡 Clique sur le bouton <strong>VS</strong> au milieu d'un match pour consulter les buteurs, passeurs et cartons de chaque équipe</p>
               </div>
 
               <div className="flex flex-wrap items-center gap-3 w-full md:w-auto justify-between md:justify-end">
@@ -1452,7 +1456,7 @@ export default function App() {
                             type="button"
                             onClick={() => openMatchDetails(m)}
                             className="bg-indigo-600/20 hover:bg-indigo-600 text-indigo-300 hover:text-white border border-indigo-500/40 text-xs font-black tracking-widest px-3.5 py-2.5 rounded-xl transition-all cursor-pointer shadow-md active:scale-95 uppercase select-none"
-                            title="Cliquer pour voir la feuille de match (buteurs, passeurs, cartons et minutes)"
+                            title="Cliquer pour voir les buteurs, passeurs et cartons de chaque équipe"
                           >
                             VS
                           </button>
@@ -1924,7 +1928,7 @@ export default function App() {
         )}
       </main>
 
-      {/* --- MODALE 1 : TERRAIN TACTIQUE INTERACTIF --- */}
+      {/* --- MODALE 1 : TERRAIN TACTIQUE INTERACTIF AVEC BOUTON SAUVEGARDER --- */}
       {selectedLineupTeam && (
         <div className="fixed inset-0 bg-black/85 backdrop-blur-md z-50 flex items-center justify-center p-2 sm:p-4">
           <div className="bg-slate-900 border border-slate-800 rounded-3xl max-w-lg w-full p-4 sm:p-6 shadow-2xl relative max-h-[96vh] flex flex-col overflow-y-auto">
@@ -2361,10 +2365,10 @@ export default function App() {
         </div>
       )}
 
-      {/* --- MODALE FEUILLE DE MATCH DÉTAILLÉE --- */}
+      {/* --- MODALE FEUILLE DE MATCH SCINDÉE EN 2 COLONNES (DOMICILE & EXTÉRIEUR) --- */}
       {selectedMatch && (
         <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-800 rounded-3xl max-w-lg w-full p-6 shadow-2xl relative max-h-[90vh] flex flex-col overflow-y-auto">
+          <div className="bg-slate-900 border border-slate-800 rounded-3xl max-w-2xl w-full p-6 shadow-2xl relative max-h-[90vh] flex flex-col overflow-y-auto">
             <button
               type="button"
               onClick={() => setSelectedMatch(null)}
@@ -2376,73 +2380,136 @@ export default function App() {
             <h3 className="text-lg font-extrabold text-white text-center mb-1">Détails de la Rencontre</h3>
             <p className="text-xs text-slate-400 text-center mb-4">{getSeasonLabel(selectedMatch.saison || 1)} - Journée {selectedMatch.journee}</p>
 
-            {/* Scoreboard */}
-            <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800 flex items-center justify-between mb-5 shadow-inner">
+            {/* Scoreboard Principal */}
+            <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800 flex items-center justify-between mb-6 shadow-inner">
               <div className="flex items-center gap-3 w-5/12 truncate">
                 {selectedMatch.dom?.logo_url ? (
-                  <img src={selectedMatch.dom.logo_url} className="w-8 h-8 object-contain shrink-0" alt="" />
+                  <img src={selectedMatch.dom.logo_url} className="w-9 h-9 object-contain shrink-0" alt="" />
                 ) : (
-                  <span className="text-lg shrink-0">🛡️</span>
+                  <span className="text-xl shrink-0">🛡️</span>
                 )}
                 <span className="font-bold text-white text-sm truncate">{selectedMatch.dom?.nom}</span>
               </div>
 
-              <div className="text-center font-mono font-black text-xl text-emerald-400 px-3 py-1 bg-emerald-500/10 border border-emerald-500/20 rounded-xl shrink-0">
+              <div className="text-center font-mono font-black text-2xl text-emerald-400 px-4 py-1.5 bg-emerald-500/10 border border-emerald-500/20 rounded-xl shrink-0">
                 {selectedMatch.score_domicile ?? 0} - {selectedMatch.score_exterieur ?? 0}
               </div>
 
               <div className="flex items-center gap-3 w-5/12 justify-end truncate">
                 <span className="font-bold text-white text-sm truncate text-right">{selectedMatch.ext?.nom}</span>
                 {selectedMatch.ext?.logo_url ? (
-                  <img src={selectedMatch.ext.logo_url} className="w-8 h-8 object-contain shrink-0" alt="" />
+                  <img src={selectedMatch.ext.logo_url} className="w-9 h-9 object-contain shrink-0" alt="" />
                 ) : (
-                  <span className="text-lg shrink-0">🛡️</span>
+                  <span className="text-xl shrink-0">🛡️</span>
                 )}
               </div>
             </div>
 
-            {/* Fil des événements */}
-            <h4 className="text-xs font-bold uppercase text-slate-400 mb-3 flex items-center gap-1.5">
-              <span>⏱️</span> Fil du Match & Événements
-            </h4>
-            
-            <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
-              {selectedMatchEvents.length === 0 ? (
-                <div className="bg-slate-950/40 p-8 rounded-2xl border border-slate-800/40 text-center">
-                  <p className="text-xs text-slate-500">Aucun but ou événement enregistré pour cette rencontre.</p>
+            {/* CONTENU SCINDÉ EN 2 COLONNES : DOMICILE (GAUCHE) / EXTÉRIEUR (DROITE) */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              
+              {/* COLONNE 1 : ÉVÉNEMENTS ÉQUIPE DOMICILE */}
+              <div className="bg-slate-950/60 p-4 rounded-2xl border border-slate-800/80">
+                <div className="flex items-center gap-2 mb-3 pb-2 border-b border-slate-800">
+                  <span className="text-xs font-extrabold text-indigo-400 uppercase tracking-wider truncate">
+                    {selectedMatch.dom?.nom}
+                  </span>
                 </div>
-              ) : (
-                selectedMatchEvents.map(ev => {
-                  let badge = '⚽ But';
-                  let badgeClass = 'text-amber-400 bg-amber-500/10 border-amber-500/20';
-                  if (ev.type === 'passe') {
-                    badge = '🎯 Passe D.';
-                    badgeClass = 'text-indigo-400 bg-indigo-500/10 border-indigo-500/20';
-                  } else if (ev.type === 'carton_jaune') {
-                    badge = '🟨 Carton Jaune';
-                    badgeClass = 'text-yellow-400 bg-yellow-500/10 border-yellow-500/20';
-                  } else if (ev.type === 'carton_rouge') {
-                    badge = '🟥 Carton Rouge';
-                    badgeClass = 'text-rose-400 bg-rose-500/10 border-rose-500/20';
-                  }
 
-                  return (
-                    <div key={ev.id} className="flex items-center justify-between bg-slate-950/70 p-2.5 rounded-xl border border-slate-800/60 text-xs">
-                      <div className="flex items-center gap-2.5 truncate">
-                        <span className="font-mono font-bold text-slate-400 bg-slate-900 px-2 py-0.5 rounded border border-slate-800">
-                          {ev.minute ? `${ev.minute}'` : "45'"}
-                        </span>
-                        <span className={`font-bold px-2 py-0.5 rounded border text-[11px] ${badgeClass}`}>
-                          {badge}
-                        </span>
-                        <span className="font-semibold text-white truncate">
-                          {ev.players?.nom} {ev.players?.numero && <span className="text-slate-400 font-mono text-[10px]">#{ev.players.numero}</span>}
-                        </span>
-                      </div>
-                    </div>
-                  );
-                })
-              )}
+                <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
+                  {homeEvents.length === 0 ? (
+                    <p className="text-[11px] text-slate-500 py-4 text-center italic">Aucun événement</p>
+                  ) : (
+                    homeEvents.map(ev => {
+                      let icon = '⚽';
+                      let typeLabel = 'But';
+                      let colorClass = 'text-amber-400';
+                      if (ev.type === 'passe') {
+                        icon = '🎯';
+                        typeLabel = 'Passe D.';
+                        colorClass = 'text-indigo-300';
+                      } else if (ev.type === 'carton_jaune') {
+                        icon = '🟨';
+                        typeLabel = 'Jaune';
+                        colorClass = 'text-yellow-400';
+                      } else if (ev.type === 'carton_rouge') {
+                        icon = '🟥';
+                        typeLabel = 'Rouge';
+                        colorClass = 'text-rose-400';
+                      }
+
+                      return (
+                        <div key={ev.id} className="flex items-center justify-between bg-slate-900/80 px-2.5 py-1.5 rounded-xl border border-slate-800 text-xs">
+                          <div className="flex items-center gap-2 truncate">
+                            <span className="font-mono text-slate-400 text-[10px] bg-slate-950 px-1.5 py-0.5 rounded border border-slate-800">
+                              {ev.minute ? `${ev.minute}'` : "45'"}
+                            </span>
+                            <span className="text-sm">{icon}</span>
+                            <span className="font-semibold text-white truncate text-xs">
+                              {ev.players?.nom}
+                            </span>
+                          </div>
+                          <span className={`text-[10px] font-bold ${colorClass}`}>
+                            {typeLabel}
+                          </span>
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+              </div>
+
+              {/* COLONNE 2 : ÉVÉNEMENTS ÉQUIPE EXTÉRIEURE */}
+              <div className="bg-slate-950/60 p-4 rounded-2xl border border-slate-800/80">
+                <div className="flex items-center gap-2 mb-3 pb-2 border-b border-slate-800 justify-end">
+                  <span className="text-xs font-extrabold text-indigo-400 uppercase tracking-wider truncate text-right">
+                    {selectedMatch.ext?.nom}
+                  </span>
+                </div>
+
+                <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
+                  {awayEvents.length === 0 ? (
+                    <p className="text-[11px] text-slate-500 py-4 text-center italic">Aucun événement</p>
+                  ) : (
+                    awayEvents.map(ev => {
+                      let icon = '⚽';
+                      let typeLabel = 'But';
+                      let colorClass = 'text-amber-400';
+                      if (ev.type === 'passe') {
+                        icon = '🎯';
+                        typeLabel = 'Passe D.';
+                        colorClass = 'text-indigo-300';
+                      } else if (ev.type === 'carton_jaune') {
+                        icon = '🟨';
+                        typeLabel = 'Jaune';
+                        colorClass = 'text-yellow-400';
+                      } else if (ev.type === 'carton_rouge') {
+                        icon = '🟥';
+                        typeLabel = 'Rouge';
+                        colorClass = 'text-rose-400';
+                      }
+
+                      return (
+                        <div key={ev.id} className="flex items-center justify-between bg-slate-900/80 px-2.5 py-1.5 rounded-xl border border-slate-800 text-xs">
+                          <div className="flex items-center gap-2 truncate">
+                            <span className="font-mono text-slate-400 text-[10px] bg-slate-950 px-1.5 py-0.5 rounded border border-slate-800">
+                              {ev.minute ? `${ev.minute}'` : "45'"}
+                            </span>
+                            <span className="text-sm">{icon}</span>
+                            <span className="font-semibold text-white truncate text-xs">
+                              {ev.players?.nom}
+                            </span>
+                          </div>
+                          <span className={`text-[10px] font-bold ${colorClass}`}>
+                            {typeLabel}
+                          </span>
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+              </div>
+
             </div>
           </div>
         </div>
