@@ -38,13 +38,11 @@ function getPositionRank(posteStr) {
   return POSITION_ORDER[code] ?? 99;
 }
 
-// Formatage du nom de la saison : Saison 1 = 2026/2027, Saison 2 = 2027/2028, etc.
 function getSeasonLabel(seasonNum) {
   const startYear = 2026 + (parseInt(seasonNum) - 1);
   return `Saison ${seasonNum} (${startYear}/${startYear + 1})`;
 }
 
-// Dispositifs tactiques
 const FORMATIONS = {
   '4-3-3': { name: '4-3-3 (Classique)', def: 4, mid: 3, att: 3 },
   '4-4-2': { name: '4-4-2 (Équilibré)', def: 4, mid: 4, att: 2 },
@@ -74,6 +72,7 @@ export default function App() {
   const [seasonFilter, setSeasonFilter] = useState(1);
   const [journeeFilter, setJourneeFilter] = useState(1);
   const [notification, setNotification] = useState('');
+  const [simulating, setSimulating] = useState(false);
 
   // Modales
   const [selectedMatch, setSelectedMatch] = useState(null);
@@ -187,7 +186,6 @@ export default function App() {
     const { data: dataPlayers } = await supabase.from('players').select('*, teams(nom, logo_url)');
     if (dataPlayers) setPlayers(dataPlayers);
 
-    // Récupération de tous les matchs
     let { data: userMatches } = await supabase
       .from('matches')
       .select('*, dom:teams!equipe_domicile_id(*), ext:teams!equipe_exterieur_id(*)')
@@ -196,7 +194,6 @@ export default function App() {
 
     if (userMatches) {
       setMatches(userMatches);
-      // Trouve la plus haute saison disponible
       const maxS = Math.max(...userMatches.map(m => m.saison || 1), 1);
       setSeasonFilter(prev => Math.max(prev, maxS));
     }
@@ -211,12 +208,238 @@ export default function App() {
     if (dataTransfers) setTransfers(dataTransfers);
   }
 
-  // --- ALGORITHME ROUND-ROBIN POUR UNE SAISON SPÉCIFIQUE ---
+  const getSortedTeamPlayers = (teamId) => {
+    if (!teamId) return [];
+    return playersWithStats
+      .filter(p => p.equipe_id === teamId)
+      .sort((a, b) => {
+        const rankA = getPositionRank(a.poste);
+        const rankB = getPositionRank(b.poste);
+        if (rankA !== rankB) return rankA - rankB;
+        return (b.general || 0) - (a.general || 0);
+      });
+  };
+
+  // Récupère les 11 titulaires effectifs d'une équipe
+  function getTeamStarters(team) {
+    if (!team) return [];
+    const all = getSortedTeamPlayers(team.id);
+    let savedIds = team.lineup_ids;
+    if (typeof savedIds === 'string') {
+      try { savedIds = JSON.parse(savedIds); } catch (e) { savedIds = []; }
+    }
+    if (Array.isArray(savedIds) && savedIds.length >= 11) {
+      const map = new Map(all.map(p => [p.id, p]));
+      const list = savedIds.map(id => map.get(id)).filter(Boolean);
+      if (list.length >= 11) return list.slice(0, 11);
+    }
+    return all.slice(0, 11);
+  }
+
+  // --- MOTEUR DE SIMULATION PROBABILISTE BASÉ SUR LE GÉN ---
+  function simulateGoals(lambda) {
+    // Loi de Poisson approximée
+    let L = Math.exp(-lambda);
+    let k = 0;
+    let p = 1;
+    do {
+      k++;
+      p *= Math.random();
+    } while (p > L);
+    return Math.max(0, k - 1);
+  }
+
+  function pickGoalScorer(starters) {
+    if (!starters || starters.length === 0) return null;
+    // Pondération des chances de marquer selon le poste
+    const weighted = starters.map(p => {
+      let w = 1;
+      const pos = p.poste || 'MC';
+      if (['BU', 'AT'].includes(pos)) w = 12;
+      else if (['AD', 'AG', 'SA'].includes(pos)) w = 9;
+      else if (['MOC', 'MD', 'MG'].includes(pos)) w = 5;
+      else if (['MC', 'MDC'].includes(pos)) w = 3;
+      else if (['DD', 'DG', 'DLD', 'DLG', 'DC'].includes(pos)) w = 1;
+      else if (pos === 'G') w = 0.05;
+
+      // Bonus lié au général
+      w *= (p.general || 75) / 75;
+      return { player: p, weight: w };
+    });
+
+    const totalWeight = weighted.reduce((acc, item) => acc + item.weight, 0);
+    let randomVal = Math.random() * totalWeight;
+    for (const item of weighted) {
+      if (randomVal < item.weight) return item.player;
+      randomVal -= item.weight;
+    }
+    return starters[0];
+  }
+
+  function pickAssister(starters, scorer) {
+    if (!starters || starters.length < 2) return null;
+    const candidates = starters.filter(p => p.id !== scorer?.id && p.poste !== 'G');
+    if (candidates.length === 0) return null;
+
+    const weighted = candidates.map(p => {
+      let w = 1;
+      const pos = p.poste || 'MC';
+      if (['MOC', 'MD', 'MG', 'MC'].includes(pos)) w = 10;
+      else if (['AD', 'AG', 'SA'].includes(pos)) w = 8;
+      else if (['DD', 'DG', 'DLD', 'DLG'].includes(pos)) w = 5;
+      else if (['BU', 'AT'].includes(pos)) w = 4;
+      else w = 2;
+      return { player: p, weight: w };
+    });
+
+    const totalWeight = weighted.reduce((acc, item) => acc + item.weight, 0);
+    let randomVal = Math.random() * totalWeight;
+    for (const item of weighted) {
+      if (randomVal < item.weight) return item.player;
+      randomVal -= item.weight;
+    }
+    return candidates[0];
+  }
+
+  async function handleSimulateJournee() {
+    const currentJourneeMatches = seasonMatches.filter(m => m.journee === parseInt(journeeFilter));
+    if (currentJourneeMatches.length === 0) {
+      showNotif("Aucun match à simuler pour cette journée.");
+      return;
+    }
+
+    const unplayedCount = currentJourneeMatches.filter(m => m.statut !== 'terminé').length;
+    const confirmText = unplayedCount === 0
+      ? `Tous les matchs de la Journée ${journeeFilter} sont déjà joués. Voulez-vous re-simuler cette journée ?`
+      : `Voulez-vous simuler automatiquement les ${currentJourneeMatches.length} matchs de la Journée ${journeeFilter} selon les notes GÉN des effectifs ?`;
+
+    if (!window.confirm(confirmText)) return;
+
+    setSimulating(true);
+
+    try {
+      const matchUpdates = [];
+      const newEvents = [];
+      const matchIdsToClear = currentJourneeMatches.map(m => m.id);
+
+      // 1. Supprimer les événements déjà enregistrés pour ces matchs
+      for (const mId of matchIdsToClear) {
+        await supabase.from('match_events').delete().eq('match_id', mId);
+      }
+
+      // 2. Simuler chaque match
+      for (const m of currentJourneeMatches) {
+        const domTeam = teams.find(t => t.id === m.equipe_domicile_id);
+        const extTeam = teams.find(t => t.id === m.equipe_exterieur_id);
+
+        const domStarters = getTeamStarters(domTeam);
+        const extStarters = getTeamStarters(extTeam);
+
+        const domGen = domStarters.length > 0 
+          ? domStarters.reduce((acc, p) => acc + (p.general || 75), 0) / domStarters.length 
+          : 75;
+        const extGen = extStarters.length > 0 
+          ? extStarters.reduce((acc, p) => acc + (p.general || 75), 0) / extStarters.length 
+          : 75;
+
+        // Écart de force + avantage domicile (+1.5 GEN virtuel)
+        const diff = (domGen + 1.5) - extGen;
+
+        // Espérance de buts (lambda)
+        const domLambda = Math.max(0.3, Math.min(4.5, 1.45 + (diff * 0.12)));
+        const extLambda = Math.max(0.2, Math.min(4.0, 1.10 - (diff * 0.10)));
+
+        const scoreDom = simulateGoals(domLambda);
+        const scoreExt = simulateGoals(extLambda);
+
+        matchUpdates.push({
+          id: m.id,
+          score_domicile: scoreDom,
+          score_exterieur: scoreExt,
+          statut: 'terminé'
+        });
+
+        // Génération des buteurs & passeurs Domicile
+        for (let i = 0; i < scoreDom; i++) {
+          const scorer = pickGoalScorer(domStarters);
+          if (scorer) {
+            newEvents.push({
+              match_id: m.id,
+              player_id: scorer.id,
+              type: 'but',
+              saison: m.saison || 1,
+              user_id: session.user.id
+            });
+            // 70% de chance d'avoir une passe décisive
+            if (Math.random() < 0.70) {
+              const assister = pickAssister(domStarters, scorer);
+              if (assister) {
+                newEvents.push({
+                  match_id: m.id,
+                  player_id: assister.id,
+                  type: 'passe',
+                  saison: m.saison || 1,
+                  user_id: session.user.id
+                });
+              }
+            }
+          }
+        }
+
+        // Génération des buteurs & passeurs Extérieur
+        for (let i = 0; i < scoreExt; i++) {
+          const scorer = pickGoalScorer(extStarters);
+          if (scorer) {
+            newEvents.push({
+              match_id: m.id,
+              player_id: scorer.id,
+              type: 'but',
+              saison: m.saison || 1,
+              user_id: session.user.id
+            });
+            if (Math.random() < 0.70) {
+              const assister = pickAssister(extStarters, scorer);
+              if (assister) {
+                newEvents.push({
+                  match_id: m.id,
+                  player_id: assister.id,
+                  type: 'passe',
+                  saison: m.saison || 1,
+                  user_id: session.user.id
+                });
+              }
+            }
+          }
+        }
+      }
+
+      // 3. Sauvegarder les scores des matchs
+      for (const u of matchUpdates) {
+        await supabase
+          .from('matches')
+          .update({ score_domicile: u.score_domicile, score_exterieur: u.score_exterieur, statut: 'terminé' })
+          .eq('id', u.id);
+      }
+
+      // 4. Insérer les événements
+      if (newEvents.length > 0) {
+        await supabase.from('match_events').insert(newEvents);
+      }
+
+      showNotif(`Journée ${journeeFilter} simulée avec succès !`);
+      await fetchData();
+    } catch (err) {
+      showNotif(`Erreur : ${err.message}`);
+    }
+
+    setSimulating(false);
+  }
+
+  // --- CALENDRIER ROUND ROBIN ---
   function buildRoundRobinFixtures(allTeams, userId, seasonNum) {
     if (!allTeams || allTeams.length < 2) return [];
 
     const list = [...allTeams].sort(() => Math.random() - 0.5);
-
     let n = list.length;
     if (n % 2 !== 0) {
       list.push(null);
@@ -227,7 +450,6 @@ export default function App() {
     const half = n / 2;
     const allerMatches = [];
 
-    // Phase ALLER
     for (let round = 0; round < numRounds; round++) {
       const journee = round + 1;
       for (let i = 0; i < half; i++) {
@@ -261,7 +483,6 @@ export default function App() {
       list.splice(0, list.length, fixed, ...rest);
     }
 
-    // Phase RETOUR
     const retourMatches = allerMatches.map(m => ({
       equipe_domicile_id: m.equipe_exterieur_id,
       equipe_exterieur_id: m.equipe_domicile_id,
@@ -274,7 +495,6 @@ export default function App() {
     return [...allerMatches, ...retourMatches];
   }
 
-  // Lancer une toute première saison ou une nouvelle saison suivante
   async function handleStartNewSeason(isNextSeason = false) {
     if (!teams || teams.length < 2) {
       showNotif("Il doit y avoir au moins 2 équipes créées pour lancer une saison.");
@@ -298,7 +518,6 @@ export default function App() {
 
     try {
       if (!isNextSeason) {
-        // Supprime seulement la saison courante si on regénère
         await supabase.from('match_events').delete().eq('user_id', session.user.id).eq('saison', targetSeason);
         await supabase.from('matches').delete().eq('user_id', session.user.id).eq('saison', targetSeason);
       }
@@ -321,16 +540,13 @@ export default function App() {
     setGeneratingSchedule(false);
   }
 
-  // --- FILTRAGE DES MATCHS ET STATS DE LA SAISON SÉLECTIONNÉE ---
   const seasonMatches = matches.filter(m => (m.saison || 1) === parseInt(seasonFilter));
   const seasonEvents = matchEvents.filter(e => (e.saison || 1) === parseInt(seasonFilter));
 
-  // Liste des numéros de saisons existantes pour le sélecteur
   const availableSeasons = Array.from(
     new Set([...matches.map(m => m.saison || 1), 1])
   ).sort((a, b) => a - b);
 
-  // Calcul du classement de la saison filtrée
   const classement = teams.map(team => {
     let points = 0;
     let joues = 0;
@@ -352,7 +568,6 @@ export default function App() {
     return { ...team, points, joues };
   }).sort((a, b) => b.points - a.points);
 
-  // Statistiques joueurs pour la saison filtrée
   const playersWithStats = players.map(p => {
     const buts = seasonEvents.filter(e => e.player_id === p.id && e.type === 'but').length;
     const passes = seasonEvents.filter(e => e.player_id === p.id && e.type === 'passe').length;
@@ -426,30 +641,23 @@ export default function App() {
     }]);
 
     showNotif(`Transfert de ${selectedPlayer.nom} effectué avec succès !`);
-    
     setTransferFromTeamId('');
     setTransferPlayerId('');
     setTransferToTeamId('');
     setTransferFee(10000000);
     setTransferLoading(false);
-
     fetchData();
   }
 
   async function handleDeletePlayer(playerId, playerNom) {
     if (!userProfile?.is_admin) return;
-
-    if (!window.confirm(`Êtes-vous sûr de vouloir supprimer définitivement le joueur "${playerNom}" ?`)) {
-      return;
-    }
+    if (!window.confirm(`Supprimer définitivement le joueur "${playerNom}" ?`)) return;
 
     await supabase.from('match_events').delete().eq('player_id', playerId);
-
     const { error } = await supabase.from('players').delete().eq('id', playerId);
 
-    if (error) {
-      showNotif(`Erreur lors de la suppression : ${error.message}`);
-    } else {
+    if (error) showNotif(`Erreur : ${error.message}`);
+    else {
       showNotif(`Le joueur "${playerNom}" a été supprimé.`);
       fetchData();
     }
@@ -472,30 +680,24 @@ export default function App() {
         })
         .eq('id', editingPlayer.id);
 
-      if (error) {
-        showNotif(`Erreur Supabase : ${error.message}`);
-      } else {
-        showNotif(`Joueur "${editingPlayer.nom}" mis à jour avec succès !`);
+      if (error) showNotif(`Erreur : ${error.message}`);
+      else {
+        showNotif(`Joueur "${editingPlayer.nom}" mis à jour !`);
         setEditingPlayer(null);
         await fetchData();
       }
     } catch (err) {
-      showNotif(`Erreur inattendue : ${err.message}`);
+      showNotif(`Erreur : ${err.message}`);
     }
   }
 
   async function handleUpdateTeamLogo(e) {
     e.preventDefault();
-    if (!editingTeamLogo || !newLogoFile) {
-      showNotif("Veuillez sélectionner un fichier image.");
-      return;
-    }
+    if (!editingTeamLogo || !newLogoFile) return;
 
     setLogoUpdating(true);
-    let logoUrl = '';
-
     try {
-      logoUrl = await new Promise((resolve, reject) => {
+      const logoUrl = await new Promise((resolve, reject) => {
         const reader = new FileReader();
         reader.onload = () => resolve(reader.result);
         reader.onerror = (err) => reject(err);
@@ -507,18 +709,9 @@ export default function App() {
         .update({ logo_url: logoUrl })
         .eq('id', editingTeamLogo.id);
 
-      if (error) {
-        showNotif(`Erreur : ${error.message}`);
-      } else {
-        showNotif(`Logo de l'équipe "${editingTeamLogo.nom}" modifié avec succès !`);
-        
-        if (selectedTeam && selectedTeam.id === editingTeamLogo.id) {
-          setSelectedTeam({ ...selectedTeam, logo_url: logoUrl });
-        }
-        if (selectedLineupTeam && selectedLineupTeam.id === editingTeamLogo.id) {
-          setSelectedLineupTeam({ ...selectedLineupTeam, logo_url: logoUrl });
-        }
-
+      if (error) showNotif(`Erreur : ${error.message}`);
+      else {
+        showNotif(`Logo de "${editingTeamLogo.nom}" modifié !`);
         setEditingTeamLogo(null);
         setNewLogoFile(null);
         fetchData();
@@ -531,14 +724,10 @@ export default function App() {
 
   async function openMatchDetails(match) {
     setSelectedMatch(match);
-    fetchSelectedMatchEvents(match.id);
-  }
-
-  async function fetchSelectedMatchEvents(matchId) {
     const { data } = await supabase
       .from('match_events')
       .select('*, players(nom)')
-      .eq('match_id', matchId)
+      .eq('match_id', match.id)
       .eq('user_id', session.user.id);
     if (data) setSelectedMatchEvents(data);
   }
@@ -558,7 +747,7 @@ export default function App() {
     if (error) showNotif(`Erreur : ${error.message}`);
     else {
       showNotif("Action enregistrée !");
-      fetchSelectedMatchEvents(selectedMatch.id);
+      openMatchDetails(selectedMatch);
       fetchData();
     }
   }
@@ -566,7 +755,7 @@ export default function App() {
   async function handleDeleteMatchEvent(event) {
     await supabase.from('match_events').delete().eq('id', event.id);
     showNotif("Événement retiré.");
-    fetchSelectedMatchEvents(selectedMatch.id);
+    openMatchDetails(selectedMatch);
     fetchData();
   }
 
@@ -589,7 +778,7 @@ export default function App() {
 
     if (error) showNotif(`Erreur : ${error.message}`);
     else {
-      showNotif("Score enregistré ! Le classement a été mis à jour.");
+      showNotif("Score enregistré !");
       fetchData();
     }
   }
@@ -609,7 +798,7 @@ export default function App() {
           reader.readAsDataURL(logoFile);
         });
       } catch (err) {
-        showNotif(`Erreur image : ${err.message}`);
+        showNotif(`Erreur : ${err.message}`);
         setUploading(false);
         return;
       }
@@ -656,21 +845,8 @@ export default function App() {
     return new Intl.NumberFormat('fr-FR', { style: 'currency', currency: 'EUR', maximumFractionDigits: 0 }).format(amount);
   }
 
-  const getSortedTeamPlayers = (teamId) => {
-    if (!teamId) return [];
-    return playersWithStats
-      .filter(p => p.equipe_id === teamId)
-      .sort((a, b) => {
-        const rankA = getPositionRank(a.poste);
-        const rankB = getPositionRank(b.poste);
-        if (rankA !== rankB) return rankA - rankB;
-        return (b.general || 0) - (a.general || 0);
-      });
-  };
-
   const teamRoster = selectedTeam ? getSortedTeamPlayers(selectedTeam.id) : [];
 
-  // --- OUVERTURE DE LA COMPOSITION ---
   function openTeamLineup(team) {
     const fullTeam = teams.find(t => t.id === team.id) || team;
     setSelectedLineupTeam(fullTeam);
@@ -763,9 +939,9 @@ export default function App() {
         .eq('id', selectedLineupTeam.id);
 
       if (error) {
-        showNotif(`Erreur Supabase : ${error.message}`);
+        showNotif(`Erreur : ${error.message}`);
       } else {
-        showNotif(`Composition de "${selectedLineupTeam.nom}" (${currentFormation}) sauvegardée pour toutes les journées !`);
+        showNotif(`Composition de "${selectedLineupTeam.nom}" (${currentFormation}) sauvegardée !`);
         setTeams(prev => prev.map(t => t.id === selectedLineupTeam.id ? { ...t, formation: currentFormation, lineup_ids: starterIds } : t));
         setSelectedLineupTeam(prev => ({ ...prev, formation: currentFormation, lineup_ids: starterIds }));
         await fetchData();
@@ -796,7 +972,7 @@ export default function App() {
       updatedPitch[selectedSlot.index] = updatedPitch[index];
       updatedPitch[index] = temp;
       setTeamLineupPlayers(updatedPitch);
-      showNotif("Postes permutés ! Cliquez sur 'Sauvegarder la Composition' pour enregistrer.");
+      showNotif("Postes permutés ! Sauvegardez pour enregistrer.");
     } else if (selectedSlot.type === 'bench' && type === 'pitch') {
       const benchP = updatedBench[selectedSlot.index];
       const pitchP = updatedPitch[index];
@@ -1033,7 +1209,6 @@ export default function App() {
                 <span className="text-xs text-slate-400">💡 Clique sur une équipe pour voir son effectif complet</span>
               </div>
 
-              {/* SÉLECTEUR DE SAISON */}
               <div className="flex items-center gap-2 bg-slate-950 p-1.5 rounded-xl border border-slate-800">
                 <span className="text-xs font-bold text-slate-400 pl-2">Saison :</span>
                 <select
@@ -1099,12 +1274,12 @@ export default function App() {
             <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
               <div>
                 <h2 className="text-xl font-bold text-white flex items-center gap-2">📅 Calendrier des Rencontres</h2>
-                <p className="text-xs text-slate-400 mt-1">💡 Clique sur le logo ou nom d'une équipe pour <strong>modifier son 11 de départ</strong></p>
+                <p className="text-xs text-slate-400 mt-1">💡 Clique sur une équipe pour voir son 11 ou simulez la journée selon la force de l'effectif</p>
               </div>
 
               <div className="flex flex-wrap items-center gap-3 w-full md:w-auto justify-between md:justify-end">
                 
-                {/* 1. SÉLECTEUR DE SAISON */}
+                {/* SÉLECTEUR DE SAISON */}
                 <div className="flex items-center gap-1.5 bg-slate-950 p-1.5 rounded-xl border border-slate-800">
                   <span className="text-[11px] font-bold text-slate-400 pl-1.5">Saison :</span>
                   <select
@@ -1121,7 +1296,7 @@ export default function App() {
                   </select>
                 </div>
 
-                {/* 2. SÉLECTEUR DE JOURNÉE */}
+                {/* SÉLECTEUR DE JOURNÉE */}
                 <div className="flex items-center gap-2 bg-slate-950 p-1.5 rounded-xl border border-slate-800">
                   <span className="text-xs text-slate-400 font-medium pl-2">Journée</span>
                   <input
@@ -1135,26 +1310,37 @@ export default function App() {
                   <span className="text-[11px] text-slate-500 pr-2">/ {maxJourneesCount}</span>
                 </div>
 
-                {/* 3. BOUTONS NOUVELLE SAISON */}
-                <div className="flex items-center gap-2">
+                {/* BOUTON DE SIMULATION DE LA JOURNÉE BASÉ SUR LE GÉNÉRAL */}
+                <button
+                  type="button"
+                  onClick={handleSimulateJournee}
+                  disabled={simulating || seasonMatches.length === 0}
+                  className="bg-emerald-600 hover:bg-emerald-500 active:scale-95 text-white font-extrabold text-xs px-3.5 py-2 rounded-xl transition-all shadow-md shadow-emerald-600/30 flex items-center gap-1.5 cursor-pointer"
+                  title="Simule tous les scores de la journée en calculant les probabilités selon le GÉN de chaque effectif"
+                >
+                  <span>⚡</span> {simulating ? 'Simulation...' : 'Simuler la Journée'}
+                </button>
+
+                {/* BOUTONS SAISONS */}
+                <div className="flex items-center gap-1.5">
                   <button
                     type="button"
                     onClick={() => handleStartNewSeason(false)}
                     disabled={generatingSchedule || teams.length < 2}
-                    className="bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700 text-xs font-bold px-3 py-2 rounded-xl transition-all cursor-pointer"
-                    title="Regénère le calendrier pour la saison actuelle"
+                    className="bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold px-2.5 py-2 rounded-xl transition-all cursor-pointer"
+                    title="Regénérer le calendrier de cette saison"
                   >
-                    🎲 Regénérer
+                    🎲
                   </button>
 
                   <button
                     type="button"
                     onClick={() => handleStartNewSeason(true)}
                     disabled={generatingSchedule || teams.length < 2}
-                    className="bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold px-3.5 py-2 rounded-xl transition-all shadow-md shadow-indigo-600/30 flex items-center gap-1.5 cursor-pointer active:scale-95"
-                    title="Crée la saison suivante (ex: 2027/2028)"
+                    className="bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold px-3 py-2 rounded-xl transition-all shadow-md flex items-center gap-1 cursor-pointer active:scale-95"
+                    title="Lancer la saison suivante"
                   >
-                    <span>🚀</span> {generatingSchedule ? 'Création...' : 'Saison Suivante'}
+                    <span>🚀</span> Saison +1
                   </button>
                 </div>
               </div>
@@ -1271,7 +1457,6 @@ export default function App() {
                 <p className="text-xs text-slate-400">Performances enregistrées sur la saison sélectionnée</p>
               </div>
 
-              {/* SÉLECTEUR DE SAISON */}
               <div className="flex items-center gap-2 bg-slate-950 p-1.5 rounded-xl border border-slate-800">
                 <span className="text-xs font-bold text-slate-400 pl-2">Saison :</span>
                 <select
@@ -1506,7 +1691,7 @@ export default function App() {
           </div>
         )}
 
-        {/* 5. ADMIN (CRÉATEUR DE LIGUE) */}
+        {/* 5. ADMIN */}
         {tab === 'admin' && userProfile?.is_admin && (
           <div className="space-y-6">
             <h2 className="text-2xl font-extrabold text-white">⚙️ Panneau d'Administration (Créateur de Ligue)</h2>
@@ -1687,7 +1872,7 @@ export default function App() {
         )}
       </main>
 
-      {/* --- MODALE 1 : TERRAIN TACTIQUE INTERACTIF AVEC BOUTON SAUVEGARDER --- */}
+      {/* --- MODALE 1 : TERRAIN TACTIQUE INTERACTIF --- */}
       {selectedLineupTeam && (
         <div className="fixed inset-0 bg-black/85 backdrop-blur-md z-50 flex items-center justify-center p-2 sm:p-4">
           <div className="bg-slate-900 border border-slate-800 rounded-3xl max-w-lg w-full p-4 sm:p-6 shadow-2xl relative max-h-[96vh] flex flex-col overflow-y-auto">
@@ -1699,7 +1884,6 @@ export default function App() {
               ✕
             </button>
 
-            {/* Header du club */}
             <div className="flex items-center justify-between pb-3 border-b border-slate-800 mb-3">
               <div className="flex items-center gap-3">
                 {selectedLineupTeam.logo_url ? (
@@ -1721,7 +1905,6 @@ export default function App() {
               </div>
             </div>
 
-            {/* SÉLECTEUR DE COMPOSITION TACTIQUE */}
             <div className="mb-3 flex items-center justify-between bg-slate-950 p-2.5 rounded-xl border border-slate-800">
               <span className="text-xs font-extrabold text-indigo-400 uppercase tracking-wider flex items-center gap-1">
                 <span>📋</span> Dispositif
@@ -1737,23 +1920,17 @@ export default function App() {
               </select>
             </div>
 
-            {/* TERRAIN DE FOOTBALL VERT */}
             <div className="relative w-full rounded-2xl overflow-hidden shadow-2xl border border-emerald-600/40 bg-gradient-to-b from-emerald-700 via-emerald-600 to-emerald-800 p-4 min-h-[470px] flex flex-col justify-between select-none">
-              
-              {/* Lignes du terrain */}
               <div className="absolute inset-2 border-2 border-white/25 rounded-xl pointer-events-none"></div>
               <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-28 h-28 border-2 border-white/25 rounded-full pointer-events-none"></div>
               <div className="absolute top-1/2 left-0 right-0 h-0.5 bg-white/25 pointer-events-none"></div>
               <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-2 h-2 bg-white/40 rounded-full pointer-events-none"></div>
 
-              {/* Surface gardien (bas) */}
               <div className="absolute bottom-2 left-1/2 -translate-x-1/2 w-48 h-20 border-2 border-b-0 border-white/25 pointer-events-none"></div>
               <div className="absolute bottom-2 left-1/2 -translate-x-1/2 w-24 h-8 border-2 border-b-0 border-white/25 pointer-events-none"></div>
-
-              {/* Surface adverse (haut) */}
               <div className="absolute top-2 left-1/2 -translate-x-1/2 w-48 h-20 border-2 border-t-0 border-white/25 pointer-events-none"></div>
 
-              {/* 1. LIGNE D'ATTAQUE */}
+              {/* ATTAQUE */}
               <div className="relative z-10 flex justify-around items-center pt-2">
                 {pitchATT.map((p, idx) => (
                   <PitchPlayerSlot 
@@ -1764,7 +1941,7 @@ export default function App() {
                 ))}
               </div>
 
-              {/* 2. LIGNE DE MILIEU */}
+              {/* MILIEU */}
               <div className="relative z-10 flex justify-around items-center py-2">
                 {pitchMID.map((p, idx) => (
                   <PitchPlayerSlot 
@@ -1775,7 +1952,7 @@ export default function App() {
                 ))}
               </div>
 
-              {/* 3. LIGNE DE DÉFENSE */}
+              {/* DÉFENSE */}
               <div className="relative z-10 flex justify-around items-center py-2">
                 {pitchDEF.map((p, idx) => (
                   <PitchPlayerSlot 
@@ -1786,7 +1963,7 @@ export default function App() {
                 ))}
               </div>
 
-              {/* 4. GARDIEN DE BUT */}
+              {/* GARDIEN */}
               <div className="relative z-10 flex justify-center items-center pb-2">
                 {pitchGK.map((p) => (
                   <PitchPlayerSlot 
@@ -1798,7 +1975,6 @@ export default function App() {
               </div>
             </div>
 
-            {/* BOUTON DE SAUVEGARDE DE LA COMPOSITION */}
             <div className="mt-3">
               <button
                 type="button"
@@ -1810,7 +1986,7 @@ export default function App() {
               </button>
             </div>
 
-            {/* BANC DES REMPLAÇANTS */}
+            {/* BANC */}
             <div className="mt-4 bg-slate-950 p-3 rounded-2xl border border-slate-800">
               <div className="flex items-center justify-between mb-2">
                 <h4 className="text-[11px] font-extrabold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
@@ -1963,7 +2139,7 @@ export default function App() {
         </div>
       )}
 
-      {/* --- MODALE NOUVELLE : MODIFIER LE LOGO D'UNE ÉQUIPE (ADMIN SEULEMENT) --- */}
+      {/* --- MODALE LOGO --- */}
       {editingTeamLogo && userProfile?.is_admin && (
         <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-md w-full p-6 shadow-2xl relative">
@@ -2022,7 +2198,7 @@ export default function App() {
         </div>
       )}
 
-      {/* --- MODALE 3 : ÉDITION DE JOUEUR (ADMIN SEULEMENT) --- */}
+      {/* --- MODALE ÉDITION DE JOUEUR --- */}
       {editingPlayer && userProfile?.is_admin && (
         <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-md w-full p-6 shadow-2xl relative">
@@ -2096,7 +2272,7 @@ export default function App() {
                     max="99"
                     value={editingPlayer.general !== undefined && editingPlayer.general !== null ? editingPlayer.general : 75}
                     onChange={(e) => setEditingPlayer({ ...editingPlayer, general: e.target.value })}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-indigo-500"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm text-white"
                   />
                 </div>
                 <div>
@@ -2107,7 +2283,7 @@ export default function App() {
                     max="45"
                     value={editingPlayer.age !== undefined && editingPlayer.age !== null ? editingPlayer.age : 22}
                     onChange={(e) => setEditingPlayer({ ...editingPlayer, age: e.target.value })}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-indigo-500"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm text-white"
                   />
                 </div>
                 <div>
@@ -2117,7 +2293,7 @@ export default function App() {
                     step="500000"
                     value={editingPlayer.valeur_marchande !== undefined && editingPlayer.valeur_marchande !== null ? editingPlayer.valeur_marchande : 10000000}
                     onChange={(e) => setEditingPlayer({ ...editingPlayer, valeur_marchande: e.target.value })}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-indigo-500"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm text-white"
                   />
                 </div>
               </div>
@@ -2133,7 +2309,7 @@ export default function App() {
         </div>
       )}
 
-      {/* --- MODALE 4 : FEUILLE DE MATCH --- */}
+      {/* --- MODALE FEUILLE DE MATCH --- */}
       {selectedMatch && (
         <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-lg w-full p-6 shadow-2xl relative">
