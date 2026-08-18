@@ -80,6 +80,9 @@ export default function App() {
   const [selectedTeam, setSelectedTeam] = useState(null);
   const [editingPlayer, setEditingPlayer] = useState(null);
 
+  // MODALE ÉVOLUTIONS DES JOUEURS (TOUTES LES 4 JOURNÉES)
+  const [evolutionReport, setEvolutionReport] = useState(null);
+
   // MODALE LOGO
   const [editingTeamLogo, setEditingTeamLogo] = useState(null);
   const [newLogoFile, setNewLogoFile] = useState(null);
@@ -141,7 +144,7 @@ export default function App() {
 
   function showNotif(msg) {
     setNotification(msg);
-    setTimeout(() => setNotification(''), 4000);
+    setTimeout(() => setNotification(''), 4500);
   }
 
   async function fetchUserProfile(userId) {
@@ -231,6 +234,152 @@ export default function App() {
       if (list.length >= 11) return list.slice(0, 11);
     }
     return all.slice(0, 11);
+  }
+
+  // --- MOTEUR D'ÉVOLUTION DYNAMIQUE DES GÉNÉRAUX (TOUTES LES 4 JOURNÉES) ---
+  async function evaluateAndApplyPlayerEvolutions(targetJournee, currentSeasonNum) {
+    // Calculer sur le bloc des 4 dernières journées (ex: 1..4, 5..8, 9..12)
+    const startJournee = targetJournee - 3;
+    const endJournee = targetJournee;
+
+    const blockMatches = matches.filter(
+      m => (m.saison || 1) === currentSeasonNum && m.journee >= startJournee && m.journee <= endJournee && m.statut === 'terminé'
+    );
+    const blockMatchIds = new Set(blockMatches.map(m => m.id));
+
+    const blockEvents = matchEvents.filter(
+      e => (e.saison || 1) === currentSeasonNum && blockMatchIds.has(e.match_id)
+    );
+
+    const changedPlayers = [];
+    const playerUpdates = [];
+
+    // Pour chaque équipe, calculer son bilan (victoires, buts encaissés)
+    const teamRecords = {};
+    teams.forEach(t => {
+      teamRecords[t.id] = { wins: 0, losses: 0, draws: 0, goalsConceded: 0, cleanSheets: 0, matchCount: 0 };
+    });
+
+    blockMatches.forEach(m => {
+      if (teamRecords[m.equipe_domicile_id]) {
+        teamRecords[m.equipe_domicile_id].matchCount++;
+        teamRecords[m.equipe_domicile_id].goalsConceded += (m.score_exterieur || 0);
+        if (m.score_exterieur === 0) teamRecords[m.equipe_domicile_id].cleanSheets++;
+        if (m.score_domicile > m.score_exterieur) teamRecords[m.equipe_domicile_id].wins++;
+        else if (m.score_domicile < m.score_exterieur) teamRecords[m.equipe_domicile_id].losses++;
+        else teamRecords[m.equipe_domicile_id].draws++;
+      }
+      if (teamRecords[m.equipe_exterieur_id]) {
+        teamRecords[m.equipe_exterieur_id].matchCount++;
+        teamRecords[m.equipe_exterieur_id].goalsConceded += (m.score_domicile || 0);
+        if (m.score_domicile === 0) teamRecords[m.equipe_exterieur_id].cleanSheets++;
+        if (m.score_exterieur > m.score_domicile) teamRecords[m.equipe_exterieur_id].wins++;
+        else if (m.score_exterieur < m.score_domicile) teamRecords[m.equipe_exterieur_id].losses++;
+        else teamRecords[m.equipe_exterieur_id].draws++;
+      }
+    });
+
+    for (const player of players) {
+      const currentGen = player.general || 75;
+      const pos = player.poste || 'MC';
+      const pEvents = blockEvents.filter(e => e.player_id === player.id);
+      const buts = pEvents.filter(e => e.type === 'but').length;
+      const passes = pEvents.filter(e => e.type === 'passe').length;
+      const redCards = pEvents.filter(e => e.type === 'carton_rouge').length;
+      const yellowCards = pEvents.filter(e => e.type === 'carton_jaune').length;
+
+      const tRec = teamRecords[player.equipe_id] || { wins: 0, losses: 0, goalsConceded: 4, cleanSheets: 0, matchCount: 4 };
+
+      // 1. Score de performance sur 4 matchs
+      let perfScore = 0;
+
+      if (['BU', 'AT', 'AD', 'AG', 'SA'].includes(pos)) {
+        perfScore += buts * 3.5;
+        perfScore += passes * 2.0;
+        perfScore += (tRec.wins * 0.8) - (tRec.losses * 0.8);
+      } else if (['MOC', 'MC', 'MD', 'MG'].includes(pos)) {
+        perfScore += buts * 3.0;
+        perfScore += passes * 2.8;
+        perfScore += (tRec.wins * 1.0) - (tRec.losses * 0.8);
+      } else if (['MDC', 'DC', 'DD', 'DG', 'DLD', 'DLG'].includes(pos)) {
+        perfScore += buts * 4.0;
+        perfScore += passes * 2.0;
+        perfScore += (tRec.cleanSheets * 2.0);
+        perfScore += (tRec.wins * 0.8);
+        perfScore -= (tRec.goalsConceded * 0.5);
+      } else if (pos === 'G') {
+        perfScore += (tRec.cleanSheets * 3.0);
+        perfScore += (tRec.wins * 1.0);
+        perfScore -= (tRec.goalsConceded * 0.7);
+      }
+
+      // Malus discipline
+      perfScore -= (redCards * 3.0) + (yellowCards * 0.5);
+
+      // 2. Détermination de la variation en fonction du niveau actuel (Gros GÉN plus exigeants)
+      let delta = 0;
+
+      if (currentGen >= 88) {
+        // SUPERSTARS (88+) : Ne peut prendre au max que +1 et seulement en cas de score exceptionnel
+        if (perfScore >= 9.0) delta = +1;
+        else if (perfScore <= -2.5) delta = -2;
+        else if (perfScore <= 0.5) delta = -1;
+      } else if (currentGen >= 82) {
+        // TRÈS BONS JOUEURS (82-87) : Exigence forte
+        if (perfScore >= 11.0) delta = +2;
+        else if (perfScore >= 6.5) delta = +1;
+        else if (perfScore <= -3.5) delta = -2;
+        else if (perfScore <= 0.0) delta = -1;
+      } else if (currentGen >= 74) {
+        // JOUEURS MOYENS (74-81) : Progression standard
+        if (perfScore >= 9.5) delta = +2;
+        else if (perfScore >= 4.5) delta = +1;
+        else if (perfScore <= -3.0) delta = -2;
+        else if (perfScore <= -0.5) delta = -1;
+      } else {
+        // JEUNES / BAS GÉN (< 74) : Forte marge de progression (peut faire +3)
+        if (perfScore >= 9.0) delta = +3;
+        else if (perfScore >= 5.5) delta = +2;
+        else if (perfScore >= 2.5) delta = +1;
+        else if (perfScore <= -4.0) delta = -2;
+        else if (perfScore <= -1.5) delta = -1;
+      }
+
+      // Limites absolues [-3, +3]
+      delta = Math.max(-3, Math.min(3, delta));
+
+      if (delta !== 0) {
+        const newGen = Math.max(45, Math.min(99, currentGen + delta));
+        playerUpdates.push({ id: player.id, general: newGen });
+        changedPlayers.push({
+          id: player.id,
+          nom: player.nom,
+          teamName: player.teams?.nom || 'Club',
+          poste: player.poste,
+          oldGen: currentGen,
+          newGen: newGen,
+          delta: delta,
+          buts: buts,
+          passes: passes
+        });
+      }
+    }
+
+    // Sauvegarde des nouveaux généraux dans Supabase
+    if (playerUpdates.length > 0) {
+      for (const upd of playerUpdates) {
+        await supabase.from('players').update({ general: upd.general }).eq('id', upd.id);
+      }
+    }
+
+    // Affichage du rapport si des évolutions ont eu lieu
+    if (changedPlayers.length > 0) {
+      setEvolutionReport({
+        journeesLabel: `Journées ${startJournee} à ${endJournee}`,
+        seasonLabel: getSeasonLabel(currentSeasonNum),
+        players: changedPlayers.sort((a, b) => b.delta - a.delta)
+      });
+    }
   }
 
   // --- MOTEUR PROBABILISTE DE BUTS / PASSES / CARTONS ---
@@ -431,7 +580,7 @@ export default function App() {
           }
         }
 
-        // Cartons Jaunes / Rouges
+        // Cartons
         const numYellowDom = Math.random() < 0.65 ? Math.floor(Math.random() * 3) + 1 : 0;
         for (let y = 0; y < numYellowDom; y++) {
           const carded = pickCardPlayer(domStarters);
@@ -475,6 +624,13 @@ export default function App() {
 
       showNotif(`Journée ${journeeFilter} simulée avec succès !`);
       await fetchData();
+
+      // VÉRIFICATION DU PALIER DE 4 JOURNÉES POUR L'ÉVOLUTION DES JOUEURS (J4, J8, J12, J16, etc.)
+      const currentJ = parseInt(journeeFilter, 10);
+      if (currentJ % 4 === 0) {
+        await evaluateAndApplyPlayerEvolutions(currentJ, parseInt(seasonFilter, 10));
+        await fetchData();
+      }
     } catch (err) {
       showNotif(`Erreur : ${err.message}`);
     }
@@ -607,7 +763,7 @@ export default function App() {
         } else if (m.equipe_exterieur_id === team.id) {
           joues++;
           if (m.score_exterieur > m.score_domicile) points += 3;
-          else if (m.score_domicile === m.score_exterieur) points += 1;
+          else if (m.score_exterieur === m.score_domicile) points += 1;
         }
       }
     });
@@ -835,7 +991,18 @@ export default function App() {
     if (error) showNotif(`Erreur : ${error.message}`);
     else {
       showNotif("Score et événements enregistrés !");
-      fetchData();
+      await fetchData();
+
+      // Vérification palier 4 journées
+      const currentJ = match.journee;
+      if (currentJ % 4 === 0) {
+        const otherMatchesInJ = seasonMatches.filter(m => m.journee === currentJ && m.id !== match.id);
+        const allCompleted = otherMatchesInJ.every(m => m.statut === 'terminé');
+        if (allCompleted) {
+          await evaluateAndApplyPlayerEvolutions(currentJ, parseInt(seasonFilter, 10));
+          await fetchData();
+        }
+      }
     }
   }
 
@@ -1114,7 +1281,7 @@ export default function App() {
     );
   };
 
-  // Séparation des événements pour la modale scindée (Domicile / Extérieur)
+  // Séparation des événements pour la modale scindée
   const homeEvents = selectedMatch ? selectedMatchEvents.filter(ev => ev.players?.equipe_id === selectedMatch.equipe_domicile_id) : [];
   const awayEvents = selectedMatch ? selectedMatchEvents.filter(ev => ev.players?.equipe_id === selectedMatch.equipe_exterieur_id) : [];
 
@@ -1265,7 +1432,6 @@ export default function App() {
                 <span className="text-xs text-slate-400">💡 Clique sur une équipe pour voir son effectif complet</span>
               </div>
 
-              {/* SÉLECTEUR DE SAISON */}
               <div className="flex items-center gap-2 bg-slate-950 p-1.5 rounded-xl border border-slate-800">
                 <span className="text-xs font-bold text-slate-400 pl-2">Saison :</span>
                 <select
@@ -1331,7 +1497,7 @@ export default function App() {
             <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
               <div>
                 <h2 className="text-xl font-bold text-white flex items-center gap-2">📅 Calendrier des Rencontres</h2>
-                <p className="text-xs text-slate-400 mt-1">💡 Clique sur le bouton <strong>VS</strong> au milieu d'un match pour consulter les buteurs, passeurs et cartons de chaque équipe</p>
+                <p className="text-xs text-slate-400 mt-1">💡 Les GÉN des joueurs évoluent automatiquement toutes les 4 journées selon leurs performances !</p>
               </div>
 
               <div className="flex flex-wrap items-center gap-3 w-full md:w-auto justify-between md:justify-end">
@@ -1366,7 +1532,7 @@ export default function App() {
                   <span className="text-[11px] text-slate-500 pr-2">/ {maxJourneesCount}</span>
                 </div>
 
-                {/* BOUTON DE SIMULATION DE LA JOURNÉE BASÉ SUR LE GÉNÉRAL */}
+                {/* BOUTON DE SIMULATION */}
                 <button
                   type="button"
                   onClick={handleSimulateJournee}
@@ -1440,7 +1606,7 @@ export default function App() {
                           </span>
                         </div>
 
-                        {/* CENTRE : INPUTS ET BOUTON VS FIXE CLIQUABLE (SCORE PROPRE SANS ÉCRASEMENT) */}
+                        {/* CENTRE : INPUTS ET BOUTON VS FIXE CLIQUABLE */}
                         <div className="flex items-center justify-center gap-2 sm:gap-3 shrink-0 my-2 sm:my-0">
                           <input
                             type="number"
@@ -1747,7 +1913,7 @@ export default function App() {
           </div>
         )}
 
-        {/* 5. ADMIN (CRÉATEUR DE LIGUE) */}
+        {/* 5. ADMIN */}
         {tab === 'admin' && userProfile?.is_admin && (
           <div className="space-y-6">
             <h2 className="text-2xl font-extrabold text-white">⚙️ Panneau d'Administration (Créateur de Ligue)</h2>
@@ -1928,7 +2094,73 @@ export default function App() {
         )}
       </main>
 
-      {/* --- MODALE 1 : TERRAIN TACTIQUE INTERACTIF AVEC BOUTON SAUVEGARDER --- */}
+      {/* --- MODALE NOUVELLE : RAPPORT D'ÉVOLUTION DES JOUEURS (TOUTES LES 4 JOURNÉES) --- */}
+      {evolutionReport && (
+        <div className="fixed inset-0 bg-black/85 backdrop-blur-md z-50 flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-3xl max-w-xl w-full p-6 shadow-2xl relative max-h-[90vh] flex flex-col">
+            <button
+              type="button"
+              onClick={() => setEvolutionReport(null)}
+              className="absolute top-4 right-4 text-slate-400 hover:text-white font-bold text-xl cursor-pointer"
+            >
+              ✕
+            </button>
+
+            <div className="text-center mb-4 pb-3 border-b border-slate-800">
+              <div className="inline-block bg-indigo-600 text-white p-2 rounded-xl text-lg mb-2">📈</div>
+              <h3 className="text-lg font-black text-white tracking-tight">Rapport d'Évolution des Joueurs</h3>
+              <p className="text-xs text-slate-400 mt-0.5">
+                Bilan des performances sur les <strong className="text-indigo-400">{evolutionReport.journeesLabel}</strong> ({evolutionReport.seasonLabel})
+              </p>
+            </div>
+
+            <div className="overflow-y-auto space-y-2.5 max-h-96 pr-1">
+              {evolutionReport.players.map((p) => {
+                const isPositive = p.delta > 0;
+                return (
+                  <div key={p.id} className="bg-slate-950/80 border border-slate-800/80 p-3 rounded-2xl flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <span className="text-xs font-bold px-2 py-1 rounded bg-slate-900 text-indigo-400 border border-slate-800">
+                        {p.poste || 'MC'}
+                      </span>
+                      <div>
+                        <p className="text-sm font-bold text-white">{p.nom}</p>
+                        <p className="text-[11px] text-slate-400">
+                          {p.teamName} {p.buts > 0 && `• ⚽ ${p.buts}`} {p.passes > 0 && `• 🎯 ${p.passes}`}
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-3">
+                      <div className="text-right">
+                        <span className="text-xs text-slate-500 font-mono line-through mr-1.5">{p.oldGen}</span>
+                        <span className="text-base font-black text-white font-mono">{p.newGen}</span>
+                      </div>
+                      <span className={`text-xs font-black font-mono px-2.5 py-1 rounded-xl border ${
+                        isPositive 
+                          ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30' 
+                          : 'bg-rose-500/20 text-rose-400 border-rose-500/30'
+                      }`}>
+                        {isPositive ? `+${p.delta}` : p.delta}
+                      </span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setEvolutionReport(null)}
+              className="mt-5 w-full bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-2.5 rounded-xl text-sm transition-all shadow-lg shadow-indigo-600/30 cursor-pointer"
+            >
+              Compris ! Continuer la saison
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* --- MODALE 1 : TERRAIN TACTIQUE INTERACTIF --- */}
       {selectedLineupTeam && (
         <div className="fixed inset-0 bg-black/85 backdrop-blur-md z-50 flex items-center justify-center p-2 sm:p-4">
           <div className="bg-slate-900 border border-slate-800 rounded-3xl max-w-lg w-full p-4 sm:p-6 shadow-2xl relative max-h-[96vh] flex flex-col overflow-y-auto">
