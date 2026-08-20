@@ -97,7 +97,6 @@ export default function App() {
   const [notification, setNotification] = useState('');
   const [simulating, setSimulating] = useState(false);
 
-  // Suivi du cumul d'évolution de chaque joueur par saison { [season]: { [playerId]: totalDelta } }
   const [seasonEvolutions, setSeasonEvolutions] = useState({});
 
   // Modales
@@ -288,7 +287,6 @@ export default function App() {
     const usedPlayerIds = new Set();
 
     for (const player of availablePool) {
-      // MODIFICATION : 3 transferts max par journée (au lieu de 5)
       if (completedTransfers.length >= 3) break;
       if (usedPlayerIds.has(player.id)) continue;
 
@@ -372,7 +370,7 @@ export default function App() {
     }
   }
 
-  // --- MOTEUR D'ÉVOLUTION DYNAMIQUE (MAX 3 JOUEURS PAR ÉQUIPE & CAP +3/-3 PAR SAISON) ---
+  // --- MOTEUR D'ÉVOLUTION DYNAMIQUE ---
   async function evaluateAndApplyPlayerEvolutions(targetJournee, currentSeasonNum) {
     const startJournee = targetJournee - 3;
     const endJournee = targetJournee;
@@ -410,7 +408,6 @@ export default function App() {
       }
     });
 
-    // 1. Calculer le score de performance de chaque joueur
     const currentSeasonMap = { ...(seasonEvolutions[currentSeasonNum] || {}) };
     const candidates = [];
 
@@ -478,7 +475,6 @@ export default function App() {
 
       delta = Math.max(-3, Math.min(3, delta));
 
-      // Vérifier la limite globale de la saison (-3 à +3 au cumul)
       const currentCumulative = currentSeasonMap[player.id] || 0;
       let allowedDelta = delta;
 
@@ -504,12 +500,10 @@ export default function App() {
       }
     }
 
-    // 2. Limiter à maximum 3 joueurs par équipe ayant eu le plus d'impact
     const changedPlayers = [];
     const playerUpdates = [];
     const countByTeam = {};
 
-    // Trier par intensité de performance
     candidates.sort((a, b) => b.absImpact - a.absImpact);
 
     for (const c of candidates) {
@@ -522,7 +516,6 @@ export default function App() {
         const newGen = Math.max(45, Math.min(99, c.currentGen + c.delta));
         const newVal = calculateMarketValue(newGen, c.age);
 
-        // Mettre à jour le cumul saisonnier
         currentSeasonMap[c.player.id] = c.currentCumulative + c.delta;
 
         playerUpdates.push({ id: c.player.id, general: newGen, valeur_marchande: newVal });
@@ -543,7 +536,6 @@ export default function App() {
       }
     }
 
-    // Sauvegarder le cumul de la saison
     setSeasonEvolutions(prev => ({ ...prev, [currentSeasonNum]: currentSeasonMap }));
 
     if (playerUpdates.length > 0) {
@@ -655,7 +647,6 @@ export default function App() {
 
     const matchEventsList = [];
 
-    // Remplacements Domicile
     const domSubsCount = Math.min(domBench.length, Math.floor(Math.random() * 4) + 1);
     const domSubstitutions = [];
     const availableDomBench = [...domBench];
@@ -684,7 +675,6 @@ export default function App() {
       });
     }
 
-    // Remplacements Extérieur
     const extSubsCount = Math.min(extBench.length, Math.floor(Math.random() * 4) + 1);
     const extSubstitutions = [];
     const availableExtBench = [...extBench];
@@ -724,7 +714,6 @@ export default function App() {
       return active;
     };
 
-    // Buts Domicile
     for (let i = 0; i < scoreDom; i++) {
       const minute = Math.floor(Math.random() * 90) + 1;
       const activeAtMin = getActivePlayersAtMinute(domStarters, domSubstitutions, minute);
@@ -754,7 +743,6 @@ export default function App() {
       }
     }
 
-    // Buts Extérieur
     for (let i = 0; i < scoreExt; i++) {
       const minute = Math.floor(Math.random() * 90) + 1;
       const activeAtMin = getActivePlayersAtMinute(extStarters, extSubstitutions, minute);
@@ -784,7 +772,6 @@ export default function App() {
       }
     }
 
-    // Cartons Domicile
     const numYellowDom = Math.random() < 0.65 ? Math.floor(Math.random() * 3) + 1 : 0;
     for (let y = 0; y < numYellowDom; y++) {
       const minute = Math.floor(Math.random() * 88) + 2;
@@ -802,7 +789,6 @@ export default function App() {
       }
     }
 
-    // Cartons Extérieur
     const numYellowExt = Math.random() < 0.65 ? Math.floor(Math.random() * 3) + 1 : 0;
     for (let y = 0; y < numYellowExt; y++) {
       const minute = Math.floor(Math.random() * 88) + 2;
@@ -1016,10 +1002,7 @@ export default function App() {
         showNotif(!isNextSeason ? `${seasonLabel} réinitialisée avec succès !` : `${seasonLabel} lancée avec succès !`);
         setSeasonFilter(targetSeason);
         setJourneeFilter(1);
-        
-        // Réinitialiser le compteur de delta pour cette saison
         setSeasonEvolutions(prev => ({ ...prev, [targetSeason]: {} }));
-
         await fetchData();
       }
     } catch (err) {
@@ -1194,6 +1177,7 @@ export default function App() {
     }
   }
 
+  // --- RÉINITIALISER TOUS LES TRANSFERTS (CORRIGÉ SANS RECHARGEMENT FANTÔME) ---
   async function handleResetAllTransfers() {
     if (transfers.length === 0) {
       showNotif("Aucun transfert à réinitialiser.");
@@ -1205,35 +1189,42 @@ export default function App() {
     }
 
     try {
-      const { data: allUserTransfers } = await supabase
+      // 1. Récupérer TOUS les transferts de la base
+      const { data: allTransfers, error: fetchErr } = await supabase
         .from('transfers')
         .select('*')
-        .eq('user_id', session.user.id)
         .order('created_at', { ascending: true });
 
-      if (allUserTransfers && allUserTransfers.length > 0) {
+      if (fetchErr) throw fetchErr;
+
+      if (allTransfers && allTransfers.length > 0) {
+        // Identifier le tout premier club d'origine de chaque joueur
         const initialClubByPlayer = {};
-        allUserTransfers.forEach(t => {
+        allTransfers.forEach(t => {
           if (!initialClubByPlayer[t.player_id]) {
             initialClubByPlayer[t.player_id] = t.old_team_id;
           }
         });
 
+        // Remettre chaque joueur dans son club de départ
         for (const [playerId, originalTeamId] of Object.entries(initialClubByPlayer)) {
           await supabase
             .from('players')
             .update({ equipe_id: originalTeamId })
             .eq('id', playerId);
         }
+
+        // 2. Supprimer TOUS les transferts par leurs IDs directs
+        const idsToDelete = allTransfers.map(t => t.id);
+        const { error: deleteError } = await supabase
+          .from('transfers')
+          .delete()
+          .in('id', idsToDelete);
+
+        if (deleteError) throw deleteError;
       }
 
-      const { error: deleteError } = await supabase
-        .from('transfers')
-        .delete()
-        .eq('user_id', session.user.id);
-
-      if (deleteError) throw deleteError;
-
+      // 3. Vider immédiatement l'affichage local
       setTransfers([]);
       showNotif("Tous les transferts ont été réinitialisés et l'historique a été effacé !");
       await fetchData();
