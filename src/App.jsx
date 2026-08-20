@@ -97,7 +97,6 @@ export default function App() {
   const [notification, setNotification] = useState('');
   const [simulating, setSimulating] = useState(false);
 
-  // Suivi du cumul d'évolution par saison
   const [seasonEvolutions, setSeasonEvolutions] = useState({});
 
   // Modales
@@ -268,7 +267,7 @@ export default function App() {
     return { starters: all.slice(0, 11), bench: all.slice(11) };
   }
 
-  // --- MOTEUR DE TRANSFERTS MERCATO D'HIVER (3 PAR JOURNÉE) ---
+  // --- MOTEUR DE TRANSFERTS MERCATO D'HIVER ---
   async function triggerWinterMercato(journeeNum, currentSeasonNum) {
     if (!teams || teams.length < 2 || !players || players.length < 10) return;
 
@@ -371,7 +370,7 @@ export default function App() {
     }
   }
 
-  // --- MOTEUR D'ÉVOLUTION DYNAMIQUE (MAX 3/ÉQUIPE & CAP +3/-3 PAR SAISON) ---
+  // --- MOTEUR D'ÉVOLUTION DYNAMIQUE ---
   async function evaluateAndApplyPlayerEvolutions(targetJournee, currentSeasonNum) {
     const startJournee = targetJournee - 3;
     const endJournee = targetJournee;
@@ -642,7 +641,6 @@ export default function App() {
     return activePlayers[0];
   }
 
-  // --- GÉNÉRATION D'UN LANCER DE DÉ (1 À 6 EQUIPROBABLE) ---
   function handleRollDice(matchId) {
     const diceDom = Math.floor(Math.random() * 6) + 1;
     const diceExt = Math.floor(Math.random() * 6) + 1;
@@ -657,7 +655,6 @@ export default function App() {
     showNotif(`🎲 Lancer de dé : ${diceDom} - ${diceExt}`);
   }
 
-  // --- GÉNÉRATION DES ÉVÉNEMENTS SELON LE SCORE ENTRÉ ---
   function generateMatchEventsForCustomScore(m, domTeam, extTeam, scoreDom, scoreExt, seasonNum, userId) {
     const { starters: domStarters, bench: domBench } = getTeamStartersAndBench(domTeam);
     const { starters: extStarters, bench: extBench } = getTeamStartersAndBench(extTeam);
@@ -1042,26 +1039,61 @@ export default function App() {
     new Set([...matches.map(m => m.saison || 1), 1])
   ).sort((a, b) => a - b);
 
+  // --- CALCUL DU CLASSEMENT COMPLET (V, N, D, BP, BC, DIFF, PTS) ---
   const classement = teams.map(team => {
     let points = 0;
     let joues = 0;
+    let victoires = 0;
+    let nuls = 0;
+    let defaites = 0;
+    let butsPour = 0;
+    let butsContre = 0;
 
     seasonMatches.forEach(m => {
       if (m.statut === 'terminé') {
         if (m.equipe_domicile_id === team.id) {
           joues++;
-          if (m.score_domicile > m.score_exterieur) points += 3;
-          else if (m.score_domicile === m.score_exterieur) points += 1;
+          const scorePour = m.score_domicile ?? 0;
+          const scoreContre = m.score_exterieur ?? 0;
+          butsPour += scorePour;
+          butsContre += scoreContre;
+
+          if (scorePour > scoreContre) {
+            points += 3;
+            victoires++;
+          } else if (scorePour === scoreContre) {
+            points += 1;
+            nuls++;
+          } else {
+            defaites++;
+          }
         } else if (m.equipe_exterieur_id === team.id) {
           joues++;
-          if (m.score_exterieur > m.score_domicile) points += 3;
-          else if (m.score_domicile === m.score_exterieur) points += 1;
+          const scorePour = m.score_exterieur ?? 0;
+          const scoreContre = m.score_domicile ?? 0;
+          butsPour += scorePour;
+          butsContre += scoreContre;
+
+          if (scorePour > scoreContre) {
+            points += 3;
+            victoires++;
+          } else if (scorePour === scoreContre) {
+            points += 1;
+            nuls++;
+          } else {
+            defaites++;
+          }
         }
       }
     });
 
-    return { ...team, points, joues };
-  }).sort((a, b) => b.points - a.points);
+    const diff = butsPour - butsContre;
+    return { ...team, points, joues, victoires, nuls, defaites, butsPour, butsContre, diff };
+  }).sort((a, b) => {
+    if (b.points !== a.points) return b.points - a.points;
+    if (b.diff !== a.diff) return b.diff - a.diff;
+    return b.butsPour - a.butsPour;
+  });
 
   const playersWithStats = players.map(p => {
     const buts = seasonEvents.filter(e => e.player_id === p.id && e.type === 'but').length;
@@ -1334,7 +1366,6 @@ export default function App() {
     setLogoUpdating(false);
   }
 
-  // --- OUVERTURE DE LA MODALE VS ---
   async function openMatchDetails(match) {
     setSelectedMatch(match);
     const { data, error } = await supabase
@@ -1879,7 +1910,7 @@ export default function App() {
 
       {/* Content */}
       <main className="max-w-6xl mx-auto px-4 mt-8">
-        {/* 1. CLASSEMENT ÉQUIPES */}
+        {/* 1. CLASSEMENT COMPLET DES ÉQUIPES */}
         {tab === 'classement' && (
           <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl">
             <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-6">
@@ -1910,21 +1941,27 @@ export default function App() {
             </div>
 
             <div className="overflow-x-auto">
-              <table className="w-full text-left border-collapse">
+              <table className="w-full text-left border-collapse min-w-[620px]">
                 <thead>
                   <tr className="border-b border-slate-800 text-slate-400 text-xs font-semibold uppercase tracking-wider">
-                    <th className="py-3 px-4">#</th>
+                    <th className="py-3 px-3 text-center">#</th>
                     <th className="py-3 px-4">Équipe</th>
-                    <th className="py-3 px-4 text-center">Effectif</th>
-                    <th className="py-3 px-4 text-center">MJ</th>
+                    <th className="py-3 px-2 text-center" title="Matchs Joués">MJ</th>
+                    <th className="py-3 px-2 text-center text-emerald-400" title="Victoires">V</th>
+                    <th className="py-3 px-2 text-center text-slate-300" title="Matchs Nuls">N</th>
+                    <th className="py-3 px-2 text-center text-rose-400" title="Défaites">D</th>
+                    <th className="py-3 px-2 text-center text-indigo-300" title="Buts Pour (marqués)">BP</th>
+                    <th className="py-3 px-2 text-center text-amber-300" title="Buts Contre (encaissés)">BC</th>
+                    <th className="py-3 px-2 text-center" title="Différence de buts / Goal Average">Diff</th>
                     <th className="py-3 px-4 text-center">Points</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-800/60 text-sm">
                   {classement.map((eq, i) => {
-                    const count = players.filter(p => p.equipe_id === eq.id).length;
                     const isTopFour = i < 4;
                     const isBottomThree = classement.length >= 4 && i >= classement.length - 3;
+                    const isDiffPositive = eq.diff > 0;
+                    const isDiffZero = eq.diff === 0;
 
                     return (
                       <tr
@@ -1938,7 +1975,7 @@ export default function App() {
                             : 'hover:bg-slate-800/60 border-l-4 border-transparent'
                         }`}
                       >
-                        <td className="py-4 px-4 font-mono font-bold">
+                        <td className="py-4 px-3 font-mono font-bold text-center">
                           <span className={`inline-flex items-center justify-center w-6 h-6 rounded-md text-xs ${
                             isTopFour 
                               ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' 
@@ -1967,18 +2004,19 @@ export default function App() {
                             </span>
                           </div>
                         </td>
-                        <td className="py-4 px-4 text-center text-xs font-mono">
-                          <span className={`px-2 py-0.5 rounded-lg border font-bold ${
-                            count <= 16 ? 'text-amber-400 bg-amber-500/10 border-amber-500/20' :
-                            count >= 28 ? 'text-rose-400 bg-rose-500/10 border-rose-500/20' :
-                            'text-slate-300 bg-slate-800 border-slate-700'
-                          }`}>
-                            {count} jrs
+                        <td className="py-4 px-2 text-center text-slate-400 font-semibold">{eq.joues}</td>
+                        <td className="py-4 px-2 text-center text-emerald-400 font-bold">{eq.victoires}</td>
+                        <td className="py-4 px-2 text-center text-slate-400 font-medium">{eq.nuls}</td>
+                        <td className="py-4 px-2 text-center text-rose-400 font-bold">{eq.defaites}</td>
+                        <td className="py-4 px-2 text-center text-indigo-300 font-mono font-medium">{eq.butsPour}</td>
+                        <td className="py-4 px-2 text-center text-amber-300 font-mono font-medium">{eq.butsContre}</td>
+                        <td className="py-4 px-2 text-center font-mono font-bold">
+                          <span className={isDiffPositive ? 'text-emerald-400' : isDiffZero ? 'text-slate-400' : 'text-rose-400'}>
+                            {isDiffPositive ? `+${eq.diff}` : eq.diff}
                           </span>
                         </td>
-                        <td className="py-4 px-4 text-center text-slate-400 font-semibold">{eq.joues}</td>
                         <td className="py-4 px-4 text-center">
-                          <span className={`inline-block font-extrabold px-3 py-1 rounded-full border ${
+                          <span className={`inline-block font-extrabold px-3 py-1 rounded-full border font-mono ${
                             isTopFour 
                               ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30' 
                               : isBottomThree 
@@ -2136,7 +2174,6 @@ export default function App() {
 
                         {/* CENTRE : BOUTON DÉ 🎲 À GAUCHE DU SCORE DOMICILE, INPUTS ET BOUTON VS */}
                         <div className="flex items-center justify-center gap-2 sm:gap-2.5 shrink-0 my-2 sm:my-0">
-                          {/* BOUTON DÉ (PLACÉ DIRECTEMENT À GAUCHE DU SCORE DOMICILE) */}
                           <button
                             type="button"
                             onClick={() => handleRollDice(m.id)}
