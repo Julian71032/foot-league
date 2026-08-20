@@ -371,7 +371,7 @@ export default function App() {
     }
   }
 
-  // --- MOTEUR D'ÉVOLUTION DYNAMIQUE ---
+  // --- MOTEUR D'ÉVOLUTION DYNAMIQUE (MAX 3/ÉQUIPE & CAP +3/-3 PAR SAISON) ---
   async function evaluateAndApplyPlayerEvolutions(targetJournee, currentSeasonNum) {
     const startJournee = targetJournee - 3;
     const endJournee = targetJournee;
@@ -404,7 +404,7 @@ export default function App() {
         teamRecords[m.equipe_exterieur_id].goalsConceded += (m.score_domicile || 0);
         if (m.score_domicile === 0) teamRecords[m.equipe_exterieur_id].cleanSheets++;
         if (m.score_exterieur > m.score_domicile) teamRecords[m.equipe_exterieur_id].wins++;
-        else if (m.score_exterieur < m.score_domicile) teamRecords[m.equipe_domicile_id].losses++;
+        else if (m.score_exterieur < m.score_domicile) teamRecords[m.equipe_exterieur_id].losses++;
         else teamRecords[m.equipe_domicile_id].draws++;
       }
     });
@@ -2134,8 +2134,18 @@ export default function App() {
                           </span>
                         </div>
 
-                        {/* CENTRE : INPUTS, BOUTON DÉ 🎲 ET BOUTON VS FIXE */}
+                        {/* CENTRE : BOUTON DÉ 🎲 À GAUCHE DU SCORE DOMICILE, INPUTS ET BOUTON VS */}
                         <div className="flex items-center justify-center gap-2 sm:gap-2.5 shrink-0 my-2 sm:my-0">
+                          {/* BOUTON DÉ (PLACÉ DIRECTEMENT À GAUCHE DU SCORE DOMICILE) */}
+                          <button
+                            type="button"
+                            onClick={() => handleRollDice(m.id)}
+                            className="bg-amber-500/20 hover:bg-amber-500 text-amber-300 hover:text-slate-950 border border-amber-500/40 text-sm font-black p-2.5 rounded-xl transition-all cursor-pointer shadow-md active:scale-95 select-none mr-1"
+                            title="Lancer les dés (Donne un score aléatoire de 1 à 6 avec probabilités égales)"
+                          >
+                            🎲
+                          </button>
+
                           <input
                             type="number"
                             min="0"
@@ -2145,20 +2155,10 @@ export default function App() {
                             className="w-12 h-11 sm:w-14 sm:h-12 bg-slate-950 text-white font-mono font-black text-xl text-center rounded-xl border border-slate-700 focus:outline-none focus:border-indigo-500 shadow-inner [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                           />
 
-                          {/* BOUTON DÉ (SCORE ALÉATOIRE 1 À 6 COMME UN VRAI DÉ) */}
-                          <button
-                            type="button"
-                            onClick={() => handleRollDice(m.id)}
-                            className="bg-amber-500/20 hover:bg-amber-500 text-amber-300 hover:text-slate-950 border border-amber-500/40 text-sm font-black p-2.5 rounded-xl transition-all cursor-pointer shadow-md active:scale-95 select-none"
-                            title="Lancer les dés (Donne un score aléatoire de 1 à 6 avec probabilités égales)"
-                          >
-                            🎲
-                          </button>
-
                           <button
                             type="button"
                             onClick={() => openMatchDetails(m)}
-                            className="bg-indigo-600/20 hover:bg-indigo-600 text-indigo-300 hover:text-white border border-indigo-500/40 text-xs font-black tracking-widest px-3 py-2.5 rounded-xl transition-all cursor-pointer shadow-md active:scale-95 uppercase select-none"
+                            className="bg-indigo-600/20 hover:bg-indigo-600 text-indigo-300 hover:text-white border border-indigo-500/40 text-xs font-black tracking-widest px-3.5 py-2.5 rounded-xl transition-all cursor-pointer shadow-md active:scale-95 uppercase select-none"
                             title="Cliquer pour voir les buteurs, passeurs, cartons et changements"
                           >
                             VS
