@@ -97,6 +97,9 @@ export default function App() {
   const [notification, setNotification] = useState('');
   const [simulating, setSimulating] = useState(false);
 
+  // Suivi du cumul d'évolution de chaque joueur par saison { [season]: { [playerId]: totalDelta } }
+  const [seasonEvolutions, setSeasonEvolutions] = useState({});
+
   // Modales
   const [selectedMatch, setSelectedMatch] = useState(null);
   const [selectedMatchEvents, setSelectedMatchEvents] = useState([]);
@@ -265,7 +268,7 @@ export default function App() {
     return { starters: all.slice(0, 11), bench: all.slice(11) };
   }
 
-  // --- MOTEUR DE TRANSFERTS MERCATO D'HIVER ---
+  // --- MOTEUR DE TRANSFERTS MERCATO D'HIVER (3 TRANSFERTS PAR JOURNÉE) ---
   async function triggerWinterMercato(journeeNum, currentSeasonNum) {
     if (!teams || teams.length < 2 || !players || players.length < 10) return;
 
@@ -285,7 +288,8 @@ export default function App() {
     const usedPlayerIds = new Set();
 
     for (const player of availablePool) {
-      if (completedTransfers.length >= 5) break;
+      // MODIFICATION : 3 transferts max par journée (au lieu de 5)
+      if (completedTransfers.length >= 3) break;
       if (usedPlayerIds.has(player.id)) continue;
 
       const currentGen = player.general || 75;
@@ -368,7 +372,7 @@ export default function App() {
     }
   }
 
-  // --- MOTEUR D'ÉVOLUTION DYNAMIQUE ---
+  // --- MOTEUR D'ÉVOLUTION DYNAMIQUE (MAX 3 JOUEURS PAR ÉQUIPE & CAP +3/-3 PAR SAISON) ---
   async function evaluateAndApplyPlayerEvolutions(targetJournee, currentSeasonNum) {
     const startJournee = targetJournee - 3;
     const endJournee = targetJournee;
@@ -381,9 +385,6 @@ export default function App() {
     const blockEvents = matchEvents.filter(
       e => (e.saison || 1) === currentSeasonNum && blockMatchIds.has(e.match_id)
     );
-
-    const changedPlayers = [];
-    const playerUpdates = [];
 
     const teamRecords = {};
     teams.forEach(t => {
@@ -408,6 +409,10 @@ export default function App() {
         else teamRecords[m.equipe_exterieur_id].draws++;
       }
     });
+
+    // 1. Calculer le score de performance de chaque joueur
+    const currentSeasonMap = { ...(seasonEvolutions[currentSeasonNum] || {}) };
+    const candidates = [];
 
     for (const player of players) {
       const currentGen = player.general || 75;
@@ -473,26 +478,73 @@ export default function App() {
 
       delta = Math.max(-3, Math.min(3, delta));
 
-      if (delta !== 0) {
-        const newGen = Math.max(45, Math.min(99, currentGen + delta));
-        const newVal = calculateMarketValue(newGen, age);
+      // Vérifier la limite globale de la saison (-3 à +3 au cumul)
+      const currentCumulative = currentSeasonMap[player.id] || 0;
+      let allowedDelta = delta;
 
-        playerUpdates.push({ id: player.id, general: newGen, valeur_marchande: newVal });
-        changedPlayers.push({
-          id: player.id,
-          nom: player.nom,
-          teamName: player.teams?.nom || 'Club',
-          poste: player.poste,
-          oldGen: currentGen,
-          newGen: newGen,
-          delta: delta,
-          oldVal: currentVal,
-          newVal: newVal,
-          buts: buts,
-          passes: passes
+      if (delta > 0) {
+        allowedDelta = Math.min(delta, 3 - currentCumulative);
+      } else if (delta < 0) {
+        allowedDelta = Math.max(delta, -3 - currentCumulative);
+      }
+
+      if (allowedDelta !== 0) {
+        candidates.push({
+          player,
+          perfScore,
+          absImpact: Math.abs(perfScore),
+          delta: allowedDelta,
+          currentCumulative,
+          currentGen,
+          currentVal,
+          age,
+          buts,
+          passes
         });
       }
     }
+
+    // 2. Limiter à maximum 3 joueurs par équipe ayant eu le plus d'impact
+    const changedPlayers = [];
+    const playerUpdates = [];
+    const countByTeam = {};
+
+    // Trier par intensité de performance
+    candidates.sort((a, b) => b.absImpact - a.absImpact);
+
+    for (const c of candidates) {
+      const tId = c.player.equipe_id;
+      countByTeam[tId] = countByTeam[tId] || 0;
+
+      if (countByTeam[tId] < 3) {
+        countByTeam[tId]++;
+
+        const newGen = Math.max(45, Math.min(99, c.currentGen + c.delta));
+        const newVal = calculateMarketValue(newGen, c.age);
+
+        // Mettre à jour le cumul saisonnier
+        currentSeasonMap[c.player.id] = c.currentCumulative + c.delta;
+
+        playerUpdates.push({ id: c.player.id, general: newGen, valeur_marchande: newVal });
+        changedPlayers.push({
+          id: c.player.id,
+          nom: c.player.nom,
+          teamName: c.player.teams?.nom || 'Club',
+          poste: c.player.poste,
+          oldGen: c.currentGen,
+          newGen: newGen,
+          delta: c.delta,
+          seasonTotal: currentSeasonMap[c.player.id],
+          oldVal: c.currentVal,
+          newVal: newVal,
+          buts: c.buts,
+          passes: c.passes
+        });
+      }
+    }
+
+    // Sauvegarder le cumul de la saison
+    setSeasonEvolutions(prev => ({ ...prev, [currentSeasonNum]: currentSeasonMap }));
 
     if (playerUpdates.length > 0) {
       for (const upd of playerUpdates) {
@@ -597,7 +649,6 @@ export default function App() {
     return activePlayers[0];
   }
 
-  // --- NOUVELLE FONCTION : GÉNÈRE EXACTEMENT LES ÉVÉNEMENTS SELON LE SCORE ENTRÉ ---
   function generateMatchEventsForCustomScore(m, domTeam, extTeam, scoreDom, scoreExt, seasonNum, userId) {
     const { starters: domStarters, bench: domBench } = getTeamStartersAndBench(domTeam);
     const { starters: extStarters, bench: extBench } = getTeamStartersAndBench(extTeam);
@@ -965,6 +1016,10 @@ export default function App() {
         showNotif(!isNextSeason ? `${seasonLabel} réinitialisée avec succès !` : `${seasonLabel} lancée avec succès !`);
         setSeasonFilter(targetSeason);
         setJourneeFilter(1);
+        
+        // Réinitialiser le compteur de delta pour cette saison
+        setSeasonEvolutions(prev => ({ ...prev, [targetSeason]: {} }));
+
         await fetchData();
       }
     } catch (err) {
@@ -1281,7 +1336,6 @@ export default function App() {
     setScoresInput(prev => ({ ...prev, [matchId]: { ...prev[matchId], [teamType]: val } }));
   }
 
-  // --- SAISIE MANUELLE : ENREGISTRE LE SCORE ET GÉNÈRE EXACTEMENT LES ÉVÉNEMENTS ---
   async function handleSaveMatchScore(match) {
     const matchScores = scoresInput[match.id] || {};
     const scoreDom = parseInt(matchScores.dom !== undefined ? matchScores.dom : match.score_domicile, 10);
@@ -1296,10 +1350,8 @@ export default function App() {
     const extTeam = teams.find(t => t.id === match.equipe_exterieur_id);
 
     try {
-      // 1. Supprimer les anciens événements du match s'il y en avait
       await supabase.from('match_events').delete().eq('match_id', match.id);
 
-      // 2. Générer les buteurs, passeurs et événements correspondants exactement au score saisi
       const events = generateMatchEventsForCustomScore(
         match, 
         domTeam, 
@@ -1310,13 +1362,11 @@ export default function App() {
         session.user.id
       );
 
-      // 3. Insérer les événements dans la table
       if (events.length > 0) {
         const { error: insertEventsError } = await supabase.from('match_events').insert(events);
         if (insertEventsError) throw insertEventsError;
       }
 
-      // 4. Mettre à jour le match
       const { error: matchError } = await supabase
         .from('matches')
         .update({ score_domicile: scoreDom, score_exterieur: scoreExt, statut: 'terminé' })
@@ -2220,7 +2270,7 @@ export default function App() {
                 <div>
                   <h2 className="text-xl font-bold text-white flex items-center gap-2">🔄 Marché des Transferts</h2>
                   <p className="text-xs text-slate-400 mt-1">
-                    Règle officielle : <strong>16 joueurs min</strong> et <strong>28 joueurs max</strong>.
+                    Règle officielle : <strong>16 joueurs min</strong>, <strong>28 joueurs max</strong> et <strong>3 transferts max / journée en hiver</strong>.
                   </p>
                 </div>
 
@@ -2601,7 +2651,7 @@ export default function App() {
               <div className="inline-block bg-indigo-600 text-white p-2.5 rounded-2xl text-xl mb-2 shadow-lg shadow-indigo-600/30">❄️</div>
               <h3 className="text-xl font-black text-white tracking-tight">MERCATO D'HIVER EN DIRECT</h3>
               <p className="text-xs text-indigo-400 font-semibold mt-0.5">
-                5 Nouveaux transferts officiels après la <strong>Journée {mercatoReport.journee}</strong> ({mercatoReport.seasonLabel})
+                3 Nouveaux transferts officiels après la <strong>Journée {mercatoReport.journee}</strong> ({mercatoReport.seasonLabel})
               </p>
             </div>
 
@@ -2666,7 +2716,7 @@ export default function App() {
               <div className="inline-block bg-indigo-600 text-white p-2 rounded-xl text-lg mb-2">📈</div>
               <h3 className="text-lg font-black text-white tracking-tight">Rapport d'Évolution des Notes & Valeurs</h3>
               <p className="text-xs text-slate-400 mt-0.5">
-                Bilan des performances sur les <strong className="text-indigo-400">{evolutionReport.journeesLabel}</strong> ({evolutionReport.seasonLabel})
+                Bilan des performances sur les <strong className="text-indigo-400">{evolutionReport.journeesLabel}</strong> ({evolutionReport.seasonLabel}) • Max 3 joueurs par club
               </p>
             </div>
 
@@ -2685,7 +2735,7 @@ export default function App() {
                           {p.teamName} {p.buts > 0 && `• ⚽ ${p.buts}`} {p.passes > 0 && `• 🎯 ${p.passes}`}
                         </p>
                         <p className="text-[10px] text-emerald-400 font-mono mt-0.5">
-                          Valeur : {formatMoney(p.newVal)}
+                          Valeur : {formatMoney(p.newVal)} • Cumul Saison : <strong className="text-indigo-300">{p.seasonTotal > 0 ? `+${p.seasonTotal}` : p.seasonTotal}/3</strong>
                         </p>
                       </div>
                     </div>
