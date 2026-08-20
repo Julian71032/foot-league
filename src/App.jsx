@@ -97,6 +97,7 @@ export default function App() {
   const [notification, setNotification] = useState('');
   const [simulating, setSimulating] = useState(false);
 
+  // Suivi du cumul d'évolution par saison
   const [seasonEvolutions, setSeasonEvolutions] = useState({});
 
   // Modales
@@ -213,11 +214,13 @@ export default function App() {
     const { data: dataPlayers } = await supabase.from('players').select('*, teams(nom, logo_url)');
     if (dataPlayers) setPlayers(dataPlayers);
 
+    // Tri fixe par journée puis par id pour éviter que les matchs changent de place lors d'un score
     let { data: userMatches } = await supabase
       .from('matches')
       .select('*, dom:teams!equipe_domicile_id(*), ext:teams!equipe_exterieur_id(*)')
       .eq('user_id', session.user.id)
-      .order('journee', { ascending: true });
+      .order('journee', { ascending: true })
+      .order('id', { ascending: true });
 
     if (userMatches) {
       setMatches(userMatches);
@@ -267,7 +270,7 @@ export default function App() {
     return { starters: all.slice(0, 11), bench: all.slice(11) };
   }
 
-  // --- MOTEUR DE TRANSFERTS MERCATO D'HIVER ---
+  // --- MOTEUR DE TRANSFERTS MERCATO D'HIVER (3 PAR JOURNÉE) ---
   async function triggerWinterMercato(journeeNum, currentSeasonNum) {
     if (!teams || teams.length < 2 || !players || players.length < 10) return;
 
@@ -404,7 +407,7 @@ export default function App() {
         if (m.score_domicile === 0) teamRecords[m.equipe_exterieur_id].cleanSheets++;
         if (m.score_exterieur > m.score_domicile) teamRecords[m.equipe_exterieur_id].wins++;
         else if (m.score_exterieur < m.score_domicile) teamRecords[m.equipe_exterieur_id].losses++;
-        else teamRecords[m.equipe_domicile_id].draws++;
+        else teamRecords[m.equipe_exterieur_id].draws++;
       }
     });
 
@@ -1366,6 +1369,7 @@ export default function App() {
     setLogoUpdating(false);
   }
 
+  // --- OUVERTURE DE LA MODALE VS ---
   async function openMatchDetails(match) {
     setSelectedMatch(match);
     const { data, error } = await supabase
@@ -2150,6 +2154,7 @@ export default function App() {
               ) : (
                 seasonMatches
                   .filter((m) => m.journee === parseInt(journeeFilter, 10))
+                  .sort((a, b) => (a.id > b.id ? 1 : -1)) // Tri fixe pour garder les matchs toujours à la même place
                   .map((m) => {
                     const currentDomInput = scoresInput[m.id]?.dom !== undefined ? scoresInput[m.id].dom : (m.score_domicile ?? '');
                     const currentExtInput = scoresInput[m.id]?.ext !== undefined ? scoresInput[m.id].ext : (m.score_exterieur ?? '');
@@ -2174,6 +2179,7 @@ export default function App() {
 
                         {/* CENTRE : BOUTON DÉ 🎲 À GAUCHE DU SCORE DOMICILE, INPUTS ET BOUTON VS */}
                         <div className="flex items-center justify-center gap-2 sm:gap-2.5 shrink-0 my-2 sm:my-0">
+                          {/* BOUTON DÉ (PLACÉ DIRECTEMENT À GAUCHE DU SCORE DOMICILE) */}
                           <button
                             type="button"
                             onClick={() => handleRollDice(m.id)}
