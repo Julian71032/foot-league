@@ -597,23 +597,15 @@ export default function App() {
     return activePlayers[0];
   }
 
-  function simulateSingleMatchWithSubs(m, domTeam, extTeam, seasonNum, userId) {
+  // --- NOUVELLE FONCTION : GÉNÈRE EXACTEMENT LES ÉVÉNEMENTS SELON LE SCORE ENTRÉ ---
+  function generateMatchEventsForCustomScore(m, domTeam, extTeam, scoreDom, scoreExt, seasonNum, userId) {
     const { starters: domStarters, bench: domBench } = getTeamStartersAndBench(domTeam);
     const { starters: extStarters, bench: extBench } = getTeamStartersAndBench(extTeam);
 
-    const domGen = domStarters.length > 0 ? domStarters.reduce((acc, p) => acc + (p.general || 75), 0) / domStarters.length : 75;
-    const extGen = extStarters.length > 0 ? extStarters.reduce((acc, p) => acc + (p.general || 75), 0) / extStarters.length : 75;
-
-    const diff = (domGen + 1.5) - extGen;
-    const domLambda = Math.max(0.3, Math.min(4.5, 1.45 + (diff * 0.12)));
-    const extLambda = Math.max(0.2, Math.min(4.0, 1.10 - (diff * 0.10)));
-
-    const scoreDom = simulateGoals(domLambda);
-    const scoreExt = simulateGoals(extLambda);
-
     const matchEventsList = [];
 
-    const domSubsCount = Math.min(domBench.length, Math.floor(Math.random() * 5) + 1);
+    // Remplacements Domicile
+    const domSubsCount = Math.min(domBench.length, Math.floor(Math.random() * 4) + 1);
     const domSubstitutions = [];
     const availableDomBench = [...domBench];
     const currentDomActive = [...domStarters];
@@ -641,7 +633,8 @@ export default function App() {
       });
     }
 
-    const extSubsCount = Math.min(extBench.length, Math.floor(Math.random() * 5) + 1);
+    // Remplacements Extérieur
+    const extSubsCount = Math.min(extBench.length, Math.floor(Math.random() * 4) + 1);
     const extSubstitutions = [];
     const availableExtBench = [...extBench];
     const currentExtActive = [...extStarters];
@@ -680,6 +673,7 @@ export default function App() {
       return active;
     };
 
+    // Buts Domicile
     for (let i = 0; i < scoreDom; i++) {
       const minute = Math.floor(Math.random() * 90) + 1;
       const activeAtMin = getActivePlayersAtMinute(domStarters, domSubstitutions, minute);
@@ -709,6 +703,7 @@ export default function App() {
       }
     }
 
+    // Buts Extérieur
     for (let i = 0; i < scoreExt; i++) {
       const minute = Math.floor(Math.random() * 90) + 1;
       const activeAtMin = getActivePlayersAtMinute(extStarters, extSubstitutions, minute);
@@ -738,6 +733,7 @@ export default function App() {
       }
     }
 
+    // Cartons Domicile
     const numYellowDom = Math.random() < 0.65 ? Math.floor(Math.random() * 3) + 1 : 0;
     for (let y = 0; y < numYellowDom; y++) {
       const minute = Math.floor(Math.random() * 88) + 2;
@@ -754,6 +750,8 @@ export default function App() {
         });
       }
     }
+
+    // Cartons Extérieur
     const numYellowExt = Math.random() < 0.65 ? Math.floor(Math.random() * 3) + 1 : 0;
     for (let y = 0; y < numYellowExt; y++) {
       const minute = Math.floor(Math.random() * 88) + 2;
@@ -771,7 +769,26 @@ export default function App() {
       }
     }
 
-    return { scoreDom, scoreExt, events: matchEventsList };
+    return matchEventsList;
+  }
+
+  function simulateSingleMatchWithSubs(m, domTeam, extTeam, seasonNum, userId) {
+    const { starters: domStarters } = getTeamStartersAndBench(domTeam);
+    const { starters: extStarters } = getTeamStartersAndBench(extTeam);
+
+    const domGen = domStarters.length > 0 ? domStarters.reduce((acc, p) => acc + (p.general || 75), 0) / domStarters.length : 75;
+    const extGen = extStarters.length > 0 ? extStarters.reduce((acc, p) => acc + (p.general || 75), 0) / extStarters.length : 75;
+
+    const diff = (domGen + 1.5) - extGen;
+    const domLambda = Math.max(0.3, Math.min(4.5, 1.45 + (diff * 0.12)));
+    const extLambda = Math.max(0.2, Math.min(4.0, 1.10 - (diff * 0.10)));
+
+    const scoreDom = simulateGoals(domLambda);
+    const scoreExt = simulateGoals(extLambda);
+
+    const events = generateMatchEventsForCustomScore(m, domTeam, extTeam, scoreDom, scoreExt, seasonNum, userId);
+
+    return { scoreDom, scoreExt, events };
   }
 
   // --- SIMULATION AUTOMATIQUE D'UNE JOURNÉE COMPLÈTE ---
@@ -1264,33 +1281,51 @@ export default function App() {
     setScoresInput(prev => ({ ...prev, [matchId]: { ...prev[matchId], [teamType]: val } }));
   }
 
+  // --- SAISIE MANUELLE : ENREGISTRE LE SCORE ET GÉNÈRE EXACTEMENT LES ÉVÉNEMENTS ---
   async function handleSaveMatchScore(match) {
     const matchScores = scoresInput[match.id] || {};
     const scoreDom = parseInt(matchScores.dom !== undefined ? matchScores.dom : match.score_domicile, 10);
     const scoreExt = parseInt(matchScores.ext !== undefined ? matchScores.ext : match.score_exterieur, 10);
 
-    if (isNaN(scoreDom) || isNaN(scoreExt)) { showNotif("Saisissez un score valide."); return; }
+    if (isNaN(scoreDom) || isNaN(scoreExt) || scoreDom < 0 || scoreExt < 0) { 
+      showNotif("Saisissez un score valide (0 ou supérieur)."); 
+      return; 
+    }
 
     const domTeam = teams.find(t => t.id === match.equipe_domicile_id);
     const extTeam = teams.find(t => t.id === match.equipe_exterieur_id);
 
-    await supabase.from('match_events').delete().eq('match_id', match.id);
+    try {
+      // 1. Supprimer les anciens événements du match s'il y en avait
+      await supabase.from('match_events').delete().eq('match_id', match.id);
 
-    const simResult = simulateSingleMatchWithSubs(match, domTeam, extTeam, match.saison || 1, session.user.id);
+      // 2. Générer les buteurs, passeurs et événements correspondants exactement au score saisi
+      const events = generateMatchEventsForCustomScore(
+        match, 
+        domTeam, 
+        extTeam, 
+        scoreDom, 
+        scoreExt, 
+        match.saison || 1, 
+        session.user.id
+      );
 
-    if (simResult.events.length > 0) {
-      await supabase.from('match_events').insert(simResult.events);
-    }
+      // 3. Insérer les événements dans la table
+      if (events.length > 0) {
+        const { error: insertEventsError } = await supabase.from('match_events').insert(events);
+        if (insertEventsError) throw insertEventsError;
+      }
 
-    const { error } = await supabase
-      .from('matches')
-      .update({ score_domicile: scoreDom, score_exterieur: scoreExt, statut: 'terminé' })
-      .eq('id', match.id)
-      .eq('user_id', session.user.id);
+      // 4. Mettre à jour le match
+      const { error: matchError } = await supabase
+        .from('matches')
+        .update({ score_domicile: scoreDom, score_exterieur: scoreExt, statut: 'terminé' })
+        .eq('id', match.id)
+        .eq('user_id', session.user.id);
 
-    if (error) showNotif(`Erreur : ${error.message}`);
-    else {
-      showNotif("Score et événements enregistrés !");
+      if (matchError) throw matchError;
+
+      showNotif(`Score ${scoreDom} - ${scoreExt} et événements enregistrés !`);
       await fetchData();
 
       const currentJ = match.journee;
@@ -1308,6 +1343,8 @@ export default function App() {
           await fetchData();
         }
       }
+    } catch (err) {
+      showNotif(`Erreur : ${err.message}`);
     }
   }
 
@@ -2045,7 +2082,7 @@ export default function App() {
                           <button
                             onClick={() => handleSaveMatchScore(m)}
                             className="bg-emerald-600/20 hover:bg-emerald-600 text-emerald-300 hover:text-white border border-emerald-500/30 text-xs font-bold w-9 h-11 sm:w-10 sm:h-12 rounded-xl transition-all cursor-pointer active:scale-95 flex items-center justify-center ml-1"
-                            title="Enregistrer le score manuellement"
+                            title="Valider le score et ajouter les événements (buteurs, passeurs...)"
                           >
                             ✓
                           </button>
