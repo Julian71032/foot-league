@@ -97,6 +97,7 @@ export default function App() {
   const [notification, setNotification] = useState('');
   const [simulating, setSimulating] = useState(false);
 
+  // Suivi du cumul d'évolution par saison
   const [seasonEvolutions, setSeasonEvolutions] = useState({});
 
   // Modales
@@ -267,7 +268,7 @@ export default function App() {
     return { starters: all.slice(0, 11), bench: all.slice(11) };
   }
 
-  // --- MOTEUR DE TRANSFERTS MERCATO D'HIVER (3 TRANSFERTS PAR JOURNÉE) ---
+  // --- MOTEUR DE TRANSFERTS MERCATO D'HIVER (3 PAR JOURNÉE) ---
   async function triggerWinterMercato(journeeNum, currentSeasonNum) {
     if (!teams || teams.length < 2 || !players || players.length < 10) return;
 
@@ -370,7 +371,7 @@ export default function App() {
     }
   }
 
-  // --- MOTEUR D'ÉVOLUTION DYNAMIQUE ---
+  // --- MOTEUR D'ÉVOLUTION DYNAMIQUE (MAX 3/ÉQUIPE & CAP +3/-3 PAR SAISON) ---
   async function evaluateAndApplyPlayerEvolutions(targetJournee, currentSeasonNum) {
     const startJournee = targetJournee - 3;
     const endJournee = targetJournee;
@@ -641,12 +642,14 @@ export default function App() {
     return activePlayers[0];
   }
 
+  // --- GÉNÉRATION DES ÉVÉNEMENTS SELON LE SCORE VALIDÉ (SANS sub_out_player_id) ---
   function generateMatchEventsForCustomScore(m, domTeam, extTeam, scoreDom, scoreExt, seasonNum, userId) {
     const { starters: domStarters, bench: domBench } = getTeamStartersAndBench(domTeam);
     const { starters: extStarters, bench: extBench } = getTeamStartersAndBench(extTeam);
 
     const matchEventsList = [];
 
+    // Remplacements Domicile
     const domSubsCount = Math.min(domBench.length, Math.floor(Math.random() * 4) + 1);
     const domSubstitutions = [];
     const availableDomBench = [...domBench];
@@ -667,7 +670,6 @@ export default function App() {
       matchEventsList.push({
         match_id: m.id,
         player_id: playerIn.id,
-        sub_out_player_id: playerOut.id,
         type: 'remplacement',
         minute: subMinute,
         saison: seasonNum,
@@ -675,6 +677,7 @@ export default function App() {
       });
     }
 
+    // Remplacements Extérieur
     const extSubsCount = Math.min(extBench.length, Math.floor(Math.random() * 4) + 1);
     const extSubstitutions = [];
     const availableExtBench = [...extBench];
@@ -695,7 +698,6 @@ export default function App() {
       matchEventsList.push({
         match_id: m.id,
         player_id: playerIn.id,
-        sub_out_player_id: playerOut.id,
         type: 'remplacement',
         minute: subMinute,
         saison: seasonNum,
@@ -714,6 +716,7 @@ export default function App() {
       return active;
     };
 
+    // Buts Domicile
     for (let i = 0; i < scoreDom; i++) {
       const minute = Math.floor(Math.random() * 90) + 1;
       const activeAtMin = getActivePlayersAtMinute(domStarters, domSubstitutions, minute);
@@ -743,6 +746,7 @@ export default function App() {
       }
     }
 
+    // Buts Extérieur
     for (let i = 0; i < scoreExt; i++) {
       const minute = Math.floor(Math.random() * 90) + 1;
       const activeAtMin = getActivePlayersAtMinute(extStarters, extSubstitutions, minute);
@@ -772,6 +776,7 @@ export default function App() {
       }
     }
 
+    // Cartons Domicile
     const numYellowDom = Math.random() < 0.65 ? Math.floor(Math.random() * 3) + 1 : 0;
     for (let y = 0; y < numYellowDom; y++) {
       const minute = Math.floor(Math.random() * 88) + 2;
@@ -789,6 +794,7 @@ export default function App() {
       }
     }
 
+    // Cartons Extérieur
     const numYellowExt = Math.random() < 0.65 ? Math.floor(Math.random() * 3) + 1 : 0;
     for (let y = 0; y < numYellowExt; y++) {
       const minute = Math.floor(Math.random() * 88) + 2;
@@ -1002,7 +1008,10 @@ export default function App() {
         showNotif(!isNextSeason ? `${seasonLabel} réinitialisée avec succès !` : `${seasonLabel} lancée avec succès !`);
         setSeasonFilter(targetSeason);
         setJourneeFilter(1);
+        
+        // Réinitialiser le compteur de delta d'évolution pour cette saison
         setSeasonEvolutions(prev => ({ ...prev, [targetSeason]: {} }));
+
         await fetchData();
       }
     } catch (err) {
@@ -1177,7 +1186,6 @@ export default function App() {
     }
   }
 
-  // --- RÉINITIALISER TOUS LES TRANSFERTS (CORRIGÉ SANS RECHARGEMENT FANTÔME) ---
   async function handleResetAllTransfers() {
     if (transfers.length === 0) {
       showNotif("Aucun transfert à réinitialiser.");
@@ -1189,24 +1197,21 @@ export default function App() {
     }
 
     try {
-      // 1. Récupérer TOUS les transferts de la base
-      const { data: allTransfers, error: fetchErr } = await supabase
+      const { data: allUserTransfers, error: fetchErr } = await supabase
         .from('transfers')
         .select('*')
         .order('created_at', { ascending: true });
 
       if (fetchErr) throw fetchErr;
 
-      if (allTransfers && allTransfers.length > 0) {
-        // Identifier le tout premier club d'origine de chaque joueur
+      if (allUserTransfers && allUserTransfers.length > 0) {
         const initialClubByPlayer = {};
-        allTransfers.forEach(t => {
+        allUserTransfers.forEach(t => {
           if (!initialClubByPlayer[t.player_id]) {
             initialClubByPlayer[t.player_id] = t.old_team_id;
           }
         });
 
-        // Remettre chaque joueur dans son club de départ
         for (const [playerId, originalTeamId] of Object.entries(initialClubByPlayer)) {
           await supabase
             .from('players')
@@ -1214,20 +1219,23 @@ export default function App() {
             .eq('id', playerId);
         }
 
-        // 2. Supprimer TOUS les transferts par leurs IDs directs
-        const idsToDelete = allTransfers.map(t => t.id);
+        const transferIds = allUserTransfers.map(t => t.id);
         const { error: deleteError } = await supabase
           .from('transfers')
           .delete()
-          .in('id', idsToDelete);
+          .in('id', transferIds);
 
         if (deleteError) throw deleteError;
       }
 
-      // 3. Vider immédiatement l'affichage local
       setTransfers([]);
       showNotif("Tous les transferts ont été réinitialisés et l'historique a été effacé !");
-      await fetchData();
+      
+      const { data: dataTeams } = await supabase.from('teams').select('*');
+      if (dataTeams) setTeams(dataTeams);
+
+      const { data: dataPlayers } = await supabase.from('players').select('*, teams(nom, logo_url)');
+      if (dataPlayers) setPlayers(dataPlayers);
     } catch (err) {
       showNotif(`Erreur : ${err.message}`);
     }
