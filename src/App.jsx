@@ -642,7 +642,7 @@ export default function App() {
     return activePlayers[0];
   }
 
-  // --- GÉNÉRATION DES ÉVÉNEMENTS SELON LE SCORE VALIDÉ (SANS sub_out_player_id) ---
+  // --- GÉNÉRATION DES ÉVÉNEMENTS SELON LE SCORE ENTRÉ ---
   function generateMatchEventsForCustomScore(m, domTeam, extTeam, scoreDom, scoreExt, seasonNum, userId) {
     const { starters: domStarters, bench: domBench } = getTeamStartersAndBench(domTeam);
     const { starters: extStarters, bench: extBench } = getTeamStartersAndBench(extTeam);
@@ -1320,15 +1320,31 @@ export default function App() {
     setLogoUpdating(false);
   }
 
+  // --- OUVERTURE DE LA MODALE VS (ENRICHIE AVEC LES DONNÉES DU STATE PLAYERS) ---
   async function openMatchDetails(match) {
     setSelectedMatch(match);
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from('match_events')
-      .select('*, players(id, nom, poste, numero, equipe_id)')
+      .select('*')
       .eq('match_id', match.id)
-      .eq('user_id', session.user.id)
       .order('minute', { ascending: true });
-    if (data) setSelectedMatchEvents(data);
+
+    if (error) {
+      showNotif(`Erreur détails match : ${error.message}`);
+      return;
+    }
+
+    if (data) {
+      const enriched = data.map(ev => {
+        const pObj = players.find(p => p.id === ev.player_id);
+        return {
+          ...ev,
+          player_nom: pObj?.nom || 'Joueur inconnu',
+          player_equipe_id: pObj?.equipe_id || null
+        };
+      });
+      setSelectedMatchEvents(enriched);
+    }
   }
 
   function handleScoreInputChange(matchId, teamType, val) {
@@ -1703,8 +1719,14 @@ export default function App() {
     );
   };
 
-  const homeEvents = selectedMatch ? selectedMatchEvents.filter(ev => ev.players?.equipe_id === selectedMatch.equipe_domicile_id) : [];
-  const awayEvents = selectedMatch ? selectedMatchEvents.filter(ev => ev.players?.equipe_id === selectedMatch.equipe_exterieur_id) : [];
+  // --- FILTRES POUR LES ÉVÉNEMENTS DU MATCH SÉLECTIONNÉ DANS LA MODALE VS ---
+  const homeEvents = selectedMatch 
+    ? selectedMatchEvents.filter(ev => ev.player_equipe_id === selectedMatch.equipe_domicile_id) 
+    : [];
+
+  const awayEvents = selectedMatch 
+    ? selectedMatchEvents.filter(ev => ev.player_equipe_id === selectedMatch.equipe_exterieur_id) 
+    : [];
 
   if (!session) {
     return (
@@ -3288,7 +3310,7 @@ export default function App() {
                             </span>
                             <span className="text-sm">{icon}</span>
                             <span className="font-semibold text-white truncate text-xs">
-                              {ev.players?.nom}
+                              {ev.player_nom}
                             </span>
                           </div>
                           <span className={`text-[10px] font-bold ${colorClass}`}>
@@ -3343,7 +3365,7 @@ export default function App() {
                             </span>
                             <span className="text-sm">{icon}</span>
                             <span className="font-semibold text-white truncate text-xs">
-                              {ev.players?.nom}
+                              {ev.player_nom}
                             </span>
                           </div>
                           <span className={`text-[10px] font-bold ${colorClass}`}>
