@@ -371,7 +371,7 @@ export default function App() {
     }
   }
 
-  // --- MOTEUR D'ÉVOLUTION DYNAMIQUE (MAX 3/ÉQUIPE & CAP +3/-3 PAR SAISON) ---
+  // --- MOTEUR D'ÉVOLUTION DYNAMIQUE ---
   async function evaluateAndApplyPlayerEvolutions(targetJournee, currentSeasonNum) {
     const startJournee = targetJournee - 3;
     const endJournee = targetJournee;
@@ -404,8 +404,8 @@ export default function App() {
         teamRecords[m.equipe_exterieur_id].goalsConceded += (m.score_domicile || 0);
         if (m.score_domicile === 0) teamRecords[m.equipe_exterieur_id].cleanSheets++;
         if (m.score_exterieur > m.score_domicile) teamRecords[m.equipe_exterieur_id].wins++;
-        else if (m.score_exterieur < m.score_domicile) teamRecords[m.equipe_exterieur_id].losses++;
-        else teamRecords[m.equipe_exterieur_id].draws++;
+        else if (m.score_exterieur < m.score_domicile) teamRecords[m.equipe_domicile_id].losses++;
+        else teamRecords[m.equipe_domicile_id].draws++;
       }
     });
 
@@ -640,6 +640,21 @@ export default function App() {
       randomVal -= item.weight;
     }
     return activePlayers[0];
+  }
+
+  // --- GÉNÉRATION D'UN LANCER DE DÉ (1 À 6 EQUIPROBABLE) ---
+  function handleRollDice(matchId) {
+    const diceDom = Math.floor(Math.random() * 6) + 1;
+    const diceExt = Math.floor(Math.random() * 6) + 1;
+
+    setScoresInput(prev => ({
+      ...prev,
+      [matchId]: {
+        dom: diceDom,
+        ext: diceExt
+      }
+    }));
+    showNotif(`🎲 Lancer de dé : ${diceDom} - ${diceExt}`);
   }
 
   // --- GÉNÉRATION DES ÉVÉNEMENTS SELON LE SCORE ENTRÉ ---
@@ -1009,7 +1024,6 @@ export default function App() {
         setSeasonFilter(targetSeason);
         setJourneeFilter(1);
         
-        // Réinitialiser le compteur de delta d'évolution pour cette saison
         setSeasonEvolutions(prev => ({ ...prev, [targetSeason]: {} }));
 
         await fetchData();
@@ -1320,7 +1334,7 @@ export default function App() {
     setLogoUpdating(false);
   }
 
-  // --- OUVERTURE DE LA MODALE VS (ENRICHIE AVEC LES DONNÉES DU STATE PLAYERS) ---
+  // --- OUVERTURE DE LA MODALE VS ---
   async function openMatchDetails(match) {
     setSelectedMatch(match);
     const { data, error } = await supabase
@@ -1719,7 +1733,6 @@ export default function App() {
     );
   };
 
-  // --- FILTRES POUR LES ÉVÉNEMENTS DU MATCH SÉLECTIONNÉ DANS LA MODALE VS ---
   const homeEvents = selectedMatch 
     ? selectedMatchEvents.filter(ev => ev.player_equipe_id === selectedMatch.equipe_domicile_id) 
     : [];
@@ -2121,8 +2134,8 @@ export default function App() {
                           </span>
                         </div>
 
-                        {/* CENTRE : INPUTS ET BOUTON VS FIXE */}
-                        <div className="flex items-center justify-center gap-2 sm:gap-3 shrink-0 my-2 sm:my-0">
+                        {/* CENTRE : INPUTS, BOUTON DÉ 🎲 ET BOUTON VS FIXE */}
+                        <div className="flex items-center justify-center gap-2 sm:gap-2.5 shrink-0 my-2 sm:my-0">
                           <input
                             type="number"
                             min="0"
@@ -2132,10 +2145,20 @@ export default function App() {
                             className="w-12 h-11 sm:w-14 sm:h-12 bg-slate-950 text-white font-mono font-black text-xl text-center rounded-xl border border-slate-700 focus:outline-none focus:border-indigo-500 shadow-inner [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                           />
 
+                          {/* BOUTON DÉ (SCORE ALÉATOIRE 1 À 6 COMME UN VRAI DÉ) */}
+                          <button
+                            type="button"
+                            onClick={() => handleRollDice(m.id)}
+                            className="bg-amber-500/20 hover:bg-amber-500 text-amber-300 hover:text-slate-950 border border-amber-500/40 text-sm font-black p-2.5 rounded-xl transition-all cursor-pointer shadow-md active:scale-95 select-none"
+                            title="Lancer les dés (Donne un score aléatoire de 1 à 6 avec probabilités égales)"
+                          >
+                            🎲
+                          </button>
+
                           <button
                             type="button"
                             onClick={() => openMatchDetails(m)}
-                            className="bg-indigo-600/20 hover:bg-indigo-600 text-indigo-300 hover:text-white border border-indigo-500/40 text-xs font-black tracking-widest px-3.5 py-2.5 rounded-xl transition-all cursor-pointer shadow-md active:scale-95 uppercase select-none"
+                            className="bg-indigo-600/20 hover:bg-indigo-600 text-indigo-300 hover:text-white border border-indigo-500/40 text-xs font-black tracking-widest px-3 py-2.5 rounded-xl transition-all cursor-pointer shadow-md active:scale-95 uppercase select-none"
                             title="Cliquer pour voir les buteurs, passeurs, cartons et changements"
                           >
                             VS
