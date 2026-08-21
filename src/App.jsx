@@ -245,23 +245,18 @@ export default function App() {
     showNotif("Déconnexion réussie. Votre progression a été sauvegardée.");
   }
 
-  // --- VERSION BLINDÉE DE FETCH DATA ---
   async function fetchData() {
-    // 1. Charger les équipes
     const { data: dataTeams, error: errTeams } = await supabase.from('teams').select('*');
     if (errTeams) alert(`Erreur Teams : ${errTeams.message}`);
     if (dataTeams) setTeams(dataTeams);
 
-    // 2. Charger les joueurs
     const { data: dataPlayers, error: errPlayers } = await supabase.from('players').select('*, teams!players_equipe_id_fkey(nom, logo_url)');
     if (errPlayers) {
       alert(`⚠️ ERREUR CHARGEMENT JOUEURS :\n${errPlayers.message}\nDétails : ${errPlayers.details || 'Vérifiez la clé étrangère'}`);
     } else if (dataPlayers) {
-      console.log("Nombre de joueurs reçus depuis Supabase :", dataPlayers.length);
       setPlayers(dataPlayers);
     }
 
-    // 3. Charger les matchs
     let { data: userMatches, error: matchError } = await supabase
       .from('matches')
       .select('*, dom:teams!equipe_domicile_id(*), ext:teams!equipe_exterieur_id(*)')
@@ -297,12 +292,10 @@ export default function App() {
       }
     }
 
-    // 4. Charger les événements (buts, cartons...)
     const { data: dataEvents, error: errEvents } = await supabase.from('match_events').select('*').eq('user_id', session.user.id);
     if (errEvents) alert(`Erreur Events : ${errEvents.message}`);
     if (dataEvents) setMatchEvents(dataEvents);
 
-    // 5. Charger les transferts
     const { data: dataTransfers, error: errTransfers } = await supabase
       .from('transfers')
       .select('*, players(nom), old_team:teams!old_team_id(nom), new_team:teams!new_team_id(nom)')
@@ -475,7 +468,7 @@ export default function App() {
       if (teamRecords[m.equipe_exterieur_id]) {
         teamRecords[m.equipe_exterieur_id].matchCount++;
         teamRecords[m.equipe_exterieur_id].goalsConceded += (m.score_domicile || 0);
-        if (m.score_domicile === 0) teamRecords[m.equipe_exterieur_id].cleanSheets++;
+        if (m.score_domicile === 0) teamRecords[m.equipe_domicile_id].cleanSheets++;
         if (m.score_exterieur > m.score_domicile) teamRecords[m.equipe_exterieur_id].wins++;
         else if (m.score_exterieur < m.score_domicile) teamRecords[m.equipe_exterieur_id].losses++;
         else teamRecords[m.equipe_domicile_id].draws++;
@@ -1056,7 +1049,7 @@ export default function App() {
     return [...allerMatches, ...retourMatches];
   }
 
-  // --- GESTION DES SAISONS ---
+  // --- GESTION DES SAISONS (AVEC DÉCOUPAGE ANTI-TIMEOUT) ---
   async function handleStartNewSeason(isNextSeason = false) {
     if (!teams || teams.length < 2) {
       alert(`Erreur : Il vous faut au moins 2 équipes pour générer un calendrier (actuellement : ${teams ? teams.length : 0}). Créez-les dans l'onglet Admin.`);
@@ -1080,6 +1073,7 @@ export default function App() {
 
     try {
       if (!isNextSeason) {
+        // Nettoyage avant génération
         await supabase.from('match_events').delete().eq('user_id', session.user.id).eq('saison', targetSeason);
         await supabase.from('matches').delete().eq('user_id', session.user.id).eq('saison', targetSeason);
       }
@@ -1092,29 +1086,36 @@ export default function App() {
         return;
       }
 
-      const { data: insertedData, error } = await supabase.from('matches').insert(fixtures).select('*, dom:teams!equipe_domicile_id(*), ext:teams!equipe_exterieur_id(*)');
+      // ⚠️ LA SOLUTION ANTI-TIMEOUT : ENVOI PAR BLOCS DE 100 MATCHS
+      const chunkSize = 100;
+      let insertedCount = 0;
 
-      if (error) {
-        alert(`Erreur Supabase lors de l'insertion du calendrier :\n${error.message}`);
-      } else if (!insertedData || insertedData.length === 0) {
-        alert("Erreur : L'insertion a fonctionné mais 0 ligne a été retournée. Vérifiez vos règles RLS.");
-      } else {
-        showNotif(`${seasonLabel} prête ! ${insertedData.length} matchs créés.`);
+      for (let i = 0; i < fixtures.length; i += chunkSize) {
+        const chunk = fixtures.slice(i, i + chunkSize);
+        const { error } = await supabase.from('matches').insert(chunk);
         
-        setSeasonFilter(targetSeason);
-        setJourneeFilter(1);
-        
-        setSeasonEvolutions(prev => ({ ...prev, [targetSeason]: {} }));
-
-        if (session?.user?.id) {
-          localStorage.setItem(`season_${session.user.id}`, targetSeason);
-          localStorage.setItem(`journee_${session.user.id}`, 1);
+        if (error) {
+          throw new Error(`Erreur lors de l'insertion du bloc ${i} : ${error.message}`);
         }
-
-        await fetchData();
+        insertedCount += chunk.length;
       }
+
+      showNotif(`${seasonLabel} prête ! ${insertedCount} matchs créés.`);
+      
+      setSeasonFilter(targetSeason);
+      setJourneeFilter(1);
+      setSeasonEvolutions(prev => ({ ...prev, [targetSeason]: {} }));
+
+      if (session?.user?.id) {
+        localStorage.setItem(`season_${session.user.id}`, targetSeason);
+        localStorage.setItem(`journee_${session.user.id}`, 1);
+      }
+
+      // Met à jour l'affichage en direct avec les nouveaux matchs
+      await fetchData();
+      
     } catch (err) {
-      alert(`Erreur inattendue : ${err.message}`);
+      alert(`Erreur Supabase lors du calendrier : ${err.message}`);
     }
 
     setGeneratingSchedule(false);
@@ -1454,7 +1455,6 @@ export default function App() {
     setLogoUpdating(false);
   }
 
-  // --- OUVERTURE DE LA MODALE VS ---
   async function openMatchDetails(match) {
     setSelectedMatch(match);
     const { data, error } = await supabase
