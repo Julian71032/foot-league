@@ -245,63 +245,81 @@ export default function App() {
     showNotif("Déconnexion réussie. Votre progression a été sauvegardée.");
   }
 
+  // --- REQUÊTE SANS JOINTURE POUR SUPPRIMER LE TIMEOUT SUPABASE ---
   async function fetchData() {
+    // 1. Charger les équipes
     const { data: dataTeams, error: errTeams } = await supabase.from('teams').select('*');
-    if (errTeams) alert(`Erreur Teams : ${errTeams.message}`);
-    if (dataTeams) setTeams(dataTeams);
+    if (errTeams) console.error('Erreur Teams:', errTeams.message);
+    const currentTeams = dataTeams || [];
+    setTeams(currentTeams);
 
-    const { data: dataPlayers, error: errPlayers } = await supabase.from('players').select('*, teams!players_equipe_id_fkey(nom, logo_url)');
+    // 2. Charger les joueurs avec la clé étrangère explicite
+    const { data: dataPlayers, error: errPlayers } = await supabase
+      .from('players')
+      .select('*, teams!players_equipe_id_fkey(nom, logo_url)');
     if (errPlayers) {
-      alert(`⚠️ ERREUR CHARGEMENT JOUEURS :\n${errPlayers.message}`);
+      console.error('Erreur Players:', errPlayers.message);
     } else if (dataPlayers) {
       setPlayers(dataPlayers);
     }
 
-    let { data: userMatches, error: matchError } = await supabase
+    // 3. Charger les matchs directement sans jointures lourdes
+    const { data: rawMatches, error: matchError } = await supabase
       .from('matches')
-      .select('*, dom:teams!equipe_domicile_id(*), ext:teams!equipe_exterieur_id(*)')
+      .select('*')
       .eq('user_id', session.user.id)
       .order('journee', { ascending: true })
       .order('id', { ascending: true });
 
     if (matchError) {
       alert(`⚠️ ERREUR MATCHS :\n${matchError.message}`);
+      return;
     }
 
-    if (userMatches) {
-      setMatches(userMatches);
-      const maxS = Math.max(...userMatches.map(m => m.saison || 1), 1);
-      
+    if (rawMatches) {
+      // Reconstituer les informations de dom et ext en mémoire
+      const enrichedMatches = rawMatches.map(m => ({
+        ...m,
+        dom: currentTeams.find(t => t.id === m.equipe_domicile_id) || null,
+        ext: currentTeams.find(t => t.id === m.equipe_exterieur_id) || null
+      }));
+
+      setMatches(enrichedMatches);
+
+      const maxS = Math.max(...enrichedMatches.map(m => m.saison || 1), 1);
       const savedSeason = localStorage.getItem(`season_${session.user.id}`);
       const savedJournee = localStorage.getItem(`journee_${session.user.id}`);
 
-      if (savedSeason) {
-        setSeasonFilter(parseInt(savedSeason, 10));
-      } else {
-        setSeasonFilter(prev => Math.max(prev, maxS));
-      }
+      const activeSeason = savedSeason ? parseInt(savedSeason, 10) : maxS;
+      setSeasonFilter(activeSeason);
 
       if (savedJournee) {
         setJourneeFilter(parseInt(savedJournee, 10));
       } else {
-        const currentActiveSeason = savedSeason ? parseInt(savedSeason, 10) : maxS;
-        const firstUnfinished = userMatches.find(m => m.statut !== 'terminé' && (m.saison || 1) === currentActiveSeason);
+        const firstUnfinished = enrichedMatches.find(
+          m => m.statut !== 'terminé' && (m.saison || 1) === activeSeason
+        );
         if (firstUnfinished) {
           setJourneeFilter(firstUnfinished.journee || 1);
         }
       }
     }
 
-    const { data: dataEvents, error: errEvents } = await supabase.from('match_events').select('*').eq('user_id', session.user.id);
-    if (errEvents) alert(`Erreur Events : ${errEvents.message}`);
+    // 4. Charger les événements
+    const { data: dataEvents, error: errEvents } = await supabase
+      .from('match_events')
+      .select('*')
+      .eq('user_id', session.user.id);
+    if (errEvents) console.error('Erreur Events:', errEvents.message);
     if (dataEvents) setMatchEvents(dataEvents);
 
+    // 5. Charger les transferts
     const { data: dataTransfers, error: errTransfers } = await supabase
       .from('transfers')
       .select('*, players(nom), old_team:teams!old_team_id(nom), new_team:teams!new_team_id(nom)')
       .order('created_at', { ascending: false })
       .limit(15);
-    if (errTransfers) alert(`Erreur Transferts : ${errTransfers.message}`);
+    if (errTransfers) console.error('Erreur Transferts:', errTransfers.message);
     if (dataTransfers) setTransfers(dataTransfers);
   }
 
