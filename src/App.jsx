@@ -252,7 +252,7 @@ export default function App() {
 
     const { data: dataPlayers, error: errPlayers } = await supabase.from('players').select('*, teams!players_equipe_id_fkey(nom, logo_url)');
     if (errPlayers) {
-      alert(`⚠️ ERREUR CHARGEMENT JOUEURS :\n${errPlayers.message}\nDétails : ${errPlayers.details || 'Vérifiez la clé étrangère'}`);
+      alert(`⚠️ ERREUR CHARGEMENT JOUEURS :\n${errPlayers.message}`);
     } else if (dataPlayers) {
       setPlayers(dataPlayers);
     }
@@ -336,6 +336,7 @@ export default function App() {
     return { starters: all.slice(0, 11), bench: all.slice(11) };
   }
 
+  // --- MOTEUR DE TRANSFERTS MERCATO D'HIVER ---
   async function triggerWinterMercato(journeeNum, currentSeasonNum) {
     if (!teams || teams.length < 2 || !players || players.length < 10) return;
 
@@ -438,6 +439,7 @@ export default function App() {
     }
   }
 
+  // --- MOTEUR D'ÉVOLUTION DYNAMIQUE ---
   async function evaluateAndApplyPlayerEvolutions(targetJournee, currentSeasonNum) {
     const startJournee = targetJournee - 3;
     const endJournee = targetJournee;
@@ -468,7 +470,7 @@ export default function App() {
       if (teamRecords[m.equipe_exterieur_id]) {
         teamRecords[m.equipe_exterieur_id].matchCount++;
         teamRecords[m.equipe_exterieur_id].goalsConceded += (m.score_domicile || 0);
-        if (m.score_domicile === 0) teamRecords[m.equipe_domicile_id].cleanSheets++;
+        if (m.score_domicile === 0) teamRecords[m.equipe_exterieur_id].cleanSheets++;
         if (m.score_exterieur > m.score_domicile) teamRecords[m.equipe_exterieur_id].wins++;
         else if (m.score_exterieur < m.score_domicile) teamRecords[m.equipe_exterieur_id].losses++;
         else teamRecords[m.equipe_domicile_id].draws++;
@@ -1049,7 +1051,7 @@ export default function App() {
     return [...allerMatches, ...retourMatches];
   }
 
-  // --- GESTION DES SAISONS (AVEC DÉCOUPAGE ANTI-TIMEOUT) ---
+  // --- GESTION DES SAISONS (REINITIALISATION vs SAISON SUIVANTE) ---
   async function handleStartNewSeason(isNextSeason = false) {
     if (!teams || teams.length < 2) {
       alert(`Erreur : Il vous faut au moins 2 équipes pour générer un calendrier (actuellement : ${teams ? teams.length : 0}). Créez-les dans l'onglet Admin.`);
@@ -1057,15 +1059,15 @@ export default function App() {
     }
 
     const currentMaxSeason = matches.length > 0 ? Math.max(...matches.map(m => m.saison || 1), 1) : 1;
-    const targetSeason = isNextSeason ? currentMaxSeason + 1 : parseInt(seasonFilter, 10);
+    const targetSeason = isNextSeason ? currentMaxSeason + 1 : 1;
     const seasonLabel = getSeasonLabel(targetSeason);
 
     const totalJournees = (teams.length % 2 === 0 ? teams.length - 1 : teams.length) * 2;
     const totalMatchs = teams.length * (teams.length - 1);
 
     const confirmMsg = isNextSeason
-      ? `Voulez-vous lancer la ${seasonLabel} ?\n\n- ${teams.length} Équipes programmées\n- ${totalJournees} Journées (Aller-Retour)\n- ${totalMatchs} Matchs au total\n\nL'historique restera consultable.`
-      : `Voulez-vous générer ou regénérer le calendrier de la ${seasonLabel} ?\n\n- Tous les matchs de la ${seasonLabel} vont être générés.`;
+      ? `Voulez-vous lancer la ${seasonLabel} ?\n\n- Vous conservez vos transferts et évolutions actuels.\n- ${totalJournees} Journées programmées.`
+      : `Voulez-vous REINITIALISER complètement le tournoi (Saison 1) ?\n\n- Tous les joueurs retourneront dans leur club d'origine avec leurs notes de base.\n- L'historique des transferts et matchs sera effacé.`;
 
     if (!window.confirm(confirmMsg)) return;
 
@@ -1073,20 +1075,50 @@ export default function App() {
 
     try {
       if (!isNextSeason) {
-        // Nettoyage avant génération
-        await supabase.from('match_events').delete().eq('user_id', session.user.id).eq('saison', targetSeason);
-        await supabase.from('matches').delete().eq('user_id', session.user.id).eq('saison', targetSeason);
+        // 🔄 CAS REINITIALISATION COMPLETE : Remettre les joueurs dans leurs clubs d'origine
+        const { data: allUserTransfers } = await supabase
+          .from('transfers')
+          .select('*')
+          .order('created_at', { ascending: true });
+
+        if (allUserTransfers && allUserTransfers.length > 0) {
+          const initialClubByPlayer = {};
+          allUserTransfers.forEach(t => {
+            if (!initialClubByPlayer[t.player_id]) {
+              initialClubByPlayer[t.player_id] = t.old_team_id;
+            }
+          });
+
+          for (const [playerId, originalTeamId] of Object.entries(initialClubByPlayer)) {
+            await supabase
+              .from('players')
+              .update({ equipe_id: originalTeamId })
+              .eq('id', playerId);
+          }
+
+          await supabase.from('transfers').delete().eq('user_id', session.user.id);
+        }
+
+        // Vider tous les anciens matchs et événements
+        await supabase.from('match_events').delete().eq('user_id', session.user.id);
+        await supabase.from('matches').delete().eq('user_id', session.user.id);
+        setTransfers([]);
+      } else {
+        // 🚀 CAS SAISON SUIVANTE : On garde les transferts/joueurs actuels, on vide juste les anciens matchs pour garder la DB ultra rapide
+        await supabase.from('match_events').delete().eq('user_id', session.user.id);
+        await supabase.from('matches').delete().eq('user_id', session.user.id);
       }
 
+      // Générer le nouveau calendrier
       const fixtures = buildRoundRobinFixtures(teams, session.user.id, targetSeason);
       
       if (!fixtures || fixtures.length === 0) {
-        alert("Erreur critique : le générateur de calendrier n'a produit aucun match.");
+        alert("Erreur critique : le générateur n'a produit aucun match.");
         setGeneratingSchedule(false);
         return;
       }
 
-      // ⚠️ LA SOLUTION ANTI-TIMEOUT : ENVOI PAR BLOCS DE 100 MATCHS
+      // Insertion par paquets légers de 100 pour éviter tout timeout
       const chunkSize = 100;
       let insertedCount = 0;
 
@@ -1095,27 +1127,26 @@ export default function App() {
         const { error } = await supabase.from('matches').insert(chunk);
         
         if (error) {
-          throw new Error(`Erreur lors de l'insertion du bloc ${i} : ${error.message}`);
+          throw new Error(`Erreur lors de l'insertion du bloc : ${error.message}`);
         }
         insertedCount += chunk.length;
       }
 
-      showNotif(`${seasonLabel} prête ! ${insertedCount} matchs créés.`);
+      showNotif(isNextSeason ? `${seasonLabel} lancée ! Effectifs conservés.` : `Tournoi réinitialisé avec clubs et effectifs de base !`);
       
       setSeasonFilter(targetSeason);
       setJourneeFilter(1);
-      setSeasonEvolutions(prev => ({ ...prev, [targetSeason]: {} }));
+      setSeasonEvolutions({});
 
       if (session?.user?.id) {
         localStorage.setItem(`season_${session.user.id}`, targetSeason);
         localStorage.setItem(`journee_${session.user.id}`, 1);
       }
 
-      // Met à jour l'affichage en direct avec les nouveaux matchs
       await fetchData();
       
     } catch (err) {
-      alert(`Erreur Supabase lors du calendrier : ${err.message}`);
+      alert(`Erreur Supabase : ${err.message}`);
     }
 
     setGeneratingSchedule(false);
@@ -1369,7 +1400,7 @@ export default function App() {
       const { data: dataTeams } = await supabase.from('teams').select('*');
       if (dataTeams) setTeams(dataTeams);
 
-      const { data: dataPlayers } = await supabase.from('players').select('*, teams(nom, logo_url)');
+      const { data: dataPlayers } = await supabase.from('players').select('*, teams!players_equipe_id_fkey(nom, logo_url)');
       if (dataPlayers) setPlayers(dataPlayers);
     } catch (err) {
       showNotif(`Erreur : ${err.message}`);
@@ -1455,6 +1486,7 @@ export default function App() {
     setLogoUpdating(false);
   }
 
+  // --- OUVERTURE DE LA MODALE VS ---
   async function openMatchDetails(match) {
     setSelectedMatch(match);
     const { data, error } = await supabase
@@ -2228,13 +2260,13 @@ export default function App() {
                   <span>⚡</span> {simulating ? 'Simulation...' : 'Simuler la Journée'}
                 </button>
 
-                {/* BOUTONS SAISONS AVEC LOGO FLÈCHE TOURNANTE 🔄 ET DEBLOCAGE FORCE */}
+                {/* BOUTONS SAISONS */}
                 <div className="flex items-center gap-1.5">
                   <button
                     type="button"
                     onClick={() => handleStartNewSeason(false)}
-                    className="bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold px-2.5 py-2 rounded-xl transition-all cursor-pointer"
-                    title="Générer / Regénérer le calendrier de cette saison"
+                    className="bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold px-2.5 py-2 rounded-xl transition-all cursor-pointer flex items-center gap-1"
+                    title="Réinitialiser complètement la saison 1 (clubs & joueurs de base)"
                   >
                     🔄
                   </button>
@@ -2243,7 +2275,7 @@ export default function App() {
                     type="button"
                     onClick={() => handleStartNewSeason(true)}
                     className="bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold px-3 py-2 rounded-xl transition-all shadow-md flex items-center gap-1 cursor-pointer active:scale-95"
-                    title="Lancer la saison suivante"
+                    title="Lancer la saison suivante (garde les effectifs actuels)"
                   >
                     <span>🚀</span> Saison +1
                   </button>
@@ -2806,7 +2838,7 @@ export default function App() {
                     <span>🔄</span> 3. Gestion des Saisons & Calendriers
                   </h3>
                   <p className="text-xs text-slate-400 mt-1 max-w-xl">
-                    Chaque saison génère un calendrier complet Aller-Retour. Regénérer la saison active réinitialise les matchs et scores de la saison sélectionnée.
+                    Réinitialiser (🔄) remet tous les joueurs dans leur club d'origine. Lancer la saison suivante (🚀) conserve tous vos effectifs actuels et démarre un nouveau championnat.
                   </p>
                   <div className="flex items-center gap-4 mt-3 text-xs font-semibold text-slate-400">
                     <span>🛡️ Équipes : <strong className="text-indigo-400">{teams.length}</strong></span>
@@ -2821,7 +2853,7 @@ export default function App() {
                     onClick={() => handleStartNewSeason(false)}
                     className="bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold px-4 py-3 rounded-xl text-sm transition-all cursor-pointer flex items-center gap-2"
                   >
-                    <span>🔄</span> Regénérer la Saison Active
+                    <span>🔄</span> Réinitialiser Saison 1
                   </button>
                   <button
                     type="button"
