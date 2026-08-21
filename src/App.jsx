@@ -206,7 +206,7 @@ export default function App() {
         })
         .eq('id', session.user.id);
 
-      showNotif(`Progression sauvegardée ! Vous reprendrez à la Journée ${journeeFilter} (${getSeasonLabel(seasonFilter)})`);
+      showNotif(`Progression sauvegardée ! Reprise à la Journée ${journeeFilter} (${getSeasonLabel(seasonFilter)})`);
     } catch (err) {
       showNotif(`Progression sauvegardée localement (Saison ${seasonFilter}, Journée ${journeeFilter}).`);
     }
@@ -276,7 +276,8 @@ export default function App() {
       if (savedJournee) {
         setJourneeFilter(parseInt(savedJournee, 10));
       } else {
-        const firstUnfinished = userMatches.find(m => m.statut !== 'terminé' && (m.saison || 1) === (savedSeason ? parseInt(savedSeason, 10) : maxS));
+        const currentActiveSeason = savedSeason ? parseInt(savedSeason, 10) : maxS;
+        const firstUnfinished = userMatches.find(m => m.statut !== 'terminé' && (m.saison || 1) === currentActiveSeason);
         if (firstUnfinished) {
           setJourneeFilter(firstUnfinished.journee || 1);
         }
@@ -459,7 +460,7 @@ export default function App() {
       if (teamRecords[m.equipe_exterieur_id]) {
         teamRecords[m.equipe_exterieur_id].matchCount++;
         teamRecords[m.equipe_exterieur_id].goalsConceded += (m.score_domicile || 0);
-        if (m.score_domicile === 0) teamRecords[m.equipe_exterieur_id].cleanSheets++;
+        if (m.score_domicile === 0) teamRecords[m.equipe_domicile_id].cleanSheets++;
         if (m.score_exterieur > m.score_domicile) teamRecords[m.equipe_exterieur_id].wins++;
         else if (m.score_exterieur < m.score_domicile) teamRecords[m.equipe_exterieur_id].losses++;
         else teamRecords[m.equipe_exterieur_id].draws++;
@@ -1041,7 +1042,7 @@ export default function App() {
     return [...allerMatches, ...retourMatches];
   }
 
-  // --- GESTION DES SAISONS ---
+  // --- GESTION DES SAISONS (CORRIGÉE : PREND EN COMPTE seasonFilter ACTIVE) ---
   async function handleStartNewSeason(isNextSeason = false) {
     if (!teams || teams.length < 2) {
       showNotif("Il doit y avoir au moins 2 équipes créées pour lancer une saison.");
@@ -1049,7 +1050,8 @@ export default function App() {
     }
 
     const currentMaxSeason = matches.length > 0 ? Math.max(...matches.map(m => m.saison || 1), 1) : 1;
-    const targetSeason = isNextSeason ? currentMaxSeason + 1 : currentMaxSeason;
+    // Si isNextSeason = true, on prend max + 1, sinon on prend la saison actuellement affichée (seasonFilter)
+    const targetSeason = isNextSeason ? currentMaxSeason + 1 : parseInt(seasonFilter, 10);
     const seasonLabel = getSeasonLabel(targetSeason);
 
     const totalJournees = (teams.length % 2 === 0 ? teams.length - 1 : teams.length) * 2;
@@ -1057,7 +1059,7 @@ export default function App() {
 
     const confirmMsg = isNextSeason
       ? `Voulez-vous lancer la ${seasonLabel} ?\n\n- ${teams.length} Équipes\n- ${totalJournees} Journées Aller-Retour\n- ${totalMatchs} Matchs programmés\n\nL'historique des saisons précédentes restera consultable.`
-      : `Voulez-vous regénérer la ${seasonLabel} ?\n\n- Tous les matchs et événements de cette saison seront réinitialisés.`;
+      : `Voulez-vous générer ou regénérer le calendrier de la ${seasonLabel} ?\n\n- Tous les matchs de la ${seasonLabel} seront programmés.`;
 
     if (!window.confirm(confirmMsg)) return;
 
@@ -1075,7 +1077,7 @@ export default function App() {
       if (error) {
         showNotif(`Erreur : ${error.message}`);
       } else {
-        showNotif(!isNextSeason ? `${seasonLabel} réinitialisée avec succès !` : `${seasonLabel} lancée avec succès !`);
+        showNotif(`${seasonLabel} initialisée avec succès !`);
         setSeasonFilter(targetSeason);
         setJourneeFilter(1);
         
@@ -1099,7 +1101,7 @@ export default function App() {
   const seasonEvents = matchEvents.filter(e => (e.saison || 1) === parseInt(seasonFilter, 10));
 
   const availableSeasons = Array.from(
-    new Set([...matches.map(m => m.saison || 1), 1])
+    new Set([...matches.map(m => m.saison || 1), 1, parseInt(seasonFilter, 10)])
   ).sort((a, b) => a - b);
 
   // --- CALCUL DU CLASSEMENT COMPLET ---
@@ -2203,16 +2205,16 @@ export default function App() {
                   <span>⚡</span> {simulating ? 'Simulation...' : 'Simuler la Journée'}
                 </button>
 
-                {/* BOUTONS SAISONS */}
+                {/* BOUTONS SAISONS AVEC LOGO FLÈCHE TOURNANTE 🔄 */}
                 <div className="flex items-center gap-1.5">
                   <button
                     type="button"
                     onClick={() => handleStartNewSeason(false)}
                     disabled={generatingSchedule || teams.length < 2}
                     className="bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold px-2.5 py-2 rounded-xl transition-all cursor-pointer"
-                    title="Regénérer le calendrier de cette saison"
+                    title="Générer / Regénérer le calendrier de cette saison"
                   >
-                    🎲
+                    🔄
                   </button>
 
                   <button
@@ -2235,9 +2237,9 @@ export default function App() {
                   <button
                     onClick={() => handleStartNewSeason(false)}
                     disabled={generatingSchedule || teams.length < 2}
-                    className="bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold px-5 py-3 rounded-xl transition-all shadow-lg shadow-indigo-600/30 cursor-pointer"
+                    className="bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold px-5 py-3 rounded-xl transition-all shadow-lg shadow-indigo-600/30 cursor-pointer flex items-center gap-2 mx-auto"
                   >
-                    🎲 Générer le Calendrier de la {getSeasonLabel(seasonFilter)}
+                    <span>🔄</span> Générer le Calendrier de la {getSeasonLabel(seasonFilter)}
                   </button>
                 </div>
               ) : (
@@ -2780,7 +2782,7 @@ export default function App() {
               <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
                 <div>
                   <h3 className="text-lg font-bold text-white flex items-center gap-2">
-                    <span>🎲</span> 3. Gestion des Saisons & Calendriers
+                    <span>🔄</span> 3. Gestion des Saisons & Calendriers
                   </h3>
                   <p className="text-xs text-slate-400 mt-1 max-w-xl">
                     Chaque saison génère un calendrier complet Aller-Retour. Regénérer la saison active réinitialise les matchs et scores de la saison sélectionnée.
@@ -2797,9 +2799,9 @@ export default function App() {
                     type="button"
                     onClick={() => handleStartNewSeason(false)}
                     disabled={generatingSchedule || teams.length < 2}
-                    className="bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold px-4 py-3 rounded-xl text-sm transition-all cursor-pointer"
+                    className="bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold px-4 py-3 rounded-xl text-sm transition-all cursor-pointer flex items-center gap-2"
                   >
-                    Regénérer la Saison Active
+                    <span>🔄</span> Regénérer la Saison Active
                   </button>
                   <button
                     type="button"
