@@ -460,10 +460,10 @@ export default function App() {
       if (teamRecords[m.equipe_exterieur_id]) {
         teamRecords[m.equipe_exterieur_id].matchCount++;
         teamRecords[m.equipe_exterieur_id].goalsConceded += (m.score_domicile || 0);
-        if (m.score_domicile === 0) teamRecords[m.equipe_domicile_id].cleanSheets++;
+        if (m.score_domicile === 0) teamRecords[m.equipe_exterieur_id].cleanSheets++;
         if (m.score_exterieur > m.score_domicile) teamRecords[m.equipe_exterieur_id].wins++;
         else if (m.score_exterieur < m.score_domicile) teamRecords[m.equipe_exterieur_id].losses++;
-        else teamRecords[m.equipe_exterieur_id].draws++;
+        else teamRecords[m.equipe_domicile_id].draws++;
       }
     });
 
@@ -909,7 +909,7 @@ export default function App() {
   async function handleSimulateJournee() {
     const currentJourneeMatches = seasonMatches.filter(m => m.journee === parseInt(journeeFilter, 10));
     if (currentJourneeMatches.length === 0) {
-      showNotif("Aucun match à simuler pour cette journée.");
+      alert("Aucun match à simuler pour cette journée.");
       return;
     }
 
@@ -976,7 +976,7 @@ export default function App() {
         await fetchData();
       }
     } catch (err) {
-      showNotif(`Erreur : ${err.message}`);
+      alert(`Erreur de simulation : ${err.message}`);
     }
 
     setSimulating(false);
@@ -1042,15 +1042,15 @@ export default function App() {
     return [...allerMatches, ...retourMatches];
   }
 
-  // --- GESTION DES SAISONS (CORRIGÉE : PREND EN COMPTE seasonFilter ACTIVE) ---
+  // --- GESTION DES SAISONS ---
   async function handleStartNewSeason(isNextSeason = false) {
+    // 1. DÉBLOCAGE FORCE : On vérifie les équipes ici, et on affiche une vraie alerte !
     if (!teams || teams.length < 2) {
-      showNotif("Il doit y avoir au moins 2 équipes créées pour lancer une saison.");
+      alert(`Erreur : Il vous faut au moins 2 équipes pour générer une saison (actuellement : ${teams ? teams.length : 0}). Créez-les dans l'onglet Admin.`);
       return;
     }
 
     const currentMaxSeason = matches.length > 0 ? Math.max(...matches.map(m => m.saison || 1), 1) : 1;
-    // Si isNextSeason = true, on prend max + 1, sinon on prend la saison actuellement affichée (seasonFilter)
     const targetSeason = isNextSeason ? currentMaxSeason + 1 : parseInt(seasonFilter, 10);
     const seasonLabel = getSeasonLabel(targetSeason);
 
@@ -1058,8 +1058,8 @@ export default function App() {
     const totalMatchs = teams.length * (teams.length - 1);
 
     const confirmMsg = isNextSeason
-      ? `Voulez-vous lancer la ${seasonLabel} ?\n\n- ${teams.length} Équipes\n- ${totalJournees} Journées Aller-Retour\n- ${totalMatchs} Matchs programmés\n\nL'historique des saisons précédentes restera consultable.`
-      : `Voulez-vous générer ou regénérer le calendrier de la ${seasonLabel} ?\n\n- Tous les matchs de la ${seasonLabel} seront programmés.`;
+      ? `Voulez-vous lancer la ${seasonLabel} ?\n\n- ${teams.length} Équipes programmées\n- ${totalJournees} Journées (Aller-Retour)\n- ${totalMatchs} Matchs au total\n\nL'historique restera consultable.`
+      : `Voulez-vous générer ou regénérer le calendrier de la ${seasonLabel} ?\n\n- Tous les matchs de la ${seasonLabel} vont être générés.`;
 
     if (!window.confirm(confirmMsg)) return;
 
@@ -1072,10 +1072,17 @@ export default function App() {
       }
 
       const fixtures = buildRoundRobinFixtures(teams, session.user.id, targetSeason);
+      
+      if (!fixtures || fixtures.length === 0) {
+        alert("Erreur critique : le générateur de calendrier n'a produit aucun match.");
+        setGeneratingSchedule(false);
+        return;
+      }
+
       const { error } = await supabase.from('matches').insert(fixtures);
 
       if (error) {
-        showNotif(`Erreur : ${error.message}`);
+        alert(`Erreur Supabase lors de l'insertion du calendrier :\n${error.message}`);
       } else {
         showNotif(`${seasonLabel} initialisée avec succès !`);
         setSeasonFilter(targetSeason);
@@ -1091,7 +1098,7 @@ export default function App() {
         await fetchData();
       }
     } catch (err) {
-      showNotif(`Erreur : ${err.message}`);
+      alert(`Erreur inattendue : ${err.message}`);
     }
 
     setGeneratingSchedule(false);
@@ -1431,7 +1438,6 @@ export default function App() {
     setLogoUpdating(false);
   }
 
-  // --- OUVERTURE DE LA MODALE VS ---
   async function openMatchDetails(match) {
     setSelectedMatch(match);
     const { data, error } = await supabase
@@ -2205,14 +2211,13 @@ export default function App() {
                   <span>⚡</span> {simulating ? 'Simulation...' : 'Simuler la Journée'}
                 </button>
 
-                {/* BOUTONS SAISONS AVEC LOGO FLÈCHE TOURNANTE 🔄 */}
+                {/* BOUTONS SAISONS AVEC LOGO FLÈCHE TOURNANTE 🔄 ET DEBLOCAGE FORCE */}
                 <div className="flex items-center gap-1.5">
                   <button
                     type="button"
                     onClick={() => handleStartNewSeason(false)}
-                    disabled={generatingSchedule || teams.length < 2}
                     className="bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold px-2.5 py-2 rounded-xl transition-all cursor-pointer"
-                    title="Générer / Regénérer le calendrier de cette saison"
+                    title="Regénérer le calendrier de cette saison"
                   >
                     🔄
                   </button>
@@ -2220,7 +2225,6 @@ export default function App() {
                   <button
                     type="button"
                     onClick={() => handleStartNewSeason(true)}
-                    disabled={generatingSchedule || teams.length < 2}
                     className="bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold px-3 py-2 rounded-xl transition-all shadow-md flex items-center gap-1 cursor-pointer active:scale-95"
                     title="Lancer la saison suivante"
                   >
@@ -2235,8 +2239,8 @@ export default function App() {
                 <div className="bg-slate-900 border border-slate-800 rounded-2xl p-12 text-center">
                   <p className="text-slate-400 font-medium text-sm mb-4">Aucun match programmé pour cette journée dans la {getSeasonLabel(seasonFilter)}.</p>
                   <button
+                    type="button"
                     onClick={() => handleStartNewSeason(false)}
-                    disabled={generatingSchedule || teams.length < 2}
                     className="bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold px-5 py-3 rounded-xl transition-all shadow-lg shadow-indigo-600/30 cursor-pointer flex items-center gap-2 mx-auto"
                   >
                     <span>🔄</span> Générer le Calendrier de la {getSeasonLabel(seasonFilter)}
@@ -2798,7 +2802,6 @@ export default function App() {
                   <button
                     type="button"
                     onClick={() => handleStartNewSeason(false)}
-                    disabled={generatingSchedule || teams.length < 2}
                     className="bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold px-4 py-3 rounded-xl text-sm transition-all cursor-pointer flex items-center gap-2"
                   >
                     <span>🔄</span> Regénérer la Saison Active
@@ -2806,7 +2809,6 @@ export default function App() {
                   <button
                     type="button"
                     onClick={() => handleStartNewSeason(true)}
-                    disabled={generatingSchedule || teams.length < 2}
                     className="bg-indigo-600 hover:bg-indigo-500 active:scale-95 disabled:bg-slate-800 disabled:text-slate-600 text-white font-extrabold px-6 py-3 rounded-xl text-sm transition-all shadow-lg shadow-indigo-600/30 flex items-center gap-2 cursor-pointer whitespace-nowrap"
                   >
                     <span>🚀</span> Lancer la Saison Suivante
