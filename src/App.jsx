@@ -96,6 +96,7 @@ export default function App() {
   const [journeeFilter, setJourneeFilter] = useState(1);
   const [notification, setNotification] = useState('');
   const [simulating, setSimulating] = useState(false);
+  const [savingProgress, setSavingProgress] = useState(false);
 
   // Suivi du cumul d'évolution par saison
   const [seasonEvolutions, setSeasonEvolutions] = useState({});
@@ -176,7 +177,41 @@ export default function App() {
 
   async function fetchUserProfile(userId) {
     const { data } = await supabase.from('profiles').select('*').eq('id', userId).single();
-    if (data) setUserProfile(data);
+    if (data) {
+      setUserProfile(data);
+      if (data.current_season) setSeasonFilter(data.current_season);
+      if (data.current_journee) setJourneeFilter(data.current_journee);
+    } else {
+      const savedSeason = localStorage.getItem(`season_${userId}`);
+      const savedJournee = localStorage.getItem(`journee_${userId}`);
+      if (savedSeason) setSeasonFilter(parseInt(savedSeason, 10));
+      if (savedJournee) setJourneeFilter(parseInt(savedJournee, 10));
+    }
+  }
+
+  // --- SAUVEGARDE EXPLICITE DE LA PROGRESSION ---
+  async function handleSaveTournamentProgress() {
+    if (!session?.user?.id) return;
+    setSavingProgress(true);
+
+    try {
+      localStorage.setItem(`season_${session.user.id}`, seasonFilter);
+      localStorage.setItem(`journee_${session.user.id}`, journeeFilter);
+
+      await supabase
+        .from('profiles')
+        .update({
+          current_season: parseInt(seasonFilter, 10),
+          current_journee: parseInt(journeeFilter, 10)
+        })
+        .eq('id', session.user.id);
+
+      showNotif(`Progression sauvegardée ! Vous reprendrez à la Journée ${journeeFilter} (${getSeasonLabel(seasonFilter)})`);
+    } catch (err) {
+      showNotif(`Progression sauvegardée localement (Saison ${seasonFilter}, Journée ${journeeFilter}).`);
+    }
+
+    setSavingProgress(false);
   }
 
   async function handleAuth(e) {
@@ -203,8 +238,12 @@ export default function App() {
   }
 
   async function handleLogout() {
+    if (session?.user?.id) {
+      localStorage.setItem(`season_${session.user.id}`, seasonFilter);
+      localStorage.setItem(`journee_${session.user.id}`, journeeFilter);
+    }
     await supabase.auth.signOut();
-    showNotif("Déconnexion réussie.");
+    showNotif("Déconnexion réussie. Votre progression a été sauvegardée.");
   }
 
   async function fetchData() {
@@ -214,7 +253,6 @@ export default function App() {
     const { data: dataPlayers } = await supabase.from('players').select('*, teams(nom, logo_url)');
     if (dataPlayers) setPlayers(dataPlayers);
 
-    // Tri fixe par journée puis par id pour éviter que les matchs changent de place lors d'un score
     let { data: userMatches } = await supabase
       .from('matches')
       .select('*, dom:teams!equipe_domicile_id(*), ext:teams!equipe_exterieur_id(*)')
@@ -225,7 +263,24 @@ export default function App() {
     if (userMatches) {
       setMatches(userMatches);
       const maxS = Math.max(...userMatches.map(m => m.saison || 1), 1);
-      setSeasonFilter(prev => Math.max(prev, maxS));
+      
+      const savedSeason = localStorage.getItem(`season_${session.user.id}`);
+      const savedJournee = localStorage.getItem(`journee_${session.user.id}`);
+
+      if (savedSeason) {
+        setSeasonFilter(parseInt(savedSeason, 10));
+      } else {
+        setSeasonFilter(prev => Math.max(prev, maxS));
+      }
+
+      if (savedJournee) {
+        setJourneeFilter(parseInt(savedJournee, 10));
+      } else {
+        const firstUnfinished = userMatches.find(m => m.statut !== 'terminé' && (m.saison || 1) === (savedSeason ? parseInt(savedSeason, 10) : maxS));
+        if (firstUnfinished) {
+          setJourneeFilter(firstUnfinished.journee || 1);
+        }
+      }
     }
 
     const { data: dataEvents } = await supabase.from('match_events').select('*').eq('user_id', session.user.id);
@@ -1026,6 +1081,11 @@ export default function App() {
         
         setSeasonEvolutions(prev => ({ ...prev, [targetSeason]: {} }));
 
+        if (session?.user?.id) {
+          localStorage.setItem(`season_${session.user.id}`, targetSeason);
+          localStorage.setItem(`journee_${session.user.id}`, 1);
+        }
+
         await fetchData();
       }
     } catch (err) {
@@ -1042,7 +1102,7 @@ export default function App() {
     new Set([...matches.map(m => m.saison || 1), 1])
   ).sort((a, b) => a - b);
 
-  // --- CALCUL DU CLASSEMENT COMPLET (V, N, D, BP, BC, DIFF, PTS) ---
+  // --- CALCUL DU CLASSEMENT COMPLET ---
   const classement = teams.map(team => {
     let points = 0;
     let joues = 0;
@@ -1706,7 +1766,11 @@ export default function App() {
       return;
     }
     if (journeeFilter < maxJourneesCount) {
-      setJourneeFilter(prev => prev + 1);
+      const nextJ = journeeFilter + 1;
+      setJourneeFilter(nextJ);
+      if (session?.user?.id) {
+        localStorage.setItem(`journee_${session.user.id}`, nextJ);
+      }
     } else {
       showNotif("Vous êtes sur la dernière journée de cette saison !");
     }
@@ -1714,7 +1778,11 @@ export default function App() {
 
   function handlePrevJournee() {
     if (journeeFilter > 1) {
-      setJourneeFilter(prev => prev - 1);
+      const prevJ = journeeFilter - 1;
+      setJourneeFilter(prevJ);
+      if (session?.user?.id) {
+        localStorage.setItem(`journee_${session.user.id}`, prevJ);
+      }
     }
   }
 
@@ -1932,8 +2000,13 @@ export default function App() {
                 <select
                   value={seasonFilter}
                   onChange={(e) => {
-                    setSeasonFilter(parseInt(e.target.value, 10));
+                    const s = parseInt(e.target.value, 10);
+                    setSeasonFilter(s);
                     setJourneeFilter(1);
+                    if (session?.user?.id) {
+                      localStorage.setItem(`season_${session.user.id}`, s);
+                      localStorage.setItem(`journee_${session.user.id}`, 1);
+                    }
                   }}
                   className="bg-slate-900 border border-slate-700 text-indigo-400 font-bold text-xs rounded-lg px-3 py-1.5 focus:outline-none focus:border-indigo-500 cursor-pointer"
                 >
@@ -2061,8 +2134,13 @@ export default function App() {
                   <select
                     value={seasonFilter}
                     onChange={(e) => {
-                      setSeasonFilter(parseInt(e.target.value, 10));
+                      const s = parseInt(e.target.value, 10);
+                      setSeasonFilter(s);
                       setJourneeFilter(1);
+                      if (session?.user?.id) {
+                        localStorage.setItem(`season_${session.user.id}`, s);
+                        localStorage.setItem(`journee_${session.user.id}`, 1);
+                      }
                     }}
                     className="bg-slate-900 border border-slate-700 text-indigo-400 font-bold text-xs rounded-lg px-2.5 py-1 focus:outline-none focus:border-indigo-500 cursor-pointer"
                   >
@@ -2102,6 +2180,17 @@ export default function App() {
                     ▶
                   </button>
                 </div>
+
+                {/* BOUTON SAUVEGARDER LA PROGRESSION */}
+                <button
+                  type="button"
+                  onClick={handleSaveTournamentProgress}
+                  disabled={savingProgress}
+                  className="bg-indigo-600/20 hover:bg-indigo-600 text-indigo-300 hover:text-white border border-indigo-500/40 font-bold text-xs px-3.5 py-2 rounded-xl transition-all shadow-md flex items-center gap-1.5 cursor-pointer active:scale-95"
+                  title="Enregistrer la saison et journée actuelles"
+                >
+                  <span>💾</span> {savingProgress ? 'Sauvegarde...' : 'Sauvegarder'}
+                </button>
 
                 {/* BOUTON DE SIMULATION */}
                 <button
@@ -2154,7 +2243,7 @@ export default function App() {
               ) : (
                 seasonMatches
                   .filter((m) => m.journee === parseInt(journeeFilter, 10))
-                  .sort((a, b) => (a.id > b.id ? 1 : -1)) // Tri fixe pour garder les matchs toujours à la même place
+                  .sort((a, b) => (a.id > b.id ? 1 : -1))
                   .map((m) => {
                     const currentDomInput = scoresInput[m.id]?.dom !== undefined ? scoresInput[m.id].dom : (m.score_domicile ?? '');
                     const currentExtInput = scoresInput[m.id]?.ext !== undefined ? scoresInput[m.id].ext : (m.score_exterieur ?? '');
@@ -2179,7 +2268,6 @@ export default function App() {
 
                         {/* CENTRE : BOUTON DÉ 🎲 À GAUCHE DU SCORE DOMICILE, INPUTS ET BOUTON VS */}
                         <div className="flex items-center justify-center gap-2 sm:gap-2.5 shrink-0 my-2 sm:my-0">
-                          {/* BOUTON DÉ (PLACÉ DIRECTEMENT À GAUCHE DU SCORE DOMICILE) */}
                           <button
                             type="button"
                             onClick={() => handleRollDice(m.id)}
@@ -2263,7 +2351,13 @@ export default function App() {
                 <span className="text-xs font-bold text-slate-400 pl-2">Saison :</span>
                 <select
                   value={seasonFilter}
-                  onChange={(e) => setSeasonFilter(parseInt(e.target.value, 10))}
+                  onChange={(e) => {
+                    const s = parseInt(e.target.value, 10);
+                    setSeasonFilter(s);
+                    if (session?.user?.id) {
+                      localStorage.setItem(`season_${session.user.id}`, s);
+                    }
+                  }}
                   className="bg-slate-900 border border-slate-700 text-indigo-400 font-bold text-xs rounded-lg px-3 py-1.5 focus:outline-none focus:border-indigo-500 cursor-pointer"
                 >
                   {availableSeasons.map((s) => (
