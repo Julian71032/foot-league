@@ -189,7 +189,6 @@ export default function App() {
     }
   }
 
-  // --- SAUVEGARDE EXPLICITE DE LA PROGRESSION ---
   async function handleSaveTournamentProgress() {
     if (!session?.user?.id) return;
     setSavingProgress(true);
@@ -246,14 +245,23 @@ export default function App() {
     showNotif("Déconnexion réussie. Votre progression a été sauvegardée.");
   }
 
+  // --- VERSION BLINDÉE DE FETCH DATA ---
   async function fetchData() {
-    const { data: dataTeams } = await supabase.from('teams').select('*');
+    // 1. Charger les équipes
+    const { data: dataTeams, error: errTeams } = await supabase.from('teams').select('*');
+    if (errTeams) alert(`Erreur Teams : ${errTeams.message}`);
     if (dataTeams) setTeams(dataTeams);
 
-    const { data: dataPlayers } = await supabase.from('players').select('*, teams(nom, logo_url)');
-    if (dataPlayers) setPlayers(dataPlayers);
+    // 2. Charger les joueurs
+    const { data: dataPlayers, error: errPlayers } = await supabase.from('players').select('*, teams(nom, logo_url)');
+    if (errPlayers) {
+      alert(`⚠️ ERREUR CHARGEMENT JOUEURS :\n${errPlayers.message}\nDétails : ${errPlayers.details || 'Vérifiez la clé étrangère'}`);
+    } else if (dataPlayers) {
+      console.log("Nombre de joueurs reçus depuis Supabase :", dataPlayers.length);
+      setPlayers(dataPlayers);
+    }
 
-    // RÉCUPÉRATION BLINDÉE DES MATCHS AVEC ALERTE EN CAS D'ERREUR SILENCIEUSE
+    // 3. Charger les matchs
     let { data: userMatches, error: matchError } = await supabase
       .from('matches')
       .select('*, dom:teams!equipe_domicile_id(*), ext:teams!equipe_exterieur_id(*)')
@@ -262,7 +270,7 @@ export default function App() {
       .order('id', { ascending: true });
 
     if (matchError) {
-      alert(`⚠️ ERREUR CRITIQUE DE BASE DE DONNÉES (Matchs) :\n${matchError.message}\nCeci bloque l'affichage de votre calendrier.`);
+      alert(`⚠️ ERREUR MATCHS :\n${matchError.message}`);
     }
 
     if (userMatches) {
@@ -289,14 +297,18 @@ export default function App() {
       }
     }
 
-    const { data: dataEvents } = await supabase.from('match_events').select('*').eq('user_id', session.user.id);
+    // 4. Charger les événements (buts, cartons...)
+    const { data: dataEvents, error: errEvents } = await supabase.from('match_events').select('*').eq('user_id', session.user.id);
+    if (errEvents) alert(`Erreur Events : ${errEvents.message}`);
     if (dataEvents) setMatchEvents(dataEvents);
 
-    const { data: dataTransfers } = await supabase
+    // 5. Charger les transferts
+    const { data: dataTransfers, error: errTransfers } = await supabase
       .from('transfers')
       .select('*, players(nom), old_team:teams!old_team_id(nom), new_team:teams!new_team_id(nom)')
       .order('created_at', { ascending: false })
       .limit(15);
+    if (errTransfers) alert(`Erreur Transferts : ${errTransfers.message}`);
     if (dataTransfers) setTransfers(dataTransfers);
   }
 
@@ -331,7 +343,6 @@ export default function App() {
     return { starters: all.slice(0, 11), bench: all.slice(11) };
   }
 
-  // --- MOTEUR DE TRANSFERTS MERCATO D'HIVER (3 PAR JOURNÉE) ---
   async function triggerWinterMercato(journeeNum, currentSeasonNum) {
     if (!teams || teams.length < 2 || !players || players.length < 10) return;
 
@@ -434,7 +445,6 @@ export default function App() {
     }
   }
 
-  // --- MOTEUR D'ÉVOLUTION DYNAMIQUE ---
   async function evaluateAndApplyPlayerEvolutions(targetJournee, currentSeasonNum) {
     const startJournee = targetJournee - 3;
     const endJournee = targetJournee;
@@ -620,7 +630,6 @@ export default function App() {
     }
   }
 
-  // --- MOTEUR PROBABILISTE DE MATCHS ---
   function simulateGoals(lambda) {
     let L = Math.exp(-lambda);
     let k = 0;
@@ -1102,7 +1111,6 @@ export default function App() {
           localStorage.setItem(`journee_${session.user.id}`, 1);
         }
 
-        // Met à jour l'affichage en direct avec les nouveaux matchs
         await fetchData();
       }
     } catch (err) {
@@ -1446,6 +1454,7 @@ export default function App() {
     setLogoUpdating(false);
   }
 
+  // --- OUVERTURE DE LA MODALE VS ---
   async function openMatchDetails(match) {
     setSelectedMatch(match);
     const { data, error } = await supabase
