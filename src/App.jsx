@@ -253,12 +253,17 @@ export default function App() {
     const { data: dataPlayers } = await supabase.from('players').select('*, teams(nom, logo_url)');
     if (dataPlayers) setPlayers(dataPlayers);
 
-    let { data: userMatches } = await supabase
+    // RÉCUPÉRATION BLINDÉE DES MATCHS AVEC ALERTE EN CAS D'ERREUR SILENCIEUSE
+    let { data: userMatches, error: matchError } = await supabase
       .from('matches')
       .select('*, dom:teams!equipe_domicile_id(*), ext:teams!equipe_exterieur_id(*)')
       .eq('user_id', session.user.id)
       .order('journee', { ascending: true })
       .order('id', { ascending: true });
+
+    if (matchError) {
+      alert(`⚠️ ERREUR CRITIQUE DE BASE DE DONNÉES (Matchs) :\n${matchError.message}\nCeci bloque l'affichage de votre calendrier.`);
+    }
 
     if (userMatches) {
       setMatches(userMatches);
@@ -1044,9 +1049,8 @@ export default function App() {
 
   // --- GESTION DES SAISONS ---
   async function handleStartNewSeason(isNextSeason = false) {
-    // 1. DÉBLOCAGE FORCE : On vérifie les équipes ici, et on affiche une vraie alerte !
     if (!teams || teams.length < 2) {
-      alert(`Erreur : Il vous faut au moins 2 équipes pour générer une saison (actuellement : ${teams ? teams.length : 0}). Créez-les dans l'onglet Admin.`);
+      alert(`Erreur : Il vous faut au moins 2 équipes pour générer un calendrier (actuellement : ${teams ? teams.length : 0}). Créez-les dans l'onglet Admin.`);
       return;
     }
 
@@ -1079,12 +1083,15 @@ export default function App() {
         return;
       }
 
-      const { error } = await supabase.from('matches').insert(fixtures);
+      const { data: insertedData, error } = await supabase.from('matches').insert(fixtures).select('*, dom:teams!equipe_domicile_id(*), ext:teams!equipe_exterieur_id(*)');
 
       if (error) {
         alert(`Erreur Supabase lors de l'insertion du calendrier :\n${error.message}`);
+      } else if (!insertedData || insertedData.length === 0) {
+        alert("Erreur : L'insertion a fonctionné mais 0 ligne a été retournée. Vérifiez vos règles RLS.");
       } else {
-        showNotif(`${seasonLabel} initialisée avec succès !`);
+        showNotif(`${seasonLabel} prête ! ${insertedData.length} matchs créés.`);
+        
         setSeasonFilter(targetSeason);
         setJourneeFilter(1);
         
@@ -1095,6 +1102,7 @@ export default function App() {
           localStorage.setItem(`journee_${session.user.id}`, 1);
         }
 
+        // Met à jour l'affichage en direct avec les nouveaux matchs
         await fetchData();
       }
     } catch (err) {
@@ -2217,7 +2225,7 @@ export default function App() {
                     type="button"
                     onClick={() => handleStartNewSeason(false)}
                     className="bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold px-2.5 py-2 rounded-xl transition-all cursor-pointer"
-                    title="Regénérer le calendrier de cette saison"
+                    title="Générer / Regénérer le calendrier de cette saison"
                   >
                     🔄
                   </button>
