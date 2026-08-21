@@ -253,7 +253,7 @@ export default function App() {
     if (dataTeams) setTeams(dataTeams);
 
     // 2. Charger les joueurs
-    const { data: dataPlayers, error: errPlayers } = await supabase.from('players').select('*, teams(nom, logo_url)');
+    const { data: dataPlayers, error: errPlayers } = await supabase.from('players').select('*, teams!players_equipe_id_fkey(nom, logo_url)');
     if (errPlayers) {
       alert(`⚠️ ERREUR CHARGEMENT JOUEURS :\n${errPlayers.message}\nDétails : ${errPlayers.details || 'Vérifiez la clé étrangère'}`);
     } else if (dataPlayers) {
