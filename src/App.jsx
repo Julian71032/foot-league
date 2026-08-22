@@ -139,7 +139,6 @@ export default function App() {
   const [transferFee, setTransferFee] = useState(10000000);
   const [transferLoading, setTransferLoading] = useState(false);
 
-  // Séquence d'initialisation propre
   useEffect(() => {
     if (!document.getElementById('tailwind-cdn')) {
       const script = document.createElement('script');
@@ -257,7 +256,7 @@ export default function App() {
     const currentTeams = dataTeams || [];
     setTeams(currentTeams);
 
-    // 2. Charger les joueurs avec leurs notes actuelles
+    // 2. Charger les joueurs avec leur note de base
     const { data: dataPlayers, error: errPlayers } = await supabase
       .from('players')
       .select('*, teams!players_equipe_id_fkey(nom, logo_url)');
@@ -1084,7 +1083,7 @@ export default function App() {
     return [...allerMatches, ...retourMatches];
   }
 
-  // --- GESTION DES SAISONS (REINITIALISATION vs SAISON SUIVANTE) ---
+  // --- GESTION DES SAISONS (REMETTRE LES NOTES DE BASE vs SAISON SUIVANTE) ---
   async function handleStartNewSeason(isNextSeason = false) {
     if (!teams || teams.length < 2) {
       alert(`Erreur : Il vous faut au moins 2 équipes pour générer un calendrier (actuellement : ${teams ? teams.length : 0}). Créez-les dans l'onglet Admin.`);
@@ -1099,7 +1098,7 @@ export default function App() {
 
     const confirmMsg = isNextSeason
       ? `Voulez-vous lancer la ${seasonLabel} ?\n\n- Vous conservez vos transferts et évolutions actuels.\n- ${totalJournees} Journées programmées.`
-      : `Voulez-vous REINITIALISER complètement le tournoi (Saison 1) ?\n\n- Tous les joueurs retourneront dans leur club d'origine avec leurs notes de base.\n- L'historique des transferts et matchs sera effacé.`;
+      : `Voulez-vous REINITIALISER complètement le tournoi (Saison 1) ?\n\n- Tous les joueurs retrouveront leur GÉNÉRAL DE DÉPART et leur club initial.\n- L'historique des transferts et matchs sera effacé.`;
 
     if (!window.confirm(confirmMsg)) return;
 
@@ -1107,28 +1106,36 @@ export default function App() {
 
     try {
       if (!isNextSeason) {
-        // 🔄 CAS REINITIALISATION COMPLETE : Remettre les joueurs dans leurs clubs d'origine
+        // 🔄 1. REMISE À ZÉRO COMPLÈTE DES JOUEURS (NOTES ET CLUBS D'ORIGINE)
         const { data: allUserTransfers } = await supabase
           .from('transfers')
           .select('*')
           .order('created_at', { ascending: true });
 
+        const initialClubByPlayer = {};
         if (allUserTransfers && allUserTransfers.length > 0) {
-          const initialClubByPlayer = {};
           allUserTransfers.forEach(t => {
             if (!initialClubByPlayer[t.player_id]) {
               initialClubByPlayer[t.player_id] = t.old_team_id;
             }
           });
-
-          for (const [playerId, originalTeamId] of Object.entries(initialClubByPlayer)) {
-            await supabase
-              .from('players')
-              .update({ equipe_id: originalTeamId })
-              .eq('id', playerId);
-          }
-
           await supabase.from('transfers').delete().eq('user_id', session.user.id);
+        }
+
+        // Rétablir les notes de base (general_base) et recalculer la valeur
+        for (const p of players) {
+          const originalTeam = initialClubByPlayer[p.id] || p.equipe_id;
+          const originalGen = p.general_base !== undefined && p.general_base !== null ? p.general_base : (p.general || 75);
+          const originalVal = calculateMarketValue(originalGen, p.age || 24);
+
+          await supabase
+            .from('players')
+            .update({
+              equipe_id: originalTeam,
+              general: originalGen,
+              valeur_marchande: originalVal
+            })
+            .eq('id', p.id);
         }
 
         // Vider tous les anciens matchs et événements
@@ -1136,7 +1143,7 @@ export default function App() {
         await supabase.from('matches').delete().eq('user_id', session.user.id);
         setTransfers([]);
       } else {
-        // 🚀 CAS SAISON SUIVANTE : On garde les transferts/joueurs actuels, on vide juste les anciens matchs pour garder la DB ultra rapide
+        // 🚀 2. SAISON SUIVANTE : On garde les effectifs et notes actuels
         await supabase.from('match_events').delete().eq('user_id', session.user.id);
         await supabase.from('matches').delete().eq('user_id', session.user.id);
       }
@@ -1164,7 +1171,7 @@ export default function App() {
         insertedCount += chunk.length;
       }
 
-      showNotif(isNextSeason ? `${seasonLabel} lancée ! Effectifs conservés.` : `Tournoi réinitialisé avec clubs et effectifs de base !`);
+      showNotif(isNextSeason ? `${seasonLabel} lancée ! Effectifs conservés.` : `Tournoi réinitialisé avec notes et clubs de départ !`);
       
       setSeasonFilter(targetSeason);
       setJourneeFilter(1);
@@ -1479,6 +1486,7 @@ export default function App() {
           poste: editingPlayer.poste,
           numero: editingPlayer.numero ? parseInt(editingPlayer.numero, 10) : 10,
           general: newGen,
+          general_base: newGen, // Met à jour également la nouvelle note de référence
           age: newAge,
           valeur_marchande: calculatedVal
         })
@@ -1486,7 +1494,7 @@ export default function App() {
 
       if (error) showNotif(`Erreur : ${error.message}`);
       else {
-        showNotif(`Joueur "${editingPlayer.nom}" mis à jour avec une valeur de ${formatMoney(calculatedVal)} !`);
+        showNotif(`Joueur "${editingPlayer.nom}" mis à jour (Base: ${newGen} GEN) !`);
         setEditingPlayer(null);
         await fetchData();
       }
@@ -1687,6 +1695,7 @@ export default function App() {
       numero: parseInt(newPlayer.numero, 10) || 10,
       poste: newPlayer.poste,
       general: gen,
+      general_base: gen, // Note de base enregistrée
       valeur_marchande: val,
       age: age
     }]);
@@ -2891,7 +2900,7 @@ export default function App() {
                     <span>🔄</span> 3. Gestion des Saisons & Calendriers
                   </h3>
                   <p className="text-xs text-slate-400 mt-1 max-w-xl">
-                    Réinitialiser (🔄) remet tous les joueurs dans leur club d'origine. Lancer la saison suivante (🚀) conserve tous vos effectifs actuels et démarre un nouveau championnat.
+                    Réinitialiser (🔄) remet tous les joueurs dans leur club d'origine avec leur note de base. Lancer la saison suivante (🚀) conserve tous vos effectifs actuels et démarre un nouveau championnat.
                   </p>
                   <div className="flex items-center gap-4 mt-3 text-xs font-semibold text-slate-400">
                     <span>🛡️ Équipes : <strong className="text-indigo-400">{teams.length}</strong></span>
