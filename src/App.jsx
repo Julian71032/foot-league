@@ -74,7 +74,26 @@ function generateInjuryDuration() {
   if (roll < 80) return { label: `${Math.floor(Math.random() * 2) + 2} matchs`, matches: Math.floor(Math.random() * 2) + 2 };
   if (roll < 94) return { label: `${Math.floor(Math.random() * 3) + 4} matchs`, matches: Math.floor(Math.random() * 3) + 4 };
   if (roll < 99) return { label: `${Math.floor(Math.random() * 6) + 7} matchs`, matches: Math.floor(Math.random() * 6) + 7 };
-  return { label: 'Fin de saison', matches: 20 };
+  return { label: 'Fin de saison', matches: 38 };
+}
+
+// Fonction de calcul de l'indisponibilité pour blessure
+function getPlayerInjuryStatus(playerId, targetJournee, targetSeason, events) {
+  const playerInjuries = events.filter(
+    e => e.player_id === playerId &&
+         e.type === 'blessure' &&
+         (e.saison || 1) === targetSeason
+  );
+
+  for (const inj of playerInjuries) {
+    const startJ = inj.journee || 1;
+    const duration = inj.duration_matches || 1;
+    if (targetJournee >= startJ && targetJournee < startJ + duration) {
+      const remaining = (startJ + duration) - targetJournee;
+      return { injured: true, remaining, label: inj.detail || `${duration} match(s)` };
+    }
+  }
+  return { injured: false, remaining: 0, label: '' };
 }
 
 const FORMATIONS = {
@@ -145,7 +164,7 @@ export default function App() {
   const [transferPlayerId, setTransferPlayerId] = useState('');
   const [transferToTeamId, setTransferToTeamId] = useState('');
   const [transferFee, setTransferFee] = useState(10000000);
-  const [transferType, setTransferType] = useState('achat'); // 'achat' ou 'pret'
+  const [transferType, setTransferType] = useState('achat');
   const [transferLoading, setTransferLoading] = useState(false);
 
   const isAdmin = currentUser?.email?.trim().toLowerCase() === ADMIN_EMAIL.toLowerCase();
@@ -437,26 +456,35 @@ export default function App() {
       });
   };
 
-  function getTeamStartersAndBench(team) {
-    if (!team) return { starters: [], bench: [] };
+  // Filtrage strict : les joueurs blessés sont exclus du 11 titulaire et du banc
+  function getTeamStartersAndBench(team, targetJournee = journeeFilter) {
+    if (!team) return { starters: [], bench: [], injuredList: [] };
     const all = getSortedTeamPlayers(team.id);
+    const currentS = parseInt(seasonFilter, 10) || 1;
+    const targetJ = parseInt(targetJournee, 10) || 1;
+
+    const available = all.filter(p => !getPlayerInjuryStatus(p.id, targetJ, currentS, matchEvents).injured);
+    const injuredList = all.filter(p => getPlayerInjuryStatus(p.id, targetJ, currentS, matchEvents).injured);
+
     let savedIds = team.lineup_ids;
     if (typeof savedIds === 'string') {
       try { savedIds = JSON.parse(savedIds); } catch (e) { savedIds = []; }
     }
+
     if (Array.isArray(savedIds) && savedIds.length >= 11) {
-      const map = new Map(all.map(p => [p.id, p]));
+      const map = new Map(available.map(p => [p.id, p]));
       const starters = savedIds.map(id => map.get(id)).filter(Boolean);
       const starterSet = new Set(starters.map(p => p.id));
-      const bench = all.filter(p => !starterSet.has(p.id));
+      const bench = available.filter(p => !starterSet.has(p.id));
+
       if (starters.length >= 11) {
-        return { starters: starters.slice(0, 11), bench };
+        return { starters: starters.slice(0, 11), bench, injuredList };
       }
     }
-    return { starters: all.slice(0, 11), bench: all.slice(11) };
+
+    return { starters: available.slice(0, 11), bench: available.slice(11), injuredList };
   }
 
-  // --- MOTEUR DE MERCATO ULTRA-RÉALISTE AVEC PRÊTS ET STANDINGS ---
   async function triggerAutomatedMercato(journeeNum, currentSeasonNum, maxTransfers = 4, isSummer = false) {
     if (!teams || teams.length < 2 || !players || players.length < 10) return;
 
@@ -466,10 +494,9 @@ export default function App() {
     });
 
     const rankedTeams = [...classement];
-    // Découpage strict par standing selon le classement actuel
-    const topClubs = rankedTeams.slice(0, Math.max(1, Math.floor(rankedTeams.length * 0.35))); // Top 35% (Grands Cadors)
-    const midClubs = rankedTeams.slice(Math.floor(rankedTeams.length * 0.35), Math.floor(rankedTeams.length * 0.70)); // Milieu de tableau
-    const bottomClubs = rankedTeams.slice(Math.floor(rankedTeams.length * 0.70)); // Bas de tableau
+    const topClubs = rankedTeams.slice(0, Math.max(1, Math.floor(rankedTeams.length * 0.35)));
+    const midClubs = rankedTeams.slice(Math.floor(rankedTeams.length * 0.35), Math.floor(rankedTeams.length * 0.70));
+    const bottomClubs = rankedTeams.slice(Math.floor(rankedTeams.length * 0.70));
 
     const availablePool = [...players].sort(() => Math.random() - 0.5);
     const completedTransfers = [];
@@ -496,33 +523,26 @@ export default function App() {
 
       const canBuy = (club) => club.id !== originTeamId && (teamCounts[club.id] || 0) < 28;
 
-      // 1. Joueurs Stars (GEN >= 83) ou Top Prospects (<= 22 ans et GEN >= 78) -> STRICTEMENT TOP CLUBS
       if (currentGen >= 83 || (age <= 22 && currentGen >= 78)) {
         const candidateDest = topClubs.filter(canBuy);
         if (candidateDest.length > 0) {
           destinationTeam = candidateDest[Math.floor(Math.random() * candidateDest.length)];
           reason = currentGen >= 83 ? "Transfert galactique vers un cador" : "Signature d'une pépite d'or mondiale";
         }
-      } 
-      // 2. Joueurs solides / Titulaires (GEN 77 - 82) -> Cadors ou Milieu de tableau
-      else if (currentGen >= 77) {
+      } else if (currentGen >= 77) {
         const candidateDest = [...topClubs, ...midClubs].filter(canBuy);
         if (candidateDest.length > 0) {
           destinationTeam = candidateDest[Math.floor(Math.random() * candidateDest.length)];
           reason = "Renfort majeur dans l'entrejeu/attaque";
         }
-      } 
-      // 3. Jeunes en manque de temps de jeu (<= 22 ans et GEN <= 74) -> PRÊT vers Milieu ou Bas de tableau
-      else if (age <= 22 && Math.random() < 0.65) {
+      } else if (age <= 22 && Math.random() < 0.65) {
         const candidateDest = [...midClubs, ...bottomClubs].filter(canBuy);
         if (candidateDest.length > 0) {
           destinationTeam = candidateDest[Math.floor(Math.random() * candidateDest.length)];
           isLoan = true;
           reason = "Prêt d'un an pour s'aguerrir et gagner du temps de jeu";
         }
-      } 
-      // 4. Vétérans ou joueurs modestes (GEN <= 75 ou Âge >= 30) -> Bas de tableau ou Milieu
-      else {
+      } else {
         const candidateDest = [...bottomClubs, ...midClubs].filter(canBuy);
         if (candidateDest.length > 0) {
           destinationTeam = candidateDest[Math.floor(Math.random() * candidateDest.length)];
@@ -537,7 +557,6 @@ export default function App() {
         teamCounts[originTeamId]--;
         teamCounts[destinationTeam.id]++;
 
-        // Mise à jour de l'effectif
         const pIdx = updatedPlayers.findIndex(p => p.id === player.id);
         if (pIdx !== -1) {
           updatedPlayers[pIdx] = {
@@ -549,7 +568,6 @@ export default function App() {
           };
         }
 
-        // Nettoyage de l'ancien 11 titulaire de l'équipe vendeuse (fix bug composition)
         const oldTeamIdx = updatedTeamsList.findIndex(t => t.id === originTeamId);
         if (oldTeamIdx !== -1 && updatedTeamsList[oldTeamIdx].lineup_ids) {
           let lineIds = updatedTeamsList[oldTeamIdx].lineup_ids;
@@ -794,7 +812,7 @@ export default function App() {
   function pickGoalScorer(activePlayers) {
     if (!activePlayers || activePlayers.length === 0) return null;
     
-    // Exclure strictement les gardiens (G)
+    // Exclure strictement les gardiens
     const outfieldPlayers = activePlayers.filter(p => (p.poste || '').trim().toUpperCase() !== 'G');
     if (outfieldPlayers.length === 0) return null;
 
@@ -822,7 +840,8 @@ export default function App() {
 
   function pickAssister(activePlayers, scorer) {
     if (!activePlayers || activePlayers.length < 2) return null;
-    const candidates = activePlayers.filter(p => p.id !== scorer?.id);
+    // Exclure le buteur et les gardiens
+    const candidates = activePlayers.filter(p => p.id !== scorer?.id && (p.poste || '').trim().toUpperCase() !== 'G');
     if (candidates.length === 0) return null;
 
     const weighted = candidates.map(p => {
@@ -833,7 +852,6 @@ export default function App() {
       else if (['DD', 'DG', 'DLD', 'DLG'].includes(pos)) w = 6;
       else if (['BU', 'AT'].includes(pos)) w = 4;
       else if (['MDC', 'DC'].includes(pos)) w = 2;
-      else if (pos === 'G') w = 0.1;
 
       w *= (p.general || 75) / 75;
       return { player: p, weight: w };
@@ -873,10 +891,9 @@ export default function App() {
     return activePlayers[Math.floor(Math.random() * activePlayers.length)];
   }
 
-  // --- DÉ DE 0 À 7 INCLUS ---
   function handleRollDice(matchId) {
-    const diceDom = Math.floor(Math.random() * 7);
-    const diceExt = Math.floor(Math.random() * 7);
+    const diceDom = Math.floor(Math.random() * 7); // 0 à 6
+    const diceExt = Math.floor(Math.random() * 7); // 0 à 6
 
     setScoresInput(prev => ({
       ...prev,
@@ -886,8 +903,8 @@ export default function App() {
   }
 
   function generateMatchEventsForCustomScore(m, domTeam, extTeam, scoreDom, scoreExt, seasonNum, userId) {
-    const { starters: domStarters, bench: domBench } = getTeamStartersAndBench(domTeam);
-    const { starters: extStarters, bench: extBench } = getTeamStartersAndBench(extTeam);
+    const { starters: domStarters, bench: domBench } = getTeamStartersAndBench(domTeam, m.journee);
+    const { starters: extStarters, bench: extBench } = getTeamStartersAndBench(extTeam, m.journee);
 
     const matchEventsList = [];
 
@@ -914,6 +931,7 @@ export default function App() {
         type: 'remplacement',
         detail: `entre pour ${playerOut.nom}`,
         minute: subMinute,
+        journee: m.journee,
         saison: seasonNum,
         user_id: userId
       });
@@ -942,6 +960,7 @@ export default function App() {
         type: 'remplacement',
         detail: `entre pour ${playerOut.nom}`,
         minute: subMinute,
+        journee: m.journee,
         saison: seasonNum,
         user_id: userId
       });
@@ -963,10 +982,10 @@ export default function App() {
       const activeAtMin = getActivePlayersAtMinute(domStarters, domSubstitutions, minute);
       const scorer = pickGoalScorer(activeAtMin);
       if (scorer) {
-        matchEventsList.push({ match_id: m.id, player_id: scorer.id, type: 'but', minute, saison: seasonNum, user_id: userId });
+        matchEventsList.push({ match_id: m.id, player_id: scorer.id, type: 'but', minute, journee: m.journee, saison: seasonNum, user_id: userId });
         if (Math.random() < 0.75) {
           const assister = pickAssister(activeAtMin, scorer);
-          if (assister) matchEventsList.push({ match_id: m.id, player_id: assister.id, type: 'passe', minute, saison: seasonNum, user_id: userId });
+          if (assister) matchEventsList.push({ match_id: m.id, player_id: assister.id, type: 'passe', minute, journee: m.journee, saison: seasonNum, user_id: userId });
         }
       }
     }
@@ -976,10 +995,10 @@ export default function App() {
       const activeAtMin = getActivePlayersAtMinute(extStarters, extSubstitutions, minute);
       const scorer = pickGoalScorer(activeAtMin);
       if (scorer) {
-        matchEventsList.push({ match_id: m.id, player_id: scorer.id, type: 'but', minute, saison: seasonNum, user_id: userId });
+        matchEventsList.push({ match_id: m.id, player_id: scorer.id, type: 'but', minute, journee: m.journee, saison: seasonNum, user_id: userId });
         if (Math.random() < 0.75) {
           const assister = pickAssister(extStarters, scorer);
-          if (assister) matchEventsList.push({ match_id: m.id, player_id: assister.id, type: 'passe', minute, saison: seasonNum, user_id: userId });
+          if (assister) matchEventsList.push({ match_id: m.id, player_id: assister.id, type: 'passe', minute, journee: m.journee, saison: seasonNum, user_id: userId });
         }
       }
     }
@@ -988,16 +1007,17 @@ export default function App() {
     for (let y = 0; y < numYellowDom; y++) {
       const minute = Math.floor(Math.random() * 88) + 2;
       const carded = pickCardPlayer(getActivePlayersAtMinute(domStarters, domSubstitutions, minute));
-      if (carded) matchEventsList.push({ match_id: m.id, player_id: carded.id, type: 'carton_jaune', minute, saison: seasonNum, user_id: userId });
+      if (carded) matchEventsList.push({ match_id: m.id, player_id: carded.id, type: 'carton_jaune', minute, journee: m.journee, saison: seasonNum, user_id: userId });
     }
 
     const numYellowExt = Math.random() < 0.65 ? Math.floor(Math.random() * 3) + 1 : 0;
     for (let y = 0; y < numYellowExt; y++) {
       const minute = Math.floor(Math.random() * 88) + 2;
       const carded = pickCardPlayer(getActivePlayersAtMinute(extStarters, extSubstitutions, minute));
-      if (carded) matchEventsList.push({ match_id: m.id, player_id: carded.id, type: 'carton_jaune', minute, saison: seasonNum, user_id: userId });
+      if (carded) matchEventsList.push({ match_id: m.id, player_id: carded.id, type: 'carton_jaune', minute, journee: m.journee, saison: seasonNum, user_id: userId });
     }
 
+    // Enregistrement de la durée de blessure exacte
     if (Math.random() < 0.08) {
       const minute = Math.floor(Math.random() * 85) + 5;
       const injured = pickInjuredPlayer(getActivePlayersAtMinute(domStarters, domSubstitutions, minute));
@@ -1008,7 +1028,9 @@ export default function App() {
           player_id: injured.id,
           type: 'blessure',
           detail: duration.label,
+          duration_matches: duration.matches,
           minute,
+          journee: m.journee,
           saison: seasonNum,
           user_id: userId
         });
@@ -1025,7 +1047,9 @@ export default function App() {
           player_id: injured.id,
           type: 'blessure',
           detail: duration.label,
+          duration_matches: duration.matches,
           minute,
+          journee: m.journee,
           saison: seasonNum,
           user_id: userId
         });
@@ -1036,8 +1060,8 @@ export default function App() {
   }
 
   function simulateSingleMatchWithSubs(m, domTeam, extTeam, seasonNum, userId) {
-    const { starters: domStarters } = getTeamStartersAndBench(domTeam);
-    const { starters: extStarters } = getTeamStartersAndBench(extTeam);
+    const { starters: domStarters } = getTeamStartersAndBench(domTeam, m.journee);
+    const { starters: extStarters } = getTeamStartersAndBench(extTeam, m.journee);
 
     const domGen = domStarters.length > 0 ? domStarters.reduce((acc, p) => acc + (p.general || 75), 0) / domStarters.length : 75;
     const extGen = extStarters.length > 0 ? extStarters.reduce((acc, p) => acc + (p.general || 75), 0) / extStarters.length : 75;
@@ -1104,12 +1128,10 @@ export default function App() {
 
       showNotif(`Journée ${journeeFilter} simulée avec succès !`);
 
-      // Mercato d'Hiver : 4 transferts (Journée 19)
       if (currentJ === 19) {
         await triggerAutomatedMercato(currentJ, currentS, 4, false);
       }
 
-      // Fin de la 38e journée : Grand Mercato Estival de 15 transferts
       if (currentJ === maxJourneesCount) {
         await triggerAutomatedMercato(currentJ, currentS, 15, true);
       }
@@ -1124,7 +1146,6 @@ export default function App() {
     setSimulating(false);
   }
 
-  // --- CHANGEMENT DE SAISON AVEC RETOUR DES PRÊTS AUTOMATIQUES ---
   async function handleStartNewSeason(isNextSeason = false) {
     if (!teams || teams.length < 2) {
       alert(`Erreur : Il vous faut au moins 2 équipes pour générer un calendrier.`);
@@ -1156,7 +1177,6 @@ export default function App() {
         return;
       }
 
-      // Retour automatique des prêts à la maison-mère
       const cleanedPlayers = players.map(p => {
         if (p.is_loan && p.loan_parent_id) {
           const originalTeam = teams.find(t => t.id === p.loan_parent_id);
@@ -1283,7 +1303,6 @@ export default function App() {
     }
   }
 
-  // Transfert / Prêt Manuel avec mise à jour du 11
   async function handleTransferPlayer(e) {
     e.preventDefault();
     if (!transferFromTeamId || !transferPlayerId || !transferToTeamId) {
@@ -1332,7 +1351,6 @@ export default function App() {
       return p;
     });
 
-    // Retrait propre du joueur dans la composition de départ de l'ancien club
     const updatedTeamsList = teams.map(t => {
       if (t.id === transferFromTeamId && t.lineup_ids) {
         let lineIds = t.lineup_ids;
@@ -1643,37 +1661,17 @@ export default function App() {
     setSelectedLineupTeam(fullTeam);
     setSelectedSlot(null);
 
-    const allTeamPlayers = getSortedTeamPlayers(fullTeam.id);
+    const { starters, bench } = getTeamStartersAndBench(fullTeam, journeeFilter);
     const savedFormation = fullTeam.formation || '4-3-3';
     setCurrentFormation(savedFormation);
 
-    let savedIds = fullTeam.lineup_ids;
-    if (typeof savedIds === 'string') {
-      try { savedIds = JSON.parse(savedIds); } catch (e) { savedIds = []; }
+    if (starters.length >= 11) {
+      setTeamLineupPlayers(starters.slice(0, 11));
+      setTeamBenchPlayers(bench);
+    } else {
+      const allAvailable = [...starters, ...bench];
+      buildLineupForFormation(allAvailable, savedFormation);
     }
-
-    if (Array.isArray(savedIds) && savedIds.length > 0) {
-      const playerMap = new Map(allTeamPlayers.map(p => [p.id, p]));
-      const savedStarters = [];
-      const usedIds = new Set();
-
-      savedIds.forEach(id => {
-        if (playerMap.has(id)) {
-          savedStarters.push(playerMap.get(id));
-          usedIds.add(id);
-        }
-      });
-
-      const remainingBench = allTeamPlayers.filter(p => !usedIds.has(p.id));
-
-      if (savedStarters.length >= 11) {
-        setTeamLineupPlayers(savedStarters.slice(0, 11));
-        setTeamBenchPlayers([...savedStarters.slice(11), ...remainingBench]);
-        return;
-      }
-    }
-
-    buildLineupForFormation(allTeamPlayers, savedFormation);
   }
 
   function buildLineupForFormation(allPlayers, formationKey) {
@@ -2296,7 +2294,7 @@ export default function App() {
                             type="button"
                             onClick={() => handleRollDice(m.id)}
                             className="bg-amber-500/20 hover:bg-amber-500 text-amber-300 hover:text-slate-950 border border-amber-500/40 text-sm font-black p-2.5 rounded-xl transition-all cursor-pointer shadow-md active:scale-95 mr-0.5"
-                            title="Lancer le dé (0 à 7 buts)"
+                            title="Lancer le dé (0 à 6 buts)"
                           >
                             🎲
                           </button>
@@ -2313,7 +2311,7 @@ export default function App() {
                           <button
                             type="button"
                             onClick={() => openMatchDetails(m)}
-                            className="bg-indigo-600/20 hover:bg-indigo-600 text-indigo-300 hover:text-white border border-indigo-500/40 text-xs font-black tracking-widest px-3.5 py-2.5 rounded-xl transition-all cursor-pointer shadow-md active:scale-95 uppercase"
+                            className="bg-indigo-600/20 hover:bg-indigo-600 text-indigo-300 hover:text-white border border-indigo-500/40 text-xs font-black tracking-widest px-3 py-2.5 rounded-xl transition-all cursor-pointer shadow-md active:scale-95 uppercase"
                           >
                             VS
                           </button>
@@ -2902,7 +2900,7 @@ export default function App() {
         </div>
       )}
 
-      {/* MODALE TACTIQUE AVEC NETTOYAGE DES DOUBLONS */}
+      {/* MODALE TACTIQUE */}
       {selectedLineupTeam && (
         <div className="fixed inset-0 bg-black/85 backdrop-blur-md z-50 flex items-center justify-center p-2 sm:p-4">
           <div className="bg-slate-900 border border-slate-800 rounded-3xl max-w-lg w-full p-4 sm:p-6 shadow-2xl relative max-h-[96vh] flex flex-col overflow-y-auto">
@@ -2984,6 +2982,7 @@ export default function App() {
               </button>
             </div>
 
+            {/* BANC DES REMPLAÇANTS */}
             <div className="mt-4 bg-slate-950 p-3 rounded-2xl border border-slate-800">
               <h4 className="text-[11px] font-extrabold uppercase tracking-wider text-slate-400 mb-2">🪑 Banc des Remplaçants ({teamBenchPlayers.length})</h4>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-40 overflow-y-auto pr-1">
@@ -3012,7 +3011,7 @@ export default function App() {
       {/* MODALE EFFECTIF */}
       {selectedTeam && (
         <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-3xl w-full p-6 shadow-2xl relative">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-4xl w-full p-6 shadow-2xl relative">
             <button type="button" onClick={() => setSelectedTeam(null)} className="absolute top-4 right-4 text-slate-400 hover:text-white font-bold text-xl cursor-pointer">✕</button>
             <div className="flex items-center justify-between gap-4 mb-6 pb-4 border-b border-slate-800">
               <div className="flex items-center gap-4">
@@ -3043,6 +3042,7 @@ export default function App() {
                   <tr className="border-b border-slate-800 text-slate-400 text-xs font-semibold uppercase">
                     <th className="py-2.5 px-3">#</th>
                     <th className="py-2.5 px-3">Joueur</th>
+                    <th className="py-2.5 px-3">Statut</th>
                     <th className="py-2.5 px-3">Poste</th>
                     <th className="py-2.5 px-3 text-center">GEN</th>
                     <th className="py-2.5 px-3 text-center">Âge</th>
@@ -3053,28 +3053,42 @@ export default function App() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-800/50 text-sm">
-                  {teamRoster.map((j) => (
-                    <tr key={j.id} className="hover:bg-slate-800/30">
-                      <td className="py-3 px-3 font-mono font-bold text-amber-400">#{j.numero || 10}</td>
-                      <td className="py-3 px-3 font-semibold text-white">
-                        {j.nom} {j.is_loan && <span className="text-[10px] bg-emerald-500/20 text-emerald-300 px-1 rounded ml-1 font-bold">En prêt</span>}
-                      </td>
-                      <td className="py-3 px-3 text-xs text-indigo-300 font-bold">{j.poste || 'N/A'}</td>
-                      <td className="py-3 px-3 text-center font-extrabold text-emerald-400">{j.general || 75}</td>
-                      <td className="py-3 px-3 text-center text-slate-300 font-medium">{j.age || '-'} ans</td>
-                      <td className="py-3 px-3 text-center text-amber-400 font-bold">⚽ {j.buts}</td>
-                      <td className="py-3 px-3 text-center text-indigo-400 font-bold">🎯 {j.passes_decisives}</td>
-                      <td className="py-3 px-3 text-right font-mono text-xs text-slate-300">{formatMoney(j.valeur_marchande)}</td>
-                      {isAdmin && (
-                        <td className="py-3 px-3 text-center">
-                          <div className="flex items-center justify-center gap-1">
-                            <button onClick={() => setEditingPlayer(j)} className="bg-amber-500/20 hover:bg-amber-600 text-amber-300 hover:text-white p-1.5 rounded-lg text-xs cursor-pointer">✏️</button>
-                            <button onClick={() => handleDeletePlayer(j.id, j.nom)} className="bg-rose-500/20 hover:bg-rose-600 text-rose-300 hover:text-white p-1.5 rounded-lg text-xs cursor-pointer">🗑️</button>
-                          </div>
+                  {teamRoster.map((j) => {
+                    const injury = getPlayerInjuryStatus(j.id, parseInt(journeeFilter, 10), parseInt(seasonFilter, 10), matchEvents);
+
+                    return (
+                      <tr key={j.id} className="hover:bg-slate-800/30">
+                        <td className="py-3 px-3 font-mono font-bold text-amber-400">#{j.numero || 10}</td>
+                        <td className="py-3 px-3 font-semibold text-white">
+                          {j.nom}
+                          {j.is_loan && <span className="text-[10px] bg-emerald-500/20 text-emerald-300 px-1.5 py-0.5 rounded ml-2 font-bold">En prêt</span>}
                         </td>
-                      )}
-                    </tr>
-                  ))}
+                        <td className="py-3 px-3">
+                          {injury.injured ? (
+                            <span className="px-2 py-0.5 rounded bg-rose-600/20 text-rose-400 border border-rose-500/30 text-[10px] font-black animate-pulse">
+                              🚑 Blessé ({injury.remaining} m.)
+                            </span>
+                          ) : (
+                            <span className="text-xs text-emerald-400 font-bold">✓ Disponible</span>
+                          )}
+                        </td>
+                        <td className="py-3 px-3 text-xs text-indigo-300 font-bold">{j.poste || 'N/A'}</td>
+                        <td className="py-3 px-3 text-center font-extrabold text-emerald-400">{j.general || 75}</td>
+                        <td className="py-3 px-3 text-center text-slate-300 font-medium">{j.age || '-'} ans</td>
+                        <td className="py-3 px-3 text-center text-amber-400 font-bold">⚽ {j.buts}</td>
+                        <td className="py-3 px-3 text-center text-indigo-400 font-bold">🎯 {j.passes_decisives}</td>
+                        <td className="py-3 px-3 text-right font-mono text-xs text-slate-300">{formatMoney(j.valeur_marchande)}</td>
+                        {isAdmin && (
+                          <td className="py-3 px-3 text-center">
+                            <div className="flex items-center justify-center gap-1">
+                              <button onClick={() => setEditingPlayer(j)} className="bg-amber-500/20 hover:bg-amber-600 text-amber-300 hover:text-white p-1.5 rounded-lg text-xs cursor-pointer">✏️</button>
+                              <button onClick={() => handleDeletePlayer(j.id, j.nom)} className="bg-rose-500/20 hover:bg-rose-600 text-rose-300 hover:text-white p-1.5 rounded-lg text-xs cursor-pointer">🗑️</button>
+                            </div>
+                          </td>
+                        )}
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -3203,9 +3217,8 @@ export default function App() {
             <button type="button" onClick={() => setSelectedMatch(null)} className="absolute top-4 right-4 text-slate-400 hover:text-white font-bold text-xl cursor-pointer">✕</button>
             <h3 className="text-lg font-extrabold text-white text-center mb-1">Détails de la Rencontre</h3>
             <p className="text-xs text-slate-400 text-center mb-4">{getSeasonLabel(selectedMatch.saison || 1)} - Journée {selectedMatch.journee}</p>
-{/* EN-TÊTE DE SCORE PARFAITEMENT ALIGNÉ SUR UNE LIGNE */}
+
             <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800 flex items-center justify-between gap-2 mb-6">
-              {/* Équipe Domicile */}
               <div className="flex items-center justify-end gap-3 flex-1 min-w-0">
                 <span className="font-bold text-white text-sm sm:text-base truncate text-right">
                   {selectedMatch.dom?.nom}
@@ -3217,12 +3230,10 @@ export default function App() {
                 )}
               </div>
 
-              {/* Score Centré */}
               <div className="shrink-0 px-4 py-1.5 bg-emerald-500/10 border border-emerald-500/20 rounded-xl font-mono font-black text-xl sm:text-2xl text-emerald-400">
                 {selectedMatch.score_domicile ?? 0} - {selectedMatch.score_exterieur ?? 0}
               </div>
 
-              {/* Équipe Extérieur */}
               <div className="flex items-center justify-start gap-3 flex-1 min-w-0">
                 {selectedMatch.ext?.logo_url ? (
                   <img src={selectedMatch.ext.logo_url} className="w-8 h-8 sm:w-10 sm:h-10 object-contain shrink-0" alt="" />
@@ -3234,7 +3245,6 @@ export default function App() {
                 </span>
               </div>
             </div>
-            
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="bg-slate-950/60 p-4 rounded-2xl border border-slate-800/80">
