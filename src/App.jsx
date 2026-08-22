@@ -139,7 +139,7 @@ export default function App() {
   const [transferFee, setTransferFee] = useState(10000000);
   const [transferLoading, setTransferLoading] = useState(false);
 
-  // Séquence d'initialisation propre
+  // Séquence d'initialisation
   useEffect(() => {
     if (!document.getElementById('tailwind-cdn')) {
       const script = document.createElement('script');
@@ -265,7 +265,6 @@ export default function App() {
     if (errPlayers) {
       alert(`⚠️ ERREUR CHARGEMENT JOUEURS :\n${errPlayers.message}`);
     } else if (dataPlayers) {
-      // Associer les données du club en mémoire JavaScript
       const enrichedPlayers = dataPlayers.map(p => ({
         ...p,
         teams: currentTeams.find(t => t.id === p.equipe_id) || null
@@ -466,9 +465,9 @@ export default function App() {
     }
   }
 
-  // --- MOTEUR D'ÉVOLUTION DYNAMIQUE ---
+  // --- MOTEUR D'ÉVOLUTION DYNAMIQUE (TOUS LES 5 MATCHS) ---
   async function evaluateAndApplyPlayerEvolutions(targetJournee, currentSeasonNum) {
-    const startJournee = targetJournee - 3;
+    const startJournee = targetJournee - 4;
     const endJournee = targetJournee;
 
     const blockMatches = matches.filter(
@@ -499,7 +498,7 @@ export default function App() {
         teamRecords[m.equipe_exterieur_id].goalsConceded += (m.score_domicile || 0);
         if (m.score_domicile === 0) teamRecords[m.equipe_exterieur_id].cleanSheets++;
         if (m.score_exterieur > m.score_domicile) teamRecords[m.equipe_exterieur_id].wins++;
-        else if (m.score_exterieur < m.score_domicile) teamRecords[m.equipe_domieur_id].losses++;
+        else if (m.score_exterieur < m.score_domicile) teamRecords[m.equipe_exterieur_id].losses++;
         else teamRecords[m.equipe_exterieur_id].draws++;
       }
     });
@@ -519,7 +518,7 @@ export default function App() {
       const redCards = pEvents.filter(e => e.type === 'carton_rouge').length;
       const yellowCards = pEvents.filter(e => e.type === 'carton_jaune').length;
 
-      const tRec = teamRecords[player.equipe_id] || { wins: 0, losses: 0, goalsConceded: 4, cleanSheets: 0, matchCount: 4 };
+      const tRec = teamRecords[player.equipe_id] || { wins: 0, losses: 0, goalsConceded: 5, cleanSheets: 0, matchCount: 5 };
 
       let perfScore = 0;
 
@@ -548,23 +547,23 @@ export default function App() {
       let delta = 0;
 
       if (currentGen >= 88) {
-        if (perfScore >= 9.5) delta = +1;
-        else if (perfScore <= -2.5) delta = -2;
-        else if (perfScore <= 0.5) delta = -1;
+        if (perfScore >= 10.0) delta = +1;
+        else if (perfScore <= -3.0) delta = -2;
+        else if (perfScore <= 0.0) delta = -1;
       } else if (currentGen >= 82) {
-        if (perfScore >= 11.0) delta = +2;
-        else if (perfScore >= 6.5) delta = +1;
+        if (perfScore >= 11.5) delta = +2;
+        else if (perfScore >= 7.0) delta = +1;
         else if (perfScore <= -3.5) delta = -2;
         else if (perfScore <= 0.0) delta = -1;
       } else if (currentGen >= 74) {
-        if (perfScore >= 9.5) delta = +2;
-        else if (perfScore >= 4.5) delta = +1;
+        if (perfScore >= 10.0) delta = +2;
+        else if (perfScore >= 5.0) delta = +1;
         else if (perfScore <= -3.0) delta = -2;
         else if (perfScore <= -0.5) delta = -1;
       } else {
-        if (perfScore >= 9.0) delta = +3;
-        else if (perfScore >= 5.5) delta = +2;
-        else if (perfScore >= 2.5) delta = +1;
+        if (perfScore >= 9.5) delta = +3;
+        else if (perfScore >= 6.0) delta = +2;
+        else if (perfScore >= 3.0) delta = +1;
         else if (perfScore <= -4.0) delta = -2;
         else if (perfScore <= -1.5) delta = -1;
       }
@@ -1018,8 +1017,8 @@ export default function App() {
         await fetchData();
       }
 
-      // 2. ÉVOLUTION DES JOUEURS (TOUTES LES 4 JOURNÉES)
-      if (currentJ % 4 === 0) {
+      // 2. ÉVOLUTION DES JOUEURS (TOUS LES 5 MATCHS / JOURNÉES)
+      if (currentJ % 5 === 0) {
         await evaluateAndApplyPlayerEvolutions(currentJ, currentS);
         await fetchData();
       }
@@ -1090,7 +1089,7 @@ export default function App() {
     return [...allerMatches, ...retourMatches];
   }
 
-  // --- GESTION DES SAISONS (REMETTRE LES NOTES DE BASE vs SAISON SUIVANTE) ---
+  // --- GESTION DES SAISONS ---
   async function handleStartNewSeason(isNextSeason = false) {
     if (!teams || teams.length < 2) {
       alert(`Erreur : Il vous faut au moins 2 équipes pour générer un calendrier (actuellement : ${teams ? teams.length : 0}). Créez-les dans l'onglet Admin.`);
@@ -1129,7 +1128,7 @@ export default function App() {
           await supabase.from('transfers').delete().eq('user_id', session.user.id);
         }
 
-        // On récupère les données fraîches depuis Supabase pour ne pas subir le cache mémoire
+        // Récupération fraîche depuis Supabase
         const { data: freshPlayers } = await supabase.from('players').select('*');
 
         if (freshPlayers && freshPlayers.length > 0) {
@@ -1169,7 +1168,7 @@ export default function App() {
         return;
       }
 
-      // Insertion par paquets légers de 100 pour éviter tout timeout
+      // Insertion par paquets légers de 100
       const chunkSize = 100;
       let insertedCount = 0;
 
@@ -1637,7 +1636,7 @@ export default function App() {
           await triggerWinterMercato(currentJ, currentS);
           await fetchData();
         }
-        if (currentJ % 4 === 0) {
+        if (currentJ % 5 === 0) {
           await evaluateAndApplyPlayerEvolutions(currentJ, currentS);
           await fetchData();
         }
