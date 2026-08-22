@@ -499,8 +499,8 @@ export default function App() {
         teamRecords[m.equipe_exterieur_id].goalsConceded += (m.score_domicile || 0);
         if (m.score_domicile === 0) teamRecords[m.equipe_exterieur_id].cleanSheets++;
         if (m.score_exterieur > m.score_domicile) teamRecords[m.equipe_exterieur_id].wins++;
-        else if (m.score_exterieur < m.score_domicile) teamRecords[m.equipe_exterieur_id].losses++;
-        else teamRecords[m.equipe_domicile_id].draws++;
+        else if (m.score_exterieur < m.score_domicile) teamRecords[m.equipe_domieur_id].losses++;
+        else teamRecords[m.equipe_exterieur_id].draws++;
       }
     });
 
@@ -1105,7 +1105,7 @@ export default function App() {
 
     const confirmMsg = isNextSeason
       ? `Voulez-vous lancer la ${seasonLabel} ?\n\n- Vous conservez vos transferts et évolutions actuels.\n- ${totalJournees} Journées programmées.`
-      : `Voulez-vous REINITIALISER complètement le tournoi (Saison 1) ?\n\n- Tous les joueurs retrouveront leur GÉNÉRAL DE DÉPART et leur club initial.\n- L'historique des transferts et matchs sera effacé.`;
+      : `Voulez-vous REINITIALISER complètement le tournoi (Saison 1) ?\n\n- Tous les joueurs retrouveront leur GÉNÉRAL DE DÉPART (general_base) et leur club initial.\n- L'historique des transferts et matchs sera effacé.`;
 
     if (!window.confirm(confirmMsg)) return;
 
@@ -1113,7 +1113,7 @@ export default function App() {
 
     try {
       if (!isNextSeason) {
-        // 🔄 1. REMISE À ZÉRO COMPLÈTE DES JOUEURS (NOTES ET CLUBS D'ORIGINE)
+        // 🔄 1. REMISE À ZÉRO COMPLÈTE DES JOUEURS (NOTES ET CLUBS D'ORIGINE DIRECTEMENT DEPUIS SUPABASE)
         const { data: allUserTransfers } = await supabase
           .from('transfers')
           .select('*')
@@ -1129,20 +1129,25 @@ export default function App() {
           await supabase.from('transfers').delete().eq('user_id', session.user.id);
         }
 
-        // Rétablir les notes de base (general_base) et recalculer la valeur
-        for (const p of players) {
-          const originalTeam = initialClubByPlayer[p.id] || p.equipe_id;
-          const originalGen = p.general_base !== undefined && p.general_base !== null ? p.general_base : (p.general || 75);
-          const originalVal = calculateMarketValue(originalGen, p.age || 24);
+        // On récupère les données fraîches depuis Supabase pour ne pas subir le cache mémoire
+        const { data: freshPlayers } = await supabase.from('players').select('*');
 
-          await supabase
-            .from('players')
-            .update({
-              equipe_id: originalTeam,
-              general: originalGen,
-              valeur_marchande: originalVal
-            })
-            .eq('id', p.id);
+        if (freshPlayers && freshPlayers.length > 0) {
+          for (const p of freshPlayers) {
+            const originalTeam = initialClubByPlayer[p.id] || p.equipe_id;
+            const originalGen = p.general_base !== undefined && p.general_base !== null ? p.general_base : (p.general || 75);
+            const originalVal = calculateMarketValue(originalGen, p.age || 24);
+
+            await supabase
+              .from('players')
+              .update({
+                equipe_id: originalTeam,
+                general: originalGen,
+                general_base: originalGen,
+                valeur_marchande: originalVal
+              })
+              .eq('id', p.id);
+          }
         }
 
         // Vider tous les anciens matchs et événements
@@ -2902,7 +2907,7 @@ export default function App() {
                     <span>🔄</span> 3. Gestion des Saisons & Calendriers
                   </h3>
                   <p className="text-xs text-slate-400 mt-1 max-w-xl">
-                    Réinitialiser (🔄) remet tous les joueurs dans leur club d'origine avec leur note de base. Lancer la saison suivante (🚀) conserve tous vos effectifs actuels et démarre un nouveau championnat.
+                    Réinitialiser (🔄) remet tous les joueurs dans leur club d'origine avec leur note de base (general_base). Lancer la saison suivante (🚀) conserve tous vos effectifs actuels et démarre un nouveau championnat.
                   </p>
                   <div className="flex items-center gap-4 mt-3 text-xs font-semibold text-slate-400">
                     <span>🛡️ Équipes : <strong className="text-indigo-400">{teams.length}</strong></span>
