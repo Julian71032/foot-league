@@ -77,6 +77,14 @@ const FORMATIONS = {
 };
 
 export default function App() {
+  // Session & Auth
+  const [currentUser, setCurrentUser] = useState(null);
+  const [authMode, setAuthMode] = useState('login'); // 'login' ou 'register'
+  const [authEmail, setAuthEmail] = useState('');
+  const [authPassword, setAuthPassword] = useState('');
+  const [authError, setAuthError] = useState('');
+
+  // États du jeu
   const [tab, setTab] = useState('classement');
   const [teams, setTeams] = useState([]);
   const [players, setPlayers] = useState([]);
@@ -137,45 +145,118 @@ export default function App() {
       script.src = 'https://cdn.tailwindcss.com';
       document.head.appendChild(script);
     }
-    fetchData();
+
+    const savedUser = localStorage.getItem('session_user');
+    if (savedUser) {
+      setCurrentUser(JSON.parse(savedUser));
+    } else {
+      setLoading(false);
+    }
   }, []);
 
-  // Sauvegarde automatique locale
   useEffect(() => {
-    if (!loading && teams.length > 0) localStorage.setItem('local_teams', JSON.stringify(teams));
-  }, [teams, loading]);
+    if (currentUser) {
+      fetchUserData(currentUser.email);
+    }
+  }, [currentUser]);
+
+  // Sauvegarde automatique par utilisateur
+  useEffect(() => {
+    if (!loading && currentUser && teams.length > 0) {
+      const uKey = currentUser.email;
+      localStorage.setItem(`local_teams_${uKey}`, JSON.stringify(teams));
+    }
+  }, [teams, loading, currentUser]);
 
   useEffect(() => {
-    if (!loading && players.length > 0) localStorage.setItem('local_players', JSON.stringify(players));
-  }, [players, loading]);
+    if (!loading && currentUser && players.length > 0) {
+      const uKey = currentUser.email;
+      localStorage.setItem(`local_players_${uKey}`, JSON.stringify(players));
+    }
+  }, [players, loading, currentUser]);
 
   useEffect(() => {
-    if (!loading && matches.length > 0) localStorage.setItem('local_matches', JSON.stringify(matches));
-  }, [matches, loading]);
+    if (!loading && currentUser && matches.length > 0) {
+      const uKey = currentUser.email;
+      localStorage.setItem(`local_matches_${uKey}`, JSON.stringify(matches));
+    }
+  }, [matches, loading, currentUser]);
 
   useEffect(() => {
-    if (!loading) localStorage.setItem('local_events', JSON.stringify(matchEvents));
-  }, [matchEvents, loading]);
+    if (!loading && currentUser) {
+      const uKey = currentUser.email;
+      localStorage.setItem(`local_events_${uKey}`, JSON.stringify(matchEvents));
+    }
+  }, [matchEvents, loading, currentUser]);
 
   useEffect(() => {
-    if (!loading) localStorage.setItem('local_transfers', JSON.stringify(transfers));
-  }, [transfers, loading]);
+    if (!loading && currentUser) {
+      const uKey = currentUser.email;
+      localStorage.setItem(`local_transfers_${uKey}`, JSON.stringify(transfers));
+    }
+  }, [transfers, loading, currentUser]);
 
   function showNotif(msg) {
     setNotification(msg);
     setTimeout(() => setNotification(''), 4500);
   }
 
+  // Authentification
+  function handleAuthSubmit(e) {
+    e.preventDefault();
+    setAuthError('');
+
+    const users = JSON.parse(localStorage.getItem('app_registered_users') || '{}');
+
+    if (authMode === 'register') {
+      if (users[authEmail]) {
+        setAuthError('Ce courriel possède déjà un compte.');
+        return;
+      }
+      users[authEmail] = { email: authEmail, password: authPassword };
+      localStorage.setItem('app_registered_users', JSON.stringify(users));
+      const userObj = { email: authEmail };
+      localStorage.setItem('session_user', JSON.stringify(userObj));
+      setCurrentUser(userObj);
+      showNotif(`Compte créé avec succès ! Bienvenue ${authEmail}`);
+    } else {
+      const user = users[authEmail];
+      if (!user || user.password !== authPassword) {
+        setAuthError('Courriel ou mot de passe incorrect.');
+        return;
+      }
+      const userObj = { email: authEmail };
+      localStorage.setItem('session_user', JSON.stringify(userObj));
+      setCurrentUser(userObj);
+      showNotif(`Bon retour ${authEmail} !`);
+    }
+  }
+
+  function handleLogout() {
+    localStorage.removeItem('session_user');
+    setCurrentUser(null);
+    setTeams([]);
+    setPlayers([]);
+    setMatches([]);
+    setMatchEvents([]);
+    setTransfers([]);
+    setTab('classement');
+  }
+
   function handleSaveTournamentProgress() {
+    if (!currentUser) return;
     setSavingProgress(true);
-    localStorage.setItem('local_season', seasonFilter);
-    localStorage.setItem('local_journee', journeeFilter);
+    const uKey = currentUser.email;
+    localStorage.setItem(`local_season_${uKey}`, seasonFilter);
+    localStorage.setItem(`local_journee_${uKey}`, journeeFilter);
     showNotif(`Progression sauvegardée ! Reprise à la Journée ${journeeFilter} (${getSeasonLabel(seasonFilter)})`);
     setSavingProgress(false);
   }
 
-  async function fetchData() {
+  async function fetchUserData(userEmail) {
+    setLoading(true);
     try {
+      const uKey = userEmail;
       let localTeams = null;
       let localPlayers = null;
       let localMatches = null;
@@ -183,13 +264,13 @@ export default function App() {
       let localTransfers = null;
 
       try {
-        localTeams = JSON.parse(localStorage.getItem('local_teams'));
-        localPlayers = JSON.parse(localStorage.getItem('local_players'));
-        localMatches = JSON.parse(localStorage.getItem('local_matches'));
-        localEvents = JSON.parse(localStorage.getItem('local_events'));
-        localTransfers = JSON.parse(localStorage.getItem('local_transfers'));
+        localTeams = JSON.parse(localStorage.getItem(`local_teams_${uKey}`));
+        localPlayers = JSON.parse(localStorage.getItem(`local_players_${uKey}`));
+        localMatches = JSON.parse(localStorage.getItem(`local_matches_${uKey}`));
+        localEvents = JSON.parse(localStorage.getItem(`local_events_${uKey}`));
+        localTransfers = JSON.parse(localStorage.getItem(`local_transfers_${uKey}`));
       } catch (e) {
-        console.error("Cache invalide, rechargement Render...");
+        console.error("Cache local corrompu.");
       }
 
       let currentTeams = [];
@@ -212,13 +293,13 @@ export default function App() {
 
         currentTeams = Array.isArray(resTeams) ? resTeams : [];
         currentPlayers = Array.isArray(resPlayers) ? resPlayers : [];
-        currentMatches = buildRoundRobinFixtures(currentTeams, 'local_user', 1);
+        currentMatches = buildRoundRobinFixtures(currentTeams, uKey, 1);
 
-        localStorage.setItem('local_teams', JSON.stringify(currentTeams));
-        localStorage.setItem('local_players', JSON.stringify(currentPlayers));
-        localStorage.setItem('local_matches', JSON.stringify(currentMatches));
-        localStorage.setItem('local_events', JSON.stringify([]));
-        localStorage.setItem('local_transfers', JSON.stringify([]));
+        localStorage.setItem(`local_teams_${uKey}`, JSON.stringify(currentTeams));
+        localStorage.setItem(`local_players_${uKey}`, JSON.stringify(currentPlayers));
+        localStorage.setItem(`local_matches_${uKey}`, JSON.stringify(currentMatches));
+        localStorage.setItem(`local_events_${uKey}`, JSON.stringify([]));
+        localStorage.setItem(`local_transfers_${uKey}`, JSON.stringify([]));
       }
 
       setTeams(currentTeams);
@@ -228,8 +309,8 @@ export default function App() {
       setTransfers(currentTransfers);
 
       const maxS = currentMatches.length > 0 ? Math.max(...currentMatches.map(m => m.saison || 1), 1) : 1;
-      const savedSeason = localStorage.getItem('local_season');
-      const savedJournee = localStorage.getItem('local_journee');
+      const savedSeason = localStorage.getItem(`local_season_${uKey}`);
+      const savedJournee = localStorage.getItem(`local_journee_${uKey}`);
 
       const activeSeason = savedSeason ? parseInt(savedSeason, 10) : maxS;
       setSeasonFilter(activeSeason);
@@ -245,7 +326,7 @@ export default function App() {
         }
       }
     } catch (err) {
-      console.error('Erreur chargement local:', err);
+      console.error('Erreur chargement:', err);
     } finally {
       setLoading(false);
     }
@@ -356,7 +437,7 @@ export default function App() {
           old_team_id: originTeam.id,
           new_team_id: destinationTeam.id,
           fee: fee,
-          user_id: 'local_user',
+          user_id: currentUser?.email || 'local_user',
           players: player,
           old_team: originTeam,
           new_team: destinationTeam
@@ -389,7 +470,7 @@ export default function App() {
     }
   }
 
-  // --- ÉVOLUTION DES NOTES SUR UN BLOC DE 4 JOURNÉES ---
+  // --- ÉVOLUTION DES NOTES TOUTES LES 4 JOURNÉES ---
   async function evaluateAndApplyPlayerEvolutions(targetJournee, currentSeasonNum) {
     const startJournee = targetJournee - 3;
     const endJournee = targetJournee;
@@ -423,7 +504,7 @@ export default function App() {
         if (m.score_domicile === 0) teamRecords[m.equipe_exterieur_id].cleanSheets++;
         if (m.score_exterieur > m.score_domicile) teamRecords[m.equipe_exterieur_id].wins++;
         else if (m.score_exterieur < m.score_domicile) teamRecords[m.equipe_exterieur_id].losses++;
-        else teamRecords[m.equipe_exterieur_id].draws++;
+        else teamRecords[m.equipe_domieur_id]?.draws !== undefined && teamRecords[m.equipe_exterieur_id].draws++;
       }
     });
 
@@ -813,11 +894,12 @@ export default function App() {
     try {
       const newEvents = [];
       const updatedMatches = [...matches];
+      const uKey = currentUser?.email || 'local_user';
 
       for (const m of currentJourneeMatches) {
         const domTeam = teams.find(t => t.id === m.equipe_domicile_id);
         const extTeam = teams.find(t => t.id === m.equipe_exterieur_id);
-        const simResult = simulateSingleMatchWithSubs(m, domTeam, extTeam, m.saison || 1, 'local_user');
+        const simResult = simulateSingleMatchWithSubs(m, domTeam, extTeam, m.saison || 1, uKey);
 
         const mIdx = updatedMatches.findIndex(matchItem => matchItem.id === m.id);
         if (mIdx !== -1) {
@@ -838,8 +920,8 @@ export default function App() {
       const currentJ = parseInt(journeeFilter, 10);
       const currentS = parseInt(seasonFilter, 10);
 
-      localStorage.setItem('local_season', currentS);
-      localStorage.setItem('local_journee', currentJ);
+      localStorage.setItem(`local_season_${uKey}`, currentS);
+      localStorage.setItem(`local_journee_${uKey}`, currentJ);
 
       showNotif(`Journée ${journeeFilter} simulée avec succès !`);
 
@@ -929,10 +1011,11 @@ export default function App() {
     const targetSeason = isNextSeason ? currentMaxSeason + 1 : 1;
     const seasonLabel = getSeasonLabel(targetSeason);
     const totalJournees = (teams.length % 2 === 0 ? teams.length - 1 : teams.length) * 2;
+    const uKey = currentUser?.email || 'local_user';
 
     const confirmMsg = isNextSeason
       ? `Voulez-vous lancer la ${seasonLabel} ?\n\n- Vous conservez vos transferts et évolutions actuels.\n- ${totalJournees} Journées programmées.`
-      : `Voulez-vous RÉINITIALISER complètement le tournoi (Saison 1) ?\n\n- Tous les joueurs retrouveront leur GÉNÉRAL DE DÉPART et leur club initial.`;
+      : `Voulez-vous RÉINITIALISER complètement votre tournoi (Saison 1) ?\n\n- Tous les joueurs retrouveront leur GÉNÉRAL DE DÉPART et leur club initial.`;
 
     if (!window.confirm(confirmMsg)) return;
 
@@ -940,12 +1023,19 @@ export default function App() {
 
     try {
       if (!isNextSeason) {
-        localStorage.clear();
-        window.location.reload();
+        localStorage.removeItem(`local_teams_${uKey}`);
+        localStorage.removeItem(`local_players_${uKey}`);
+        localStorage.removeItem(`local_matches_${uKey}`);
+        localStorage.removeItem(`local_events_${uKey}`);
+        localStorage.removeItem(`local_transfers_${uKey}`);
+        localStorage.removeItem(`local_season_${uKey}`);
+        localStorage.removeItem(`local_journee_${uKey}`);
+        await fetchUserData(uKey);
+        setGeneratingSchedule(false);
         return;
       }
 
-      const fixtures = buildRoundRobinFixtures(teams, 'local_user', targetSeason);
+      const fixtures = buildRoundRobinFixtures(teams, uKey, targetSeason);
       const remainingMatches = matches.filter(m => (m.saison || 1) !== targetSeason);
       setMatches([...remainingMatches, ...fixtures]);
 
@@ -955,8 +1045,8 @@ export default function App() {
       setJourneeFilter(1);
       setSeasonEvolutions({});
 
-      localStorage.setItem('local_season', targetSeason);
-      localStorage.setItem('local_journee', 1);
+      localStorage.setItem(`local_season_${uKey}`, targetSeason);
+      localStorage.setItem(`local_journee_${uKey}`, 1);
     } catch (err) {
       alert(`Erreur génération : ${err.message}`);
     }
@@ -1101,7 +1191,7 @@ export default function App() {
       old_team_id: transferFromTeamId,
       new_team_id: transferToTeamId,
       fee: parseInt(transferFee, 10),
-      user_id: 'local_user',
+      user_id: currentUser?.email || 'local_user',
       players: selectedPlayer,
       old_team: origTeam,
       new_team: destTeam
@@ -1225,10 +1315,11 @@ export default function App() {
 
     const domTeam = teams.find(t => t.id === match.equipe_domicile_id);
     const extTeam = teams.find(t => t.id === match.equipe_exterieur_id);
+    const uKey = currentUser?.email || 'local_user';
 
     try {
       const events = generateMatchEventsForCustomScore(
-        match, domTeam, extTeam, scoreDom, scoreExt, match.saison || 1, 'local_user'
+        match, domTeam, extTeam, scoreDom, scoreExt, match.saison || 1, uKey
       );
 
       setMatches(prev => prev.map(m => m.id === match.id ? { ...m, score_domicile: scoreDom, score_exterieur: scoreExt, statut: 'terminé' } : m));
@@ -1237,8 +1328,8 @@ export default function App() {
       const currentJ = match.journee;
       const currentS = match.saison || 1;
 
-      localStorage.setItem('local_season', currentS);
-      localStorage.setItem('local_journee', currentJ);
+      localStorage.setItem(`local_season_${uKey}`, currentS);
+      localStorage.setItem(`local_journee_${uKey}`, currentJ);
 
       showNotif(`Score ${scoreDom} - ${scoreExt} et événements enregistrés !`);
 
@@ -1490,7 +1581,7 @@ export default function App() {
     if (journeeFilter < maxJourneesCount) {
       const nextJ = journeeFilter + 1;
       setJourneeFilter(nextJ);
-      localStorage.setItem('local_journee', nextJ);
+      localStorage.setItem(`local_journee_${currentUser.email}`, nextJ);
     } else {
       showNotif("Vous êtes sur la dernière journée de cette saison !");
     }
@@ -1500,7 +1591,7 @@ export default function App() {
     if (journeeFilter > 1) {
       const prevJ = journeeFilter - 1;
       setJourneeFilter(prevJ);
-      localStorage.setItem('local_journee', prevJ);
+      localStorage.setItem(`local_journee_${currentUser.email}`, prevJ);
     }
   }
 
@@ -1562,11 +1653,89 @@ export default function App() {
     ? selectedMatchEvents.filter(ev => ev.player_equipe_id === selectedMatch.equipe_exterieur_id) 
     : [];
 
+  // --- ÉCRAN DE CONNEXION / INSCRIPTION ---
+  if (!currentUser) {
+    return (
+      <div className="min-h-screen bg-slate-950 text-white flex items-center justify-center p-4 font-sans">
+        <div className="bg-slate-900 border border-slate-800 rounded-3xl p-8 max-w-md w-full shadow-2xl">
+          <div className="text-center mb-6">
+            <div className="bg-indigo-600 text-white w-14 h-14 rounded-2xl flex items-center justify-center text-3xl mx-auto shadow-lg shadow-indigo-600/30 mb-3">⚽</div>
+            <h1 className="text-2xl font-black text-white">LIGUE DE FOOTBALL</h1>
+            <p className="text-xs text-slate-400 mt-1">Connectez-vous pour accéder à vos saisons individuelles</p>
+          </div>
+
+          {authError && (
+            <div className="bg-rose-500/10 border border-rose-500/30 text-rose-400 text-xs font-semibold px-4 py-3 rounded-xl mb-4 text-center">
+              {authError}
+            </div>
+          )}
+
+          <form onSubmit={handleAuthSubmit} className="space-y-4">
+            <div>
+              <label className="block text-xs font-bold text-slate-400 mb-1">Courriel</label>
+              <input
+                type="email"
+                placeholder="nom@exemple.com"
+                value={authEmail}
+                onChange={(e) => setAuthEmail(e.target.value)}
+                className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:border-indigo-500"
+                required
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-slate-400 mb-1">Mot de passe</label>
+              <input
+                type="password"
+                placeholder="••••••••"
+                value={authPassword}
+                onChange={(e) => setAuthPassword(e.target.value)}
+                className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:border-indigo-500"
+                required
+              />
+            </div>
+
+            <button
+              type="submit"
+              className="w-full bg-indigo-600 hover:bg-indigo-500 active:scale-95 text-white font-bold py-3.5 rounded-xl text-sm transition-all shadow-lg shadow-indigo-600/30 cursor-pointer"
+            >
+              {authMode === 'login' ? 'Se connecter' : "Créer mon compte"}
+            </button>
+          </form>
+
+          <div className="mt-6 pt-4 border-t border-slate-800 text-center">
+            {authMode === 'login' ? (
+              <p className="text-xs text-slate-400">
+                Pas encore de compte ?{' '}
+                <button
+                  onClick={() => { setAuthMode('register'); setAuthError(''); }}
+                  className="text-indigo-400 font-bold hover:underline cursor-pointer"
+                >
+                  S'inscrire
+                </button>
+              </p>
+            ) : (
+              <p className="text-xs text-slate-400">
+                Déjà inscrit ?{' '}
+                <button
+                  onClick={() => { setAuthMode('login'); setAuthError(''); }}
+                  className="text-indigo-400 font-bold hover:underline cursor-pointer"
+                >
+                  Se connecter
+                </button>
+              </p>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   if (loading) {
     return (
       <div className="min-h-screen bg-slate-950 text-white flex flex-col items-center justify-center">
         <div className="text-3xl mb-4 animate-spin">⚽</div>
-        <p className="text-slate-400 font-bold">Chargement de votre ligue...</p>
+        <p className="text-slate-400 font-bold">Chargement de votre saison...</p>
       </div>
     );
   }
@@ -1579,33 +1748,45 @@ export default function App() {
             <div className="bg-indigo-600 text-white p-2.5 rounded-xl shadow-lg shadow-indigo-500/20">⚽</div>
             <div>
               <h1 className="text-xl font-extrabold tracking-tight text-white">LIGUE DE FOOTBALL</h1>
-              <p className="text-xs text-emerald-400 font-medium">✓ Mode individuel autonome (Sauvegarde locale)</p>
+              <div className="flex items-center gap-2 mt-0.5">
+                <span className="text-xs text-emerald-400 font-medium">✓ Connecté : <strong className="text-white">{currentUser.email}</strong></span>
+              </div>
             </div>
           </div>
 
-          <nav className="flex items-center gap-2">
-            <div className="flex items-center bg-slate-950/60 p-1.5 rounded-xl border border-slate-800/80">
-              {[
-                { id: 'classement', label: '🏆 Classement' },
-                { id: 'matchs', label: '📅 Matchs' },
-                { id: 'buteurs', label: '👟 Stats Joueurs' },
-                { id: 'transferts', label: '🔄 Transferts' },
-                { id: 'admin', label: '⚙️ Admin' }
-              ].map((item) => (
-                <button
-                  key={item.id}
-                  onClick={() => setTab(item.id)}
-                  className={`px-4 py-2 rounded-lg text-sm font-semibold transition-all duration-200 ${
-                    tab === item.id
-                      ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/30'
-                      : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50'
-                  }`}
-                >
-                  {item.label}
-                </button>
-              ))}
-            </div>
-          </nav>
+          <div className="flex items-center gap-3">
+            <nav className="flex items-center gap-2">
+              <div className="flex items-center bg-slate-950/60 p-1.5 rounded-xl border border-slate-800/80">
+                {[
+                  { id: 'classement', label: '🏆 Classement' },
+                  { id: 'matchs', label: '📅 Matchs' },
+                  { id: 'buteurs', label: '👟 Stats Joueurs' },
+                  { id: 'transferts', label: '🔄 Transferts' },
+                  { id: 'admin', label: '⚙️ Admin' }
+                ].map((item) => (
+                  <button
+                    key={item.id}
+                    onClick={() => setTab(item.id)}
+                    className={`px-3 sm:px-4 py-2 rounded-lg text-xs sm:text-sm font-semibold transition-all duration-200 ${
+                      tab === item.id
+                        ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/30'
+                        : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50'
+                    }`}
+                  >
+                    {item.label}
+                  </button>
+                ))}
+              </div>
+            </nav>
+
+            <button
+              onClick={handleLogout}
+              className="bg-rose-500/10 hover:bg-rose-600 text-rose-400 hover:text-white border border-rose-500/30 text-xs font-bold px-3 py-2.5 rounded-xl transition-all cursor-pointer flex items-center gap-1.5"
+              title="Se déconnecter"
+            >
+              <span>🚪</span> Déconnexion
+            </button>
+          </div>
         </div>
       </header>
 
@@ -1637,8 +1818,8 @@ export default function App() {
                     const s = parseInt(e.target.value, 10);
                     setSeasonFilter(s);
                     setJourneeFilter(1);
-                    localStorage.setItem('local_season', s);
-                    localStorage.setItem('local_journee', 1);
+                    localStorage.setItem(`local_season_${currentUser.email}`, s);
+                    localStorage.setItem(`local_journee_${currentUser.email}`, 1);
                   }}
                   className="bg-slate-900 border border-slate-700 text-indigo-400 font-bold text-xs rounded-lg px-3 py-1.5 focus:outline-none focus:border-indigo-500 cursor-pointer"
                 >
@@ -1755,8 +1936,8 @@ export default function App() {
                       const s = parseInt(e.target.value, 10);
                       setSeasonFilter(s);
                       setJourneeFilter(1);
-                      localStorage.setItem('local_season', s);
-                      localStorage.setItem('local_journee', 1);
+                      localStorage.setItem(`local_season_${currentUser.email}`, s);
+                      localStorage.setItem(`local_journee_${currentUser.email}`, 1);
                     }}
                     className="bg-slate-900 border border-slate-700 text-indigo-400 font-bold text-xs rounded-lg px-2.5 py-1 focus:outline-none focus:border-indigo-500 cursor-pointer"
                   >
@@ -1952,7 +2133,7 @@ export default function App() {
                   onChange={(e) => {
                     const s = parseInt(e.target.value, 10);
                     setSeasonFilter(s);
-                    localStorage.setItem('local_season', s);
+                    localStorage.setItem(`local_season_${currentUser.email}`, s);
                   }}
                   className="bg-slate-900 border border-slate-700 text-indigo-400 font-bold text-xs rounded-lg px-3 py-1.5 focus:outline-none focus:border-indigo-500 cursor-pointer"
                 >
@@ -2170,7 +2351,7 @@ export default function App() {
 
         {tab === 'admin' && (
           <div className="space-y-6">
-            <h2 className="text-2xl font-extrabold text-white">⚙️ Panneau d'Administration (Local)</h2>
+            <h2 className="text-2xl font-extrabold text-white">⚙️ Panneau d'Administration ({currentUser.email})</h2>
 
             <div className="grid gap-6 md:grid-cols-2">
               <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl">
@@ -2316,7 +2497,7 @@ export default function App() {
                 <div>
                   <h3 className="text-lg font-bold text-white flex items-center gap-2">🔄 3. Gestion des Saisons</h3>
                   <p className="text-xs text-slate-400 mt-1 max-w-xl">
-                    Réinitialiser (🔄) remet votre partie à zéro en rechargeant les données initiales de la base. Lancer la saison suivante (🚀) conserve vos effectifs et transferts.
+                    Réinitialiser (🔄) remet votre partie locale à zéro. Lancer la saison suivante (🚀) conserve vos effectifs et transferts.
                   </p>
                 </div>
 
