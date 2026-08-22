@@ -338,7 +338,6 @@ export default function App() {
     showNotif(`Calendrier généré : ${newFixtures.length} matchs programmés pour la Saison ${s} !`);
   }
 
-  // Chargement fiable depuis Render ou Local
   async function fetchUserData(userEmail) {
     setLoading(true);
     try {
@@ -365,7 +364,6 @@ export default function App() {
       let currentEvents = Array.isArray(localEvents) ? localEvents : [];
       let currentTransfers = Array.isArray(localTransfers) ? localTransfers : [];
 
-      // Si les équipes ou joueurs sont vides, on télécharge directement depuis Render
       if (currentTeams.length === 0 || currentPlayers.length === 0) {
         const [resTeams, resPlayers] = await Promise.all([
           fetch(`${API_URL}/teams`).then(r => r.json()).catch(() => []),
@@ -383,7 +381,6 @@ export default function App() {
         localStorage.setItem(`local_transfers_${uKey}`, JSON.stringify([]));
       }
 
-      // Si les matchs étaient vides pour la saison 1, on les force
       if (currentMatches.length === 0 && currentTeams.length >= 2) {
         currentMatches = buildRoundRobinFixtures(currentTeams, uKey, 1);
         localStorage.setItem(`local_matches_${uKey}`, JSON.stringify(currentMatches));
@@ -557,7 +554,6 @@ export default function App() {
     }
   }
 
-  // --- ÉVOLUTION DES NOTES TOUTES LES 4 JOURNÉES ---
   async function evaluateAndApplyPlayerEvolutions(targetJournee, currentSeasonNum) {
     const startJournee = targetJournee - 3;
     const endJournee = targetJournee;
@@ -817,9 +813,10 @@ export default function App() {
     return activePlayers[0];
   }
 
+  // --- DÉ DE 0 À 7 INCLUS ---
   function handleRollDice(matchId) {
-    const diceDom = Math.floor(Math.random() * 6) + 1;
-    const diceExt = Math.floor(Math.random() * 6) + 1;
+    const diceDom = Math.floor(Math.random() * 8); // 0 à 7
+    const diceExt = Math.floor(Math.random() * 8); // 0 à 7
 
     setScoresInput(prev => ({
       ...prev,
@@ -961,7 +958,6 @@ export default function App() {
     return { scoreDom, scoreExt, events };
   }
 
-  // --- SIMULATION AUTOMATIQUE DE LA JOURNÉE ---
   async function handleSimulateJournee() {
     const currentJourneeMatches = seasonMatches.filter(m => m.journee === parseInt(journeeFilter, 10));
     if (currentJourneeMatches.length === 0) {
@@ -984,8 +980,8 @@ export default function App() {
       const uKey = currentUser?.email || 'local_user';
 
       for (const m of currentJourneeMatches) {
-        const domTeam = teams.find(t => t.id === m.equipe_domicile_id);
-        const extTeam = teams.find(t => t.id === m.equipe_exterieur_id);
+        const domTeam = teams.find(t => t.id === m.equipe_domicile_id) || { id: m.equipe_domicile_id, nom: 'Club Dom' };
+        const extTeam = teams.find(t => t.id === m.equipe_exterieur_id) || { id: m.equipe_exterieur_id, nom: 'Club Ext' };
         const simResult = simulateSingleMatchWithSubs(m, domTeam, extTeam, m.saison || 1, uKey);
 
         const mIdx = updatedMatches.findIndex(matchItem => matchItem.id === m.id);
@@ -1016,7 +1012,6 @@ export default function App() {
         await triggerWinterMercato(currentJ, currentS);
       }
 
-      // Évolution toutes les 4 journées
       if (currentJ % 4 === 0) {
         await evaluateAndApplyPlayerEvolutions(currentJ, currentS);
       }
@@ -1306,8 +1301,13 @@ export default function App() {
     setLogoUpdating(false);
   }
 
+  // --- OUVERTURE DE DÉTAILS SÉCURISÉE SANS CRASH ---
   async function openMatchDetails(match) {
-    setSelectedMatch(match);
+    const dom = teams.find(t => t.id === match.equipe_domicile_id) || { id: match.equipe_domicile_id, nom: 'Club Domicile', logo_url: '' };
+    const ext = teams.find(t => t.id === match.equipe_exterieur_id) || { id: match.equipe_exterieur_id, nom: 'Club Extérieur', logo_url: '' };
+
+    setSelectedMatch({ ...match, dom, ext });
+
     const filtered = matchEvents.filter(ev => ev.match_id === match.id);
     const enriched = filtered.map(ev => {
       const pObj = players.find(p => p.id === ev.player_id);
@@ -1334,8 +1334,8 @@ export default function App() {
       return; 
     }
 
-    const domTeam = teams.find(t => t.id === match.equipe_domicile_id);
-    const extTeam = teams.find(t => t.id === match.equipe_exterieur_id);
+    const domTeam = teams.find(t => t.id === match.equipe_domicile_id) || { id: match.equipe_domicile_id, nom: 'Club Dom' };
+    const extTeam = teams.find(t => t.id === match.equipe_exterieur_id) || { id: match.equipe_exterieur_id, nom: 'Club Ext' };
     const uKey = currentUser?.email || 'local_user';
 
     try {
@@ -1361,7 +1361,6 @@ export default function App() {
         if (currentJ >= 19 && currentJ <= 23) {
           await triggerWinterMercato(currentJ, currentS);
         }
-        // Évolution toutes les 4 journées
         if (currentJ % 4 === 0) {
           await evaluateAndApplyPlayerEvolutions(currentJ, currentS);
         }
@@ -1587,6 +1586,7 @@ export default function App() {
     ? Math.round(teamLineupPlayers.reduce((acc, p) => acc + (p?.general || 75), 0) / teamLineupPlayers.length)
     : 0;
 
+  // Calcul fiable de 38 journées
   const maxJourneesCount = seasonMatches.length > 0
     ? Math.max(...seasonMatches.map(m => m.journee || 1))
     : (teams.length >= 2 ? (teams.length % 2 === 0 ? teams.length - 1 : teams.length) * 2 : 38);
@@ -2057,8 +2057,8 @@ export default function App() {
                   .filter((m) => m.journee === parseInt(journeeFilter, 10))
                   .sort((a, b) => (a.id > b.id ? 1 : -1))
                   .map((m) => {
-                    const domTeam = teams.find(t => t.id === m.equipe_domicile_id);
-                    const extTeam = teams.find(t => t.id === m.equipe_exterieur_id);
+                    const domTeam = teams.find(t => t.id === m.equipe_domicile_id) || { id: m.equipe_domicile_id, nom: 'Équipe Domicile', logo_url: '' };
+                    const extTeam = teams.find(t => t.id === m.equipe_exterieur_id) || { id: m.equipe_exterieur_id, nom: 'Équipe Extérieur', logo_url: '' };
                     const currentDomInput = scoresInput[m.id]?.dom !== undefined ? scoresInput[m.id].dom : (m.score_domicile ?? '');
                     const currentExtInput = scoresInput[m.id]?.ext !== undefined ? scoresInput[m.id].ext : (m.score_exterieur ?? '');
 
@@ -2083,6 +2083,7 @@ export default function App() {
                             type="button"
                             onClick={() => handleRollDice(m.id)}
                             className="bg-amber-500/20 hover:bg-amber-500 text-amber-300 hover:text-slate-950 border border-amber-500/40 text-sm font-black p-2.5 rounded-xl transition-all cursor-pointer shadow-md active:scale-95 mr-1"
+                            title="Lancer le dé (0 à 7 buts)"
                           >
                             🎲
                           </button>
@@ -2922,7 +2923,7 @@ export default function App() {
         </div>
       )}
 
-      {/* MODALE DÉTAILS MATCH */}
+      {/* MODALE DÉTAILS MATCH CORRIGÉE */}
       {selectedMatch && (
         <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-slate-900 border border-slate-800 rounded-3xl max-w-2xl w-full p-6 shadow-2xl relative max-h-[90vh] flex flex-col overflow-y-auto">
