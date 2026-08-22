@@ -150,7 +150,11 @@ export default function App() {
 
     const savedUser = localStorage.getItem('session_user');
     if (savedUser) {
-      setCurrentUser(JSON.parse(savedUser));
+      try {
+        setCurrentUser(JSON.parse(savedUser));
+      } catch (e) {
+        setLoading(false);
+      }
     } else {
       setLoading(false);
     }
@@ -316,7 +320,6 @@ export default function App() {
     return [...allerMatches, ...retourMatches];
   }
 
-  // Génération explicite du calendrier
   function handleGenerateCurrentSchedule() {
     if (!teams || teams.length < 2) {
       alert("Il vous faut au moins 2 équipes pour générer un calendrier.");
@@ -335,6 +338,7 @@ export default function App() {
     showNotif(`Calendrier généré : ${newFixtures.length} matchs programmés pour la Saison ${s} !`);
   }
 
+  // Chargement fiable depuis Render ou Local
   async function fetchUserData(userEmail) {
     setLoading(true);
     try {
@@ -352,22 +356,17 @@ export default function App() {
         localEvents = JSON.parse(localStorage.getItem(`local_events_${uKey}`));
         localTransfers = JSON.parse(localStorage.getItem(`local_transfers_${uKey}`));
       } catch (e) {
-        console.error("Cache local corrompu.");
+        console.error("Cache local ignoré.");
       }
 
-      let currentTeams = [];
-      let currentPlayers = [];
-      let currentMatches = [];
-      let currentEvents = [];
-      let currentTransfers = [];
+      let currentTeams = Array.isArray(localTeams) ? localTeams : [];
+      let currentPlayers = Array.isArray(localPlayers) ? localPlayers : [];
+      let currentMatches = Array.isArray(localMatches) ? localMatches : [];
+      let currentEvents = Array.isArray(localEvents) ? localEvents : [];
+      let currentTransfers = Array.isArray(localTransfers) ? localTransfers : [];
 
-      if (Array.isArray(localTeams) && localTeams.length > 0 && Array.isArray(localPlayers) && localPlayers.length > 0) {
-        currentTeams = localTeams;
-        currentPlayers = localPlayers;
-        currentMatches = Array.isArray(localMatches) ? localMatches : [];
-        currentEvents = Array.isArray(localEvents) ? localEvents : [];
-        currentTransfers = Array.isArray(localTransfers) ? localTransfers : [];
-      } else {
+      // Si les équipes ou joueurs sont vides, on télécharge directement depuis Render
+      if (currentTeams.length === 0 || currentPlayers.length === 0) {
         const [resTeams, resPlayers] = await Promise.all([
           fetch(`${API_URL}/teams`).then(r => r.json()).catch(() => []),
           fetch(`${API_URL}/players`).then(r => r.json()).catch(() => [])
@@ -1762,7 +1761,6 @@ export default function App() {
     );
   }
 
-  // Onglets
   const navTabs = [
     { id: 'classement', label: '🏆 Classement' },
     { id: 'matchs', label: '📅 Matchs' },
