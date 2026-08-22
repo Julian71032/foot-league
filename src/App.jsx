@@ -1624,7 +1624,7 @@ export default function App() {
       case 'remplacement':
         return (
           <span className="flex items-center gap-1 font-semibold text-slate-300 text-xs bg-slate-800 border border-slate-700 px-2 py-0.5 rounded-lg">
-            🔄 {ev.detail || 'Remplacement'}
+            🔄 Entrée
           </span>
         );
       default:
