@@ -88,6 +88,7 @@ export default function App() {
   const [notification, setNotification] = useState('');
   const [simulating, setSimulating] = useState(false);
   const [savingProgress, setSavingProgress] = useState(false);
+  const [loading, setLoading] = useState(true);
 
   const [seasonEvolutions, setSeasonEvolutions] = useState({});
 
@@ -136,35 +137,29 @@ export default function App() {
       script.src = 'https://cdn.tailwindcss.com';
       document.head.appendChild(script);
     }
-
-    const savedSeason = localStorage.getItem('local_season');
-    const savedJournee = localStorage.getItem('local_journee');
-    if (savedSeason) setSeasonFilter(parseInt(savedSeason, 10));
-    if (savedJournee) setJourneeFilter(parseInt(savedJournee, 10));
-
     fetchData();
   }, []);
 
   // Sauvegarde automatique locale
   useEffect(() => {
-    if (teams.length > 0) localStorage.setItem('local_teams', JSON.stringify(teams));
-  }, [teams]);
+    if (!loading && teams.length > 0) localStorage.setItem('local_teams', JSON.stringify(teams));
+  }, [teams, loading]);
 
   useEffect(() => {
-    if (players.length > 0) localStorage.setItem('local_players', JSON.stringify(players));
-  }, [players]);
+    if (!loading && players.length > 0) localStorage.setItem('local_players', JSON.stringify(players));
+  }, [players, loading]);
 
   useEffect(() => {
-    if (matches.length > 0) localStorage.setItem('local_matches', JSON.stringify(matches));
-  }, [matches]);
+    if (!loading && matches.length > 0) localStorage.setItem('local_matches', JSON.stringify(matches));
+  }, [matches, loading]);
 
   useEffect(() => {
-    if (matchEvents.length > 0) localStorage.setItem('local_events', JSON.stringify(matchEvents));
-  }, [matchEvents]);
+    if (!loading) localStorage.setItem('local_events', JSON.stringify(matchEvents));
+  }, [matchEvents, loading]);
 
   useEffect(() => {
-    if (transfers.length > 0) localStorage.setItem('local_transfers', JSON.stringify(transfers));
-  }, [transfers]);
+    if (!loading) localStorage.setItem('local_transfers', JSON.stringify(transfers));
+  }, [transfers, loading]);
 
   function showNotif(msg) {
     setNotification(msg);
@@ -181,11 +176,21 @@ export default function App() {
 
   async function fetchData() {
     try {
-      const localTeams = localStorage.getItem('local_teams');
-      const localPlayers = localStorage.getItem('local_players');
-      const localMatches = localStorage.getItem('local_matches');
-      const localEvents = localStorage.getItem('local_events');
-      const localTransfers = localStorage.getItem('local_transfers');
+      let localTeams = null;
+      let localPlayers = null;
+      let localMatches = null;
+      let localEvents = null;
+      let localTransfers = null;
+
+      try {
+        localTeams = JSON.parse(localStorage.getItem('local_teams'));
+        localPlayers = JSON.parse(localStorage.getItem('local_players'));
+        localMatches = JSON.parse(localStorage.getItem('local_matches'));
+        localEvents = JSON.parse(localStorage.getItem('local_events'));
+        localTransfers = JSON.parse(localStorage.getItem('local_transfers'));
+      } catch (e) {
+        console.error("Cache invalide, rechargement Render...");
+      }
 
       let currentTeams = [];
       let currentPlayers = [];
@@ -193,60 +198,36 @@ export default function App() {
       let currentEvents = [];
       let currentTransfers = [];
 
-      if (localTeams && localPlayers) {
-        currentTeams = JSON.parse(localTeams);
-        currentPlayers = JSON.parse(localPlayers);
-        if (localMatches) currentMatches = JSON.parse(localMatches);
-        if (localEvents) currentEvents = JSON.parse(localEvents);
-        if (localTransfers) currentTransfers = JSON.parse(localTransfers);
+      if (Array.isArray(localTeams) && localTeams.length > 0 && Array.isArray(localPlayers) && localPlayers.length > 0) {
+        currentTeams = localTeams;
+        currentPlayers = localPlayers;
+        currentMatches = Array.isArray(localMatches) ? localMatches : [];
+        currentEvents = Array.isArray(localEvents) ? localEvents : [];
+        currentTransfers = Array.isArray(localTransfers) ? localTransfers : [];
       } else {
-        const [resTeams, resPlayers, resMatches, resEvents, resTransfers] = await Promise.all([
-          fetch(`${API_URL}/teams`).then(r => r.json()),
-          fetch(`${API_URL}/players`).then(r => r.json()),
-          fetch(`${API_URL}/matches`).then(r => r.json()).catch(() => []),
-          fetch(`${API_URL}/match_events`).then(r => r.json()).catch(() => []),
-          fetch(`${API_URL}/transfers`).then(r => r.json()).catch(() => [])
+        const [resTeams, resPlayers] = await Promise.all([
+          fetch(`${API_URL}/teams`).then(r => r.json()).catch(() => []),
+          fetch(`${API_URL}/players`).then(r => r.json()).catch(() => [])
         ]);
 
         currentTeams = Array.isArray(resTeams) ? resTeams : [];
         currentPlayers = Array.isArray(resPlayers) ? resPlayers : [];
-        currentMatches = Array.isArray(resMatches) ? resMatches : [];
-        currentEvents = Array.isArray(resEvents) ? resEvents : [];
-        currentTransfers = Array.isArray(resTransfers) ? resTransfers : [];
+        currentMatches = buildRoundRobinFixtures(currentTeams, 'local_user', 1);
 
         localStorage.setItem('local_teams', JSON.stringify(currentTeams));
         localStorage.setItem('local_players', JSON.stringify(currentPlayers));
         localStorage.setItem('local_matches', JSON.stringify(currentMatches));
-        localStorage.setItem('local_events', JSON.stringify(currentEvents));
-        localStorage.setItem('local_transfers', JSON.stringify(currentTransfers));
+        localStorage.setItem('local_events', JSON.stringify([]));
+        localStorage.setItem('local_transfers', JSON.stringify([]));
       }
 
       setTeams(currentTeams);
-
-      const enrichedPlayers = currentPlayers.map(p => ({
-        ...p,
-        teams: currentTeams.find(t => t.id === p.equipe_id) || null
-      }));
-      setPlayers(enrichedPlayers);
-
-      const enrichedMatches = currentMatches.map(m => ({
-        ...m,
-        dom: currentTeams.find(t => t.id === m.equipe_domicile_id) || null,
-        ext: currentTeams.find(t => t.id === m.equipe_exterieur_id) || null
-      }));
-      setMatches(enrichedMatches);
-
+      setPlayers(currentPlayers);
+      setMatches(currentMatches);
       setMatchEvents(currentEvents);
+      setTransfers(currentTransfers);
 
-      const enrichedTransfers = currentTransfers.map(tr => ({
-        ...tr,
-        players: enrichedPlayers.find(p => p.id === tr.player_id) || null,
-        old_team: currentTeams.find(t => t.id === tr.old_team_id) || null,
-        new_team: currentTeams.find(t => t.id === tr.new_team_id) || null
-      }));
-      setTransfers(enrichedTransfers);
-
-      const maxS = enrichedMatches.length > 0 ? Math.max(...enrichedMatches.map(m => m.saison || 1), 1) : 1;
+      const maxS = currentMatches.length > 0 ? Math.max(...currentMatches.map(m => m.saison || 1), 1) : 1;
       const savedSeason = localStorage.getItem('local_season');
       const savedJournee = localStorage.getItem('local_journee');
 
@@ -256,7 +237,7 @@ export default function App() {
       if (savedJournee) {
         setJourneeFilter(parseInt(savedJournee, 10));
       } else {
-        const firstUnfinished = enrichedMatches.find(
+        const firstUnfinished = currentMatches.find(
           m => m.statut !== 'terminé' && (m.saison || 1) === activeSeason
         );
         if (firstUnfinished) {
@@ -265,6 +246,8 @@ export default function App() {
       }
     } catch (err) {
       console.error('Erreur chargement local:', err);
+    } finally {
+      setLoading(false);
     }
   }
 
@@ -911,9 +894,7 @@ export default function App() {
             journee: journee,
             saison: seasonNum,
             statut: 'à venir',
-            user_id: userId,
-            dom: home,
-            ext: away
+            user_id: userId
           });
         }
       }
@@ -932,9 +913,7 @@ export default function App() {
       journee: m.journee + numRounds,
       saison: seasonNum,
       statut: 'à venir',
-      user_id: userId,
-      dom: m.ext,
-      ext: m.dom
+      user_id: userId
     }));
 
     return [...allerMatches, ...retourMatches];
@@ -1038,7 +1017,8 @@ export default function App() {
   const playersWithStats = players.map(p => {
     const buts = seasonEvents.filter(e => e.player_id === p.id && e.type === 'but').length;
     const passes = seasonEvents.filter(e => e.player_id === p.id && e.type === 'passe').length;
-    return { ...p, buts, passes_decisives: passes };
+    const assignedTeam = teams.find(t => t.id === p.equipe_id);
+    return { ...p, buts, passes_decisives: passes, teams: assignedTeam };
   });
 
   const topButeurs = [...playersWithStats]
@@ -1582,6 +1562,15 @@ export default function App() {
     ? selectedMatchEvents.filter(ev => ev.player_equipe_id === selectedMatch.equipe_exterieur_id) 
     : [];
 
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-slate-950 text-white flex flex-col items-center justify-center">
+        <div className="text-3xl mb-4 animate-spin">⚽</div>
+        <p className="text-slate-400 font-bold">Chargement de votre ligue...</p>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 font-sans pb-12">
       <header className="bg-slate-900 border-b border-slate-800 sticky top-0 z-50">
@@ -1861,22 +1850,24 @@ export default function App() {
                   .filter((m) => m.journee === parseInt(journeeFilter, 10))
                   .sort((a, b) => (a.id > b.id ? 1 : -1))
                   .map((m) => {
+                    const domTeam = teams.find(t => t.id === m.equipe_domicile_id);
+                    const extTeam = teams.find(t => t.id === m.equipe_exterieur_id);
                     const currentDomInput = scoresInput[m.id]?.dom !== undefined ? scoresInput[m.id].dom : (m.score_domicile ?? '');
                     const currentExtInput = scoresInput[m.id]?.ext !== undefined ? scoresInput[m.id].ext : (m.score_exterieur ?? '');
 
                     return (
                       <div key={m.id} className="bg-slate-900 border border-slate-800 rounded-2xl p-4 sm:p-5 shadow-lg flex flex-col sm:flex-row items-center justify-between gap-4">
                         <div 
-                          onClick={() => openTeamLineup(m.dom)}
+                          onClick={() => domTeam && openTeamLineup(domTeam)}
                           className="flex items-center gap-3 sm:w-5/12 justify-start w-full cursor-pointer group min-w-0"
                         >
-                          {m.dom?.logo_url ? (
-                            <img src={m.dom.logo_url} className="w-10 h-10 object-contain group-hover:scale-110 transition-transform shrink-0" alt="" />
+                          {domTeam?.logo_url ? (
+                            <img src={domTeam.logo_url} className="w-10 h-10 object-contain group-hover:scale-110 transition-transform shrink-0" alt="" />
                           ) : (
                             <div className="w-10 h-10 bg-slate-800 rounded-full flex items-center justify-center text-xs">🛡️</div>
                           )}
                           <span className="font-bold text-base text-white group-hover:text-indigo-400 transition-colors truncate">
-                            {m.dom?.nom}
+                            {domTeam?.nom || 'Équipe Domicile'}
                           </span>
                         </div>
 
@@ -1925,14 +1916,14 @@ export default function App() {
 
                         <div className="flex items-center gap-3 sm:w-5/12 justify-end w-full min-w-0">
                           <div 
-                            onClick={() => openTeamLineup(m.ext)}
+                            onClick={() => extTeam && openTeamLineup(extTeam)}
                             className="flex items-center gap-3 cursor-pointer group justify-end min-w-0"
                           >
                             <span className="font-bold text-base text-white group-hover:text-indigo-400 transition-colors truncate text-right">
-                              {m.ext?.nom}
+                              {extTeam?.nom || 'Équipe Extérieur'}
                             </span>
-                            {m.ext?.logo_url ? (
-                              <img src={m.ext.logo_url} className="w-10 h-10 object-contain group-hover:scale-110 transition-transform shrink-0" alt="" />
+                            {extTeam?.logo_url ? (
+                              <img src={extTeam.logo_url} className="w-10 h-10 object-contain group-hover:scale-110 transition-transform shrink-0" alt="" />
                             ) : (
                               <div className="w-10 h-10 bg-slate-800 rounded-full flex items-center justify-center text-xs">🛡️</div>
                             )}
