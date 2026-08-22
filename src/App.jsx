@@ -3199,22 +3199,38 @@ export default function App() {
             <button type="button" onClick={() => setSelectedMatch(null)} className="absolute top-4 right-4 text-slate-400 hover:text-white font-bold text-xl cursor-pointer">✕</button>
             <h3 className="text-lg font-extrabold text-white text-center mb-1">Détails de la Rencontre</h3>
             <p className="text-xs text-slate-400 text-center mb-4">{getSeasonLabel(selectedMatch.saison || 1)} - Journée {selectedMatch.journee}</p>
-
-            <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800 flex items-center justify-between mb-6">
-              <div className="flex items-center gap-3 w-5/12 truncate">
-                {selectedMatch.dom?.logo_url ? <img src={selectedMatch.dom.logo_url} className="w-9 h-9 object-contain shrink-0" alt="" /> : <span className="text-xl">🛡️</span>}
-                <span className="font-bold text-white text-sm truncate">{selectedMatch.dom?.nom}</span>
+{/* EN-TÊTE DE SCORE PARFAITEMENT ALIGNÉ SUR UNE LIGNE */}
+            <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800 flex items-center justify-between gap-2 mb-6">
+              {/* Équipe Domicile */}
+              <div className="flex items-center justify-end gap-3 flex-1 min-w-0">
+                <span className="font-bold text-white text-sm sm:text-base truncate text-right">
+                  {selectedMatch.dom?.nom}
+                </span>
+                {selectedMatch.dom?.logo_url ? (
+                  <img src={selectedMatch.dom.logo_url} className="w-8 h-8 sm:w-10 sm:h-10 object-contain shrink-0" alt="" />
+                ) : (
+                  <span className="text-xl shrink-0">🛡️</span>
+                )}
               </div>
 
-              <div className="text-center font-mono font-black text-2xl text-emerald-400 px-4 py-1.5 bg-emerald-500/10 border border-emerald-500/20 rounded-xl">
+              {/* Score Centré */}
+              <div className="shrink-0 px-4 py-1.5 bg-emerald-500/10 border border-emerald-500/20 rounded-xl font-mono font-black text-xl sm:text-2xl text-emerald-400">
                 {selectedMatch.score_domicile ?? 0} - {selectedMatch.score_exterieur ?? 0}
               </div>
 
-              <div className="flex items-center gap-3 w-5/12 justify-end truncate">
-                <span className="font-bold text-white text-sm truncate text-right">{selectedMatch.ext?.nom}</span>
-                {selectedMatch.ext?.logo_url ? <img src={selectedMatch.ext.logo_url} className="w-9 h-9 object-contain shrink-0" alt="" /> : <span className="text-xl">🛡️</span>}
+              {/* Équipe Extérieur */}
+              <div className="flex items-center justify-start gap-3 flex-1 min-w-0">
+                {selectedMatch.ext?.logo_url ? (
+                  <img src={selectedMatch.ext.logo_url} className="w-8 h-8 sm:w-10 sm:h-10 object-contain shrink-0" alt="" />
+                ) : (
+                  <span className="text-xl shrink-0">🛡️</span>
+                )}
+                <span className="font-bold text-white text-sm sm:text-base truncate text-left">
+                  {selectedMatch.ext?.nom}
+                </span>
               </div>
             </div>
+            
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="bg-slate-950/60 p-4 rounded-2xl border border-slate-800/80">
