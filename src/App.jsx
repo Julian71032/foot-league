@@ -68,7 +68,6 @@ function calculateMarketValue(gen, age) {
   return Math.max(250000, finalVal);
 }
 
-// Calcul de durée pondérée pour les blessures
 function generateInjuryDuration() {
   const roll = Math.random() * 100;
   if (roll < 50) return { label: '1 match', matches: 1 };
@@ -176,7 +175,6 @@ export default function App() {
     }
   }, [currentUser]);
 
-  // Sauvegarde automatique par utilisateur
   useEffect(() => {
     if (!loading && currentUser && teams.length > 0) {
       const uKey = currentUser.email;
@@ -830,8 +828,8 @@ export default function App() {
 
   // --- DÉ DE 0 À 7 INCLUS ---
   function handleRollDice(matchId) {
-    const diceDom = Math.floor(Math.random() * 8); // 0 à 7
-    const diceExt = Math.floor(Math.random() * 8); // 0 à 7
+    const diceDom = Math.floor(Math.random() * 8);
+    const diceExt = Math.floor(Math.random() * 8);
 
     setScoresInput(prev => ({
       ...prev,
@@ -953,7 +951,6 @@ export default function App() {
       if (carded) matchEventsList.push({ match_id: m.id, player_id: carded.id, type: 'carton_jaune', minute, saison: seasonNum, user_id: userId });
     }
 
-    // ÉVÉNEMENT BLESSURE RARE (~8% de chance par camp)
     if (Math.random() < 0.08) {
       const minute = Math.floor(Math.random() * 85) + 5;
       const injured = pickInjuredPlayer(getActivePlayersAtMinute(domStarters, domSubstitutions, minute));
@@ -1495,7 +1492,6 @@ export default function App() {
     return new Intl.NumberFormat('fr-FR', { style: 'currency', currency: 'EUR', maximumFractionDigits: 0 }).format(amount);
   }
 
-  // --- HELPER D'AFFICHAGE D'ICÔNE D'ÉVÉNEMENT ---
   function renderEventBadge(ev) {
     switch (ev.type) {
       case 'but':
@@ -2171,11 +2167,12 @@ export default function App() {
                           </span>
                         </div>
 
-                        <div className="flex items-center justify-center gap-2 sm:gap-2.5 shrink-0 my-2 sm:my-0">
+                        {/* SECTION SCORE ET ENTRÉES SANS FLÈCHES AVEC RECENTRAGE */}
+                        <div className="flex items-center justify-center gap-2 sm:gap-3 shrink-0 my-2 sm:my-0">
                           <button
                             type="button"
                             onClick={() => handleRollDice(m.id)}
-                            className="bg-amber-500/20 hover:bg-amber-500 text-amber-300 hover:text-slate-950 border border-amber-500/40 text-sm font-black p-2.5 rounded-xl transition-all cursor-pointer shadow-md active:scale-95 mr-1"
+                            className="bg-amber-500/20 hover:bg-amber-500 text-amber-300 hover:text-slate-950 border border-amber-500/40 text-sm font-black p-2.5 rounded-xl transition-all cursor-pointer shadow-md active:scale-95 mr-0.5"
                             title="Lancer le dé (0 à 7 buts)"
                           >
                             🎲
@@ -2187,13 +2184,13 @@ export default function App() {
                             placeholder="0"
                             value={currentDomInput}
                             onChange={(e) => handleScoreInputChange(m.id, 'dom', e.target.value)}
-                            className="w-12 h-11 sm:w-14 sm:h-12 bg-slate-950 text-white font-mono font-black text-xl text-center rounded-xl border border-slate-700 focus:outline-none focus:border-indigo-500 shadow-inner"
+                            className="w-12 h-11 sm:w-13 sm:h-12 bg-slate-950 text-white font-mono font-black text-xl text-center rounded-xl border border-slate-700 focus:outline-none focus:border-indigo-500 shadow-inner [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                           />
 
                           <button
                             type="button"
                             onClick={() => openMatchDetails(m)}
-                            className="bg-indigo-600/20 hover:bg-indigo-600 text-indigo-300 hover:text-white border border-indigo-500/40 text-xs font-black tracking-widest px-3.5 py-2.5 rounded-xl transition-all cursor-pointer shadow-md active:scale-95 uppercase"
+                            className="bg-indigo-600/20 hover:bg-indigo-600 text-indigo-300 hover:text-white border border-indigo-500/40 text-xs font-black tracking-widest px-3 py-2.5 rounded-xl transition-all cursor-pointer shadow-md active:scale-95 uppercase"
                           >
                             VS
                           </button>
@@ -2204,12 +2201,12 @@ export default function App() {
                             placeholder="0"
                             value={currentExtInput}
                             onChange={(e) => handleScoreInputChange(m.id, 'ext', e.target.value)}
-                            className="w-12 h-11 sm:w-14 sm:h-12 bg-slate-950 text-white font-mono font-black text-xl text-center rounded-xl border border-slate-700 focus:outline-none focus:border-indigo-500 shadow-inner"
+                            className="w-12 h-11 sm:w-13 sm:h-12 bg-slate-950 text-white font-mono font-black text-xl text-center rounded-xl border border-slate-700 focus:outline-none focus:border-indigo-500 shadow-inner [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                           />
 
                           <button
                             onClick={() => handleSaveMatchScore(m)}
-                            className="bg-emerald-600/20 hover:bg-emerald-600 text-emerald-300 hover:text-white border border-emerald-500/30 text-xs font-bold w-9 h-11 sm:w-10 sm:h-12 rounded-xl transition-all cursor-pointer active:scale-95 flex items-center justify-center ml-1"
+                            className="bg-emerald-600/20 hover:bg-emerald-600 text-emerald-300 hover:text-white border border-emerald-500/30 text-xs font-bold w-9 h-11 sm:w-10 sm:h-12 rounded-xl transition-all cursor-pointer active:scale-95 flex items-center justify-center ml-0.5"
                           >
                             ✓
                           </button>
@@ -2727,7 +2724,7 @@ export default function App() {
         </div>
       )}
 
-      {/* MODALE TACTIQUE */}
+      {/* MODALE TACTIQUE AVEC POSTE VISIBLE SUR LE BANC */}
       {selectedLineupTeam && (
         <div className="fixed inset-0 bg-black/85 backdrop-blur-md z-50 flex items-center justify-center p-2 sm:p-4">
           <div className="bg-slate-900 border border-slate-800 rounded-3xl max-w-lg w-full p-4 sm:p-6 shadow-2xl relative max-h-[96vh] flex flex-col overflow-y-auto">
@@ -2809,20 +2806,24 @@ export default function App() {
               </button>
             </div>
 
+            {/* BANC AVEC POSTE BIEN AFFICHÉ */}
             <div className="mt-4 bg-slate-950 p-3 rounded-2xl border border-slate-800">
               <h4 className="text-[11px] font-extrabold uppercase tracking-wider text-slate-400 mb-2">🪑 Banc des Remplaçants ({teamBenchPlayers.length})</h4>
-              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 max-h-32 overflow-y-auto pr-1">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-40 overflow-y-auto pr-1">
                 {teamBenchPlayers.map((j, bIdx) => (
                   <div
                     key={j.id}
                     onClick={() => handleSelectSlot('bench', bIdx)}
-                    className="px-2 py-1.5 rounded-xl flex items-center justify-between cursor-pointer bg-slate-900/90 border border-slate-800"
+                    className="px-2.5 py-2 rounded-xl flex items-center justify-between cursor-pointer bg-slate-900/90 border border-slate-800 hover:border-slate-700 transition"
                   >
-                    <div className="flex items-center gap-1.5 truncate">
-                      <span className="text-[10px] font-mono font-black text-amber-400">#{j.numero || 10}</span>
-                      <span className="text-xs font-semibold text-slate-300 truncate">{j.nom}</span>
+                    <div className="flex items-center gap-2 truncate">
+                      <span className="text-[10px] font-mono font-black text-amber-400 shrink-0">#{j.numero || 10}</span>
+                      <span className="text-[10px] bg-indigo-600 text-white font-extrabold px-1.5 py-0.5 rounded shrink-0">
+                        {j.poste || 'MC'}
+                      </span>
+                      <span className="text-xs font-semibold text-slate-200 truncate">{j.nom}</span>
                     </div>
-                    <span className="text-[10px] font-extrabold text-emerald-400 font-mono ml-1">{j.general || 75}</span>
+                    <span className="text-[11px] font-black text-emerald-400 font-mono ml-2 shrink-0">{j.general || 75} GEN</span>
                   </div>
                 ))}
               </div>
