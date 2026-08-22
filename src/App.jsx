@@ -130,7 +130,6 @@ export default function App() {
   const [logoFile, setLogoFile] = useState(null);
   const [uploading, setUploading] = useState(false);
   const [newPlayer, setNewPlayer] = useState({ nom: '', equipe_id: '', numero: 10, general: 75, valeur: 10000000, age: 22, poste: 'MC' });
-  const [generatingSchedule, setGeneratingSchedule] = useState(false);
 
   // Transferts
   const [transferFromTeamId, setTransferFromTeamId] = useState('');
@@ -256,6 +255,86 @@ export default function App() {
     setSavingProgress(false);
   }
 
+  function buildRoundRobinFixtures(allTeams, userId, seasonNum) {
+    if (!allTeams || allTeams.length < 2) return [];
+
+    const list = [...allTeams].sort(() => Math.random() - 0.5);
+    let n = list.length;
+    if (n % 2 !== 0) {
+      list.push(null);
+      n++;
+    }
+
+    const numRounds = n - 1;
+    const half = n / 2;
+    const allerMatches = [];
+
+    for (let round = 0; round < numRounds; round++) {
+      const journee = round + 1;
+      for (let i = 0; i < half; i++) {
+        const t1 = list[i];
+        const t2 = list[n - 1 - i];
+
+        if (t1 !== null && t2 !== null) {
+          let home = (round + i) % 2 === 0 ? t1 : t2;
+          let away = (round + i) % 2 === 0 ? t2 : t1;
+
+          if (i === 0) {
+            home = round % 2 === 0 ? t1 : t2;
+            away = round % 2 === 0 ? t2 : t1;
+          }
+
+          allerMatches.push({
+            id: `${seasonNum}-${journee}-${home.id}-${away.id}`,
+            equipe_domicile_id: home.id,
+            equipe_exterieur_id: away.id,
+            journee: journee,
+            saison: seasonNum,
+            statut: 'à venir',
+            user_id: userId
+          });
+        }
+      }
+
+      const fixed = list[0];
+      const rest = list.slice(1);
+      const last = rest.pop();
+      rest.unshift(last);
+      list.splice(0, list.length, fixed, ...rest);
+    }
+
+    const retourMatches = allerMatches.map(m => ({
+      id: `${seasonNum}-${m.journee + numRounds}-${m.equipe_exterieur_id}-${m.equipe_domicile_id}`,
+      equipe_domicile_id: m.equipe_exterieur_id,
+      equipe_exterieur_id: m.equipe_domicile_id,
+      journee: m.journee + numRounds,
+      saison: seasonNum,
+      statut: 'à venir',
+      user_id: userId
+    }));
+
+    return [...allerMatches, ...retourMatches];
+  }
+
+  // Génération explicite du calendrier
+  function handleGenerateCurrentSchedule() {
+    if (!teams || teams.length < 2) {
+      alert("Il vous faut au moins 2 équipes pour générer un calendrier.");
+      return;
+    }
+    const uKey = currentUser?.email || 'local_user';
+    const s = parseInt(seasonFilter, 10) || 1;
+    const newFixtures = buildRoundRobinFixtures(teams, uKey, s);
+    const otherSeasonMatches = matches.filter(m => (m.saison || 1) !== s);
+    const fullMatches = [...otherSeasonMatches, ...newFixtures];
+    
+    setMatches(fullMatches);
+    localStorage.setItem(`local_matches_${uKey}`, JSON.stringify(fullMatches));
+    setJourneeFilter(1);
+    localStorage.setItem(`local_journee_${uKey}`, 1);
+    showNotif(`Calendrier généré : ${newFixtures.length} matchs programmés pour la Saison ${s} !`);
+  }
+
   async function fetchUserData(userEmail) {
     setLoading(true);
     try {
@@ -303,6 +382,12 @@ export default function App() {
         localStorage.setItem(`local_matches_${uKey}`, JSON.stringify(currentMatches));
         localStorage.setItem(`local_events_${uKey}`, JSON.stringify([]));
         localStorage.setItem(`local_transfers_${uKey}`, JSON.stringify([]));
+      }
+
+      // Si les matchs étaient vides pour la saison 1, on les force
+      if (currentMatches.length === 0 && currentTeams.length >= 2) {
+        currentMatches = buildRoundRobinFixtures(currentTeams, uKey, 1);
+        localStorage.setItem(`local_matches_${uKey}`, JSON.stringify(currentMatches));
       }
 
       setTeams(currentTeams);
@@ -943,67 +1028,6 @@ export default function App() {
     setSimulating(false);
   }
 
-  function buildRoundRobinFixtures(allTeams, userId, seasonNum) {
-    if (!allTeams || allTeams.length < 2) return [];
-
-    const list = [...allTeams].sort(() => Math.random() - 0.5);
-    let n = list.length;
-    if (n % 2 !== 0) {
-      list.push(null);
-      n++;
-    }
-
-    const numRounds = n - 1;
-    const half = n / 2;
-    const allerMatches = [];
-
-    for (let round = 0; round < numRounds; round++) {
-      const journee = round + 1;
-      for (let i = 0; i < half; i++) {
-        const t1 = list[i];
-        const t2 = list[n - 1 - i];
-
-        if (t1 !== null && t2 !== null) {
-          let home = (round + i) % 2 === 0 ? t1 : t2;
-          let away = (round + i) % 2 === 0 ? t2 : t1;
-
-          if (i === 0) {
-            home = round % 2 === 0 ? t1 : t2;
-            away = round % 2 === 0 ? t2 : t1;
-          }
-
-          allerMatches.push({
-            id: `${seasonNum}-${journee}-${home.id}-${away.id}`,
-            equipe_domicile_id: home.id,
-            equipe_exterieur_id: away.id,
-            journee: journee,
-            saison: seasonNum,
-            statut: 'à venir',
-            user_id: userId
-          });
-        }
-      }
-
-      const fixed = list[0];
-      const rest = list.slice(1);
-      const last = rest.pop();
-      rest.unshift(last);
-      list.splice(0, list.length, fixed, ...rest);
-    }
-
-    const retourMatches = allerMatches.map(m => ({
-      id: `${seasonNum}-${m.journee + numRounds}-${m.equipe_exterieur_id}-${m.equipe_domicile_id}`,
-      equipe_domicile_id: m.equipe_exterieur_id,
-      equipe_exterieur_id: m.equipe_domicile_id,
-      journee: m.journee + numRounds,
-      saison: seasonNum,
-      statut: 'à venir',
-      user_id: userId
-    }));
-
-    return [...allerMatches, ...retourMatches];
-  }
-
   async function handleStartNewSeason(isNextSeason = false) {
     if (!teams || teams.length < 2) {
       alert(`Erreur : Il vous faut au moins 2 équipes pour générer un calendrier.`);
@@ -1022,8 +1046,6 @@ export default function App() {
 
     if (!window.confirm(confirmMsg)) return;
 
-    setGeneratingSchedule(true);
-
     try {
       if (!isNextSeason) {
         localStorage.removeItem(`local_teams_${uKey}`);
@@ -1034,7 +1056,6 @@ export default function App() {
         localStorage.removeItem(`local_season_${uKey}`);
         localStorage.removeItem(`local_journee_${uKey}`);
         await fetchUserData(uKey);
-        setGeneratingSchedule(false);
         return;
       }
 
@@ -1053,8 +1074,6 @@ export default function App() {
     } catch (err) {
       alert(`Erreur génération : ${err.message}`);
     }
-
-    setGeneratingSchedule(false);
   }
 
   const seasonMatches = matches.filter(m => (m.saison || 1) === parseInt(seasonFilter, 10));
@@ -1743,7 +1762,7 @@ export default function App() {
     );
   }
 
-  // Onglets disponibles (Admin uniquement si ADMIN_EMAIL)
+  // Onglets
   const navTabs = [
     { id: 'classement', label: '🏆 Classement' },
     { id: 'matchs', label: '📅 Matchs' },
@@ -2026,10 +2045,10 @@ export default function App() {
             <div className="grid gap-4 sm:grid-cols-1">
               {seasonMatches.filter((m) => m.journee === parseInt(journeeFilter, 10)).length === 0 ? (
                 <div className="bg-slate-900 border border-slate-800 rounded-2xl p-12 text-center">
-                  <p className="text-slate-400 font-medium text-sm mb-4">Aucun match programmé pour cette journée.</p>
+                  <p className="text-slate-400 font-medium text-sm mb-4">Aucun match programmé pour la Saison {seasonFilter}.</p>
                   <button
                     type="button"
-                    onClick={() => handleStartNewSeason(false)}
+                    onClick={handleGenerateCurrentSchedule}
                     className="bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold px-5 py-3 rounded-xl transition-all shadow-lg cursor-pointer flex items-center gap-2 mx-auto"
                   >
                     <span>🔄</span> Générer le Calendrier
