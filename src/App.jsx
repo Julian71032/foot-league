@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 
 const API_URL = 'https://serveur-ligue.onrender.com/api';
+const ADMIN_EMAIL = 'belnezjulian2@gmail.com';
 
 // --- LISTE DES POSTES ---
 const POSITIONS_LIST = [
@@ -79,7 +80,7 @@ const FORMATIONS = {
 export default function App() {
   // Session & Auth
   const [currentUser, setCurrentUser] = useState(null);
-  const [authMode, setAuthMode] = useState('login'); // 'login' ou 'register'
+  const [authMode, setAuthMode] = useState('login');
   const [authEmail, setAuthEmail] = useState('');
   const [authPassword, setAuthPassword] = useState('');
   const [authError, setAuthError] = useState('');
@@ -137,6 +138,8 @@ export default function App() {
   const [transferToTeamId, setTransferToTeamId] = useState('');
   const [transferFee, setTransferFee] = useState(10000000);
   const [transferLoading, setTransferLoading] = useState(false);
+
+  const isAdmin = currentUser?.email?.trim().toLowerCase() === ADMIN_EMAIL.toLowerCase();
 
   useEffect(() => {
     if (!document.getElementById('tailwind-cdn')) {
@@ -201,34 +204,34 @@ export default function App() {
     setTimeout(() => setNotification(''), 4500);
   }
 
-  // Authentification
   function handleAuthSubmit(e) {
     e.preventDefault();
     setAuthError('');
+    const cleanEmail = authEmail.trim().toLowerCase();
 
     const users = JSON.parse(localStorage.getItem('app_registered_users') || '{}');
 
     if (authMode === 'register') {
-      if (users[authEmail]) {
+      if (users[cleanEmail]) {
         setAuthError('Ce courriel possède déjà un compte.');
         return;
       }
-      users[authEmail] = { email: authEmail, password: authPassword };
+      users[cleanEmail] = { email: cleanEmail, password: authPassword };
       localStorage.setItem('app_registered_users', JSON.stringify(users));
-      const userObj = { email: authEmail };
+      const userObj = { email: cleanEmail };
       localStorage.setItem('session_user', JSON.stringify(userObj));
       setCurrentUser(userObj);
-      showNotif(`Compte créé avec succès ! Bienvenue ${authEmail}`);
+      showNotif(`Compte créé avec succès ! Bienvenue ${cleanEmail}`);
     } else {
-      const user = users[authEmail];
+      const user = users[cleanEmail];
       if (!user || user.password !== authPassword) {
         setAuthError('Courriel ou mot de passe incorrect.');
         return;
       }
-      const userObj = { email: authEmail };
+      const userObj = { email: cleanEmail };
       localStorage.setItem('session_user', JSON.stringify(userObj));
       setCurrentUser(userObj);
-      showNotif(`Bon retour ${authEmail} !`);
+      showNotif(`Bon retour ${cleanEmail} !`);
     }
   }
 
@@ -504,7 +507,7 @@ export default function App() {
         if (m.score_domicile === 0) teamRecords[m.equipe_exterieur_id].cleanSheets++;
         if (m.score_exterieur > m.score_domicile) teamRecords[m.equipe_exterieur_id].wins++;
         else if (m.score_exterieur < m.score_domicile) teamRecords[m.equipe_exterieur_id].losses++;
-        else teamRecords[m.equipe_domieur_id]?.draws !== undefined && teamRecords[m.equipe_exterieur_id].draws++;
+        else teamRecords[m.equipe_exterieur_id].draws++;
       }
     });
 
@@ -1740,6 +1743,18 @@ export default function App() {
     );
   }
 
+  // Onglets disponibles (Admin uniquement si ADMIN_EMAIL)
+  const navTabs = [
+    { id: 'classement', label: '🏆 Classement' },
+    { id: 'matchs', label: '📅 Matchs' },
+    { id: 'buteurs', label: '👟 Stats Joueurs' },
+    { id: 'transferts', label: '🔄 Transferts' }
+  ];
+
+  if (isAdmin) {
+    navTabs.push({ id: 'admin', label: '⚙️ Admin' });
+  }
+
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 font-sans pb-12">
       <header className="bg-slate-900 border-b border-slate-800 sticky top-0 z-50">
@@ -1749,7 +1764,7 @@ export default function App() {
             <div>
               <h1 className="text-xl font-extrabold tracking-tight text-white">LIGUE DE FOOTBALL</h1>
               <div className="flex items-center gap-2 mt-0.5">
-                <span className="text-xs text-emerald-400 font-medium">✓ Connecté : <strong className="text-white">{currentUser.email}</strong></span>
+                <span className="text-xs text-emerald-400 font-medium">✓ Connecté : <strong className="text-white">{currentUser.email}</strong> {isAdmin && <span className="ml-1 bg-amber-500/20 text-amber-300 border border-amber-500/30 px-1.5 py-0.2 rounded text-[10px]">ADMIN</span>}</span>
               </div>
             </div>
           </div>
@@ -1757,13 +1772,7 @@ export default function App() {
           <div className="flex items-center gap-3">
             <nav className="flex items-center gap-2">
               <div className="flex items-center bg-slate-950/60 p-1.5 rounded-xl border border-slate-800/80">
-                {[
-                  { id: 'classement', label: '🏆 Classement' },
-                  { id: 'matchs', label: '📅 Matchs' },
-                  { id: 'buteurs', label: '👟 Stats Joueurs' },
-                  { id: 'transferts', label: '🔄 Transferts' },
-                  { id: 'admin', label: '⚙️ Admin' }
-                ].map((item) => (
+                {navTabs.map((item) => (
                   <button
                     key={item.id}
                     onClick={() => setTab(item.id)}
@@ -2349,7 +2358,7 @@ export default function App() {
           </div>
         )}
 
-        {tab === 'admin' && (
+        {tab === 'admin' && isAdmin && (
           <div className="space-y-6">
             <h2 className="text-2xl font-extrabold text-white">⚙️ Panneau d'Administration ({currentUser.email})</h2>
 
@@ -2729,12 +2738,14 @@ export default function App() {
                 </div>
               </div>
 
-              <button
-                onClick={() => setEditingTeamLogo(selectedTeam)}
-                className="bg-indigo-600/20 hover:bg-indigo-600 text-indigo-300 hover:text-white border border-indigo-500/30 text-xs font-bold px-3.5 py-2 rounded-xl transition-all cursor-pointer"
-              >
-                📷 Modifier le Logo
-              </button>
+              {isAdmin && (
+                <button
+                  onClick={() => setEditingTeamLogo(selectedTeam)}
+                  className="bg-indigo-600/20 hover:bg-indigo-600 text-indigo-300 hover:text-white border border-indigo-500/30 text-xs font-bold px-3.5 py-2 rounded-xl transition-all cursor-pointer"
+                >
+                  📷 Modifier le Logo
+                </button>
+              )}
             </div>
 
             <div className="overflow-x-auto max-h-96 overflow-y-auto">
@@ -2749,7 +2760,7 @@ export default function App() {
                     <th className="py-2.5 px-3 text-center">Buts</th>
                     <th className="py-2.5 px-3 text-center">Passes</th>
                     <th className="py-2.5 px-3 text-right">Valeur</th>
-                    <th className="py-2.5 px-3 text-center">Actions</th>
+                    {isAdmin && <th className="py-2.5 px-3 text-center">Actions</th>}
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-800/50 text-sm">
@@ -2763,12 +2774,14 @@ export default function App() {
                       <td className="py-3 px-3 text-center text-amber-400 font-bold">⚽ {j.buts}</td>
                       <td className="py-3 px-3 text-center text-indigo-400 font-bold">🎯 {j.passes_decisives}</td>
                       <td className="py-3 px-3 text-right font-mono text-xs text-slate-300">{formatMoney(j.valeur_marchande)}</td>
-                      <td className="py-3 px-3 text-center">
-                        <div className="flex items-center justify-center gap-1">
-                          <button onClick={() => setEditingPlayer(j)} className="bg-amber-500/20 hover:bg-amber-600 text-amber-300 hover:text-white p-1.5 rounded-lg text-xs cursor-pointer">✏️</button>
-                          <button onClick={() => handleDeletePlayer(j.id, j.nom)} className="bg-rose-500/20 hover:bg-rose-600 text-rose-300 hover:text-white p-1.5 rounded-lg text-xs cursor-pointer">🗑️</button>
-                        </div>
-                      </td>
+                      {isAdmin && (
+                        <td className="py-3 px-3 text-center">
+                          <div className="flex items-center justify-center gap-1">
+                            <button onClick={() => setEditingPlayer(j)} className="bg-amber-500/20 hover:bg-amber-600 text-amber-300 hover:text-white p-1.5 rounded-lg text-xs cursor-pointer">✏️</button>
+                            <button onClick={() => handleDeletePlayer(j.id, j.nom)} className="bg-rose-500/20 hover:bg-rose-600 text-rose-300 hover:text-white p-1.5 rounded-lg text-xs cursor-pointer">🗑️</button>
+                          </div>
+                        </td>
+                      )}
                     </tr>
                   ))}
                 </tbody>
@@ -2779,7 +2792,7 @@ export default function App() {
       )}
 
       {/* MODALE LOGO */}
-      {editingTeamLogo && (
+      {editingTeamLogo && isAdmin && (
         <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-md w-full p-6 shadow-2xl relative">
             <button type="button" onClick={() => { setEditingTeamLogo(null); setNewLogoFile(null); }} className="absolute top-4 right-4 text-slate-400 hover:text-white font-bold text-xl cursor-pointer">✕</button>
@@ -2803,7 +2816,7 @@ export default function App() {
       )}
 
       {/* MODALE ÉDITION JOUEUR */}
-      {editingPlayer && (
+      {editingPlayer && isAdmin && (
         <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-md w-full p-6 shadow-2xl relative">
             <button type="button" onClick={() => setEditingPlayer(null)} className="absolute top-4 right-4 text-slate-400 hover:text-white font-bold text-xl cursor-pointer">✕</button>
