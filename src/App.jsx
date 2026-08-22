@@ -145,6 +145,27 @@ export default function App() {
     fetchData();
   }, []);
 
+  // Sauvegarde automatique locale
+  useEffect(() => {
+    if (teams.length > 0) localStorage.setItem('local_teams', JSON.stringify(teams));
+  }, [teams]);
+
+  useEffect(() => {
+    if (players.length > 0) localStorage.setItem('local_players', JSON.stringify(players));
+  }, [players]);
+
+  useEffect(() => {
+    if (matches.length > 0) localStorage.setItem('local_matches', JSON.stringify(matches));
+  }, [matches]);
+
+  useEffect(() => {
+    if (matchEvents.length > 0) localStorage.setItem('local_events', JSON.stringify(matchEvents));
+  }, [matchEvents]);
+
+  useEffect(() => {
+    if (transfers.length > 0) localStorage.setItem('local_transfers', JSON.stringify(transfers));
+  }, [transfers]);
+
   function showNotif(msg) {
     setNotification(msg);
     setTimeout(() => setNotification(''), 4500);
@@ -160,36 +181,64 @@ export default function App() {
 
   async function fetchData() {
     try {
-      const [resTeams, resPlayers, resMatches, resEvents, resTransfers] = await Promise.all([
-        fetch(`${API_URL}/teams`).then(r => r.json()),
-        fetch(`${API_URL}/players`).then(r => r.json()),
-        fetch(`${API_URL}/matches`).then(r => r.json()),
-        fetch(`${API_URL}/match_events`).then(r => r.json()),
-        fetch(`${API_URL}/transfers`).then(r => r.json())
-      ]);
+      const localTeams = localStorage.getItem('local_teams');
+      const localPlayers = localStorage.getItem('local_players');
+      const localMatches = localStorage.getItem('local_matches');
+      const localEvents = localStorage.getItem('local_events');
+      const localTransfers = localStorage.getItem('local_transfers');
 
-      const currentTeams = Array.isArray(resTeams) ? resTeams : [];
+      let currentTeams = [];
+      let currentPlayers = [];
+      let currentMatches = [];
+      let currentEvents = [];
+      let currentTransfers = [];
+
+      if (localTeams && localPlayers) {
+        currentTeams = JSON.parse(localTeams);
+        currentPlayers = JSON.parse(localPlayers);
+        if (localMatches) currentMatches = JSON.parse(localMatches);
+        if (localEvents) currentEvents = JSON.parse(localEvents);
+        if (localTransfers) currentTransfers = JSON.parse(localTransfers);
+      } else {
+        const [resTeams, resPlayers, resMatches, resEvents, resTransfers] = await Promise.all([
+          fetch(`${API_URL}/teams`).then(r => r.json()),
+          fetch(`${API_URL}/players`).then(r => r.json()),
+          fetch(`${API_URL}/matches`).then(r => r.json()).catch(() => []),
+          fetch(`${API_URL}/match_events`).then(r => r.json()).catch(() => []),
+          fetch(`${API_URL}/transfers`).then(r => r.json()).catch(() => [])
+        ]);
+
+        currentTeams = Array.isArray(resTeams) ? resTeams : [];
+        currentPlayers = Array.isArray(resPlayers) ? resPlayers : [];
+        currentMatches = Array.isArray(resMatches) ? resMatches : [];
+        currentEvents = Array.isArray(resEvents) ? resEvents : [];
+        currentTransfers = Array.isArray(resTransfers) ? resTransfers : [];
+
+        localStorage.setItem('local_teams', JSON.stringify(currentTeams));
+        localStorage.setItem('local_players', JSON.stringify(currentPlayers));
+        localStorage.setItem('local_matches', JSON.stringify(currentMatches));
+        localStorage.setItem('local_events', JSON.stringify(currentEvents));
+        localStorage.setItem('local_transfers', JSON.stringify(currentTransfers));
+      }
+
       setTeams(currentTeams);
 
-      const rawPlayers = Array.isArray(resPlayers) ? resPlayers : [];
-      const enrichedPlayers = rawPlayers.map(p => ({
+      const enrichedPlayers = currentPlayers.map(p => ({
         ...p,
         teams: currentTeams.find(t => t.id === p.equipe_id) || null
       }));
       setPlayers(enrichedPlayers);
 
-      const rawMatches = Array.isArray(resMatches) ? resMatches : [];
-      const enrichedMatches = rawMatches.map(m => ({
+      const enrichedMatches = currentMatches.map(m => ({
         ...m,
         dom: currentTeams.find(t => t.id === m.equipe_domicile_id) || null,
         ext: currentTeams.find(t => t.id === m.equipe_exterieur_id) || null
       }));
       setMatches(enrichedMatches);
 
-      setMatchEvents(Array.isArray(resEvents) ? resEvents : []);
+      setMatchEvents(currentEvents);
 
-      const rawTransfers = Array.isArray(resTransfers) ? resTransfers : [];
-      const enrichedTransfers = rawTransfers.map(tr => ({
+      const enrichedTransfers = currentTransfers.map(tr => ({
         ...tr,
         players: enrichedPlayers.find(p => p.id === tr.player_id) || null,
         old_team: currentTeams.find(t => t.id === tr.old_team_id) || null,
@@ -197,7 +246,7 @@ export default function App() {
       }));
       setTransfers(enrichedTransfers);
 
-      const maxS = Math.max(...enrichedMatches.map(m => m.saison || 1), 1);
+      const maxS = enrichedMatches.length > 0 ? Math.max(...enrichedMatches.map(m => m.saison || 1), 1) : 1;
       const savedSeason = localStorage.getItem('local_season');
       const savedJournee = localStorage.getItem('local_journee');
 
@@ -266,6 +315,8 @@ export default function App() {
     const availablePool = [...players].sort(() => Math.random() - 0.5);
     const completedTransfers = [];
     const usedPlayerIds = new Set();
+    const updatedPlayers = [...players];
+    const newTransfersList = [...transfers];
 
     for (const player of availablePool) {
       if (completedTransfers.length >= 3) break;
@@ -311,23 +362,24 @@ export default function App() {
         teamCounts[originTeamId]--;
         teamCounts[destinationTeam.id]++;
 
-        await fetch(`${API_URL}/players/${player.id}`, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ equipe_id: destinationTeam.id })
-        });
+        const pIdx = updatedPlayers.findIndex(p => p.id === player.id);
+        if (pIdx !== -1) {
+          updatedPlayers[pIdx] = { ...updatedPlayers[pIdx], equipe_id: destinationTeam.id, teams: destinationTeam };
+        }
 
-        await fetch(`${API_URL}/transfers`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            player_id: player.id,
-            old_team_id: originTeam.id,
-            new_team_id: destinationTeam.id,
-            fee: fee,
-            user_id: 'local_user'
-          })
-        });
+        const newTr = {
+          id: Date.now() + Math.random(),
+          player_id: player.id,
+          old_team_id: originTeam.id,
+          new_team_id: destinationTeam.id,
+          fee: fee,
+          user_id: 'local_user',
+          players: player,
+          old_team: originTeam,
+          new_team: destinationTeam
+        };
+
+        newTransfersList.unshift(newTr);
 
         completedTransfers.push({
           id: player.id,
@@ -344,6 +396,8 @@ export default function App() {
     }
 
     if (completedTransfers.length > 0) {
+      setPlayers(updatedPlayers);
+      setTransfers(newTransfersList);
       setMercatoReport({
         journee: journeeNum,
         seasonLabel: getSeasonLabel(currentSeasonNum),
@@ -352,8 +406,9 @@ export default function App() {
     }
   }
 
+  // --- ÉVOLUTION DES NOTES SUR UN BLOC DE 4 JOURNÉES ---
   async function evaluateAndApplyPlayerEvolutions(targetJournee, currentSeasonNum) {
-    const startJournee = targetJournee - 4;
+    const startJournee = targetJournee - 3;
     const endJournee = targetJournee;
 
     const blockMatches = matches.filter(
@@ -404,7 +459,7 @@ export default function App() {
       const redCards = pEvents.filter(e => e.type === 'carton_rouge').length;
       const yellowCards = pEvents.filter(e => e.type === 'carton_jaune').length;
 
-      const tRec = teamRecords[player.equipe_id] || { wins: 0, losses: 0, goalsConceded: 5, cleanSheets: 0, matchCount: 5 };
+      const tRec = teamRecords[player.equipe_id] || { wins: 0, losses: 0, goalsConceded: 4, cleanSheets: 0, matchCount: 4 };
 
       let perfScore = 0;
 
@@ -480,6 +535,8 @@ export default function App() {
     const countByTeam = {};
     candidates.sort((a, b) => b.absImpact - a.absImpact);
 
+    const updatedPlayers = [...players];
+
     for (const c of candidates) {
       const tId = c.player.equipe_id;
       countByTeam[tId] = countByTeam[tId] || 0;
@@ -491,11 +548,10 @@ export default function App() {
 
         currentSeasonMap[c.player.id] = c.currentCumulative + c.delta;
 
-        await fetch(`${API_URL}/players/${c.player.id}`, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ general: newGen, valeur_marchande: newVal })
-        });
+        const pIdx = updatedPlayers.findIndex(p => p.id === c.player.id);
+        if (pIdx !== -1) {
+          updatedPlayers[pIdx] = { ...updatedPlayers[pIdx], general: newGen, valeur_marchande: newVal };
+        }
 
         changedPlayers.push({
           id: c.player.id,
@@ -514,6 +570,7 @@ export default function App() {
       }
     }
 
+    setPlayers(updatedPlayers);
     setSeasonEvolutions(prev => ({ ...prev, [currentSeasonNum]: currentSeasonMap }));
 
     if (changedPlayers.length > 0) {
@@ -753,6 +810,7 @@ export default function App() {
     return { scoreDom, scoreExt, events };
   }
 
+  // --- SIMULATION AUTOMATIQUE DE LA JOURNÉE ---
   async function handleSimulateJournee() {
     const currentJourneeMatches = seasonMatches.filter(m => m.journee === parseInt(journeeFilter, 10));
     if (currentJourneeMatches.length === 0) {
@@ -771,28 +829,28 @@ export default function App() {
 
     try {
       const newEvents = [];
+      const updatedMatches = [...matches];
 
       for (const m of currentJourneeMatches) {
         const domTeam = teams.find(t => t.id === m.equipe_domicile_id);
         const extTeam = teams.find(t => t.id === m.equipe_exterieur_id);
         const simResult = simulateSingleMatchWithSubs(m, domTeam, extTeam, m.saison || 1, 'local_user');
 
-        await fetch(`${API_URL}/matches/${m.id}`, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ score_domicile: simResult.scoreDom, score_exterieur: simResult.scoreExt, statut: 'terminé' })
-        });
+        const mIdx = updatedMatches.findIndex(matchItem => matchItem.id === m.id);
+        if (mIdx !== -1) {
+          updatedMatches[mIdx] = {
+            ...updatedMatches[mIdx],
+            score_domicile: simResult.scoreDom,
+            score_exterieur: simResult.scoreExt,
+            statut: 'terminé'
+          };
+        }
 
         newEvents.push(...simResult.events);
       }
 
-      if (newEvents.length > 0) {
-        await fetch(`${API_URL}/match_events/bulk`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(newEvents)
-        });
-      }
+      setMatches(updatedMatches);
+      setMatchEvents(prev => [...prev.filter(e => !currentJourneeMatches.some(m => m.id === e.match_id)), ...newEvents]);
 
       const currentJ = parseInt(journeeFilter, 10);
       const currentS = parseInt(seasonFilter, 10);
@@ -801,16 +859,14 @@ export default function App() {
       localStorage.setItem('local_journee', currentJ);
 
       showNotif(`Journée ${journeeFilter} simulée avec succès !`);
-      await fetchData();
 
       if (currentJ >= 19 && currentJ <= 23) {
         await triggerWinterMercato(currentJ, currentS);
-        await fetchData();
       }
 
-      if (currentJ % 5 === 0) {
+      // Évolution toutes les 4 journées
+      if (currentJ % 4 === 0) {
         await evaluateAndApplyPlayerEvolutions(currentJ, currentS);
-        await fetchData();
       }
     } catch (err) {
       alert(`Erreur de simulation : ${err.message}`);
@@ -849,12 +905,15 @@ export default function App() {
           }
 
           allerMatches.push({
+            id: `${seasonNum}-${journee}-${home.id}-${away.id}`,
             equipe_domicile_id: home.id,
             equipe_exterieur_id: away.id,
             journee: journee,
             saison: seasonNum,
             statut: 'à venir',
-            user_id: userId
+            user_id: userId,
+            dom: home,
+            ext: away
           });
         }
       }
@@ -867,12 +926,15 @@ export default function App() {
     }
 
     const retourMatches = allerMatches.map(m => ({
+      id: `${seasonNum}-${m.journee + numRounds}-${m.equipe_exterieur_id}-${m.equipe_domicile_id}`,
       equipe_domicile_id: m.equipe_exterieur_id,
       equipe_exterieur_id: m.equipe_domicile_id,
       journee: m.journee + numRounds,
       saison: seasonNum,
       statut: 'à venir',
-      user_id: userId
+      user_id: userId,
+      dom: m.ext,
+      ext: m.dom
     }));
 
     return [...allerMatches, ...retourMatches];
@@ -891,7 +953,7 @@ export default function App() {
 
     const confirmMsg = isNextSeason
       ? `Voulez-vous lancer la ${seasonLabel} ?\n\n- Vous conservez vos transferts et évolutions actuels.\n- ${totalJournees} Journées programmées.`
-      : `Voulez-vous REINITIALISER complètement le tournoi (Saison 1) ?\n\n- Tous les joueurs retrouveront leur GÉNÉRAL DE DÉPART (general_base) et leur club initial.`;
+      : `Voulez-vous RÉINITIALISER complètement le tournoi (Saison 1) ?\n\n- Tous les joueurs retrouveront leur GÉNÉRAL DE DÉPART et leur club initial.`;
 
     if (!window.confirm(confirmMsg)) return;
 
@@ -899,48 +961,16 @@ export default function App() {
 
     try {
       if (!isNextSeason) {
-        const freshTransfers = await fetch(`${API_URL}/transfers`).then(r => r.json());
-        const initialClubByPlayer = {};
-        if (Array.isArray(freshTransfers) && freshTransfers.length > 0) {
-          freshTransfers.forEach(t => {
-            if (!initialClubByPlayer[t.player_id]) initialClubByPlayer[t.player_id] = t.old_team_id;
-          });
-          for (const tr of freshTransfers) {
-            await fetch(`${API_URL}/transfers/${tr.id}`, { method: 'DELETE' });
-          }
-        }
-
-        const freshPlayers = await fetch(`${API_URL}/players`).then(r => r.json());
-        if (Array.isArray(freshPlayers)) {
-          for (const p of freshPlayers) {
-            const originalTeam = initialClubByPlayer[p.id] || p.equipe_id;
-            const originalGen = p.general_base !== undefined && p.general_base !== null ? p.general_base : (p.general || 75);
-            const originalVal = calculateMarketValue(originalGen, p.age || 24);
-
-            await fetch(`${API_URL}/players/${p.id}`, {
-              method: 'PUT',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                equipe_id: originalTeam,
-                general: originalGen,
-                general_base: originalGen,
-                valeur_marchande: originalVal
-              })
-            });
-          }
-        }
+        localStorage.clear();
+        window.location.reload();
+        return;
       }
 
-      await fetch(`${API_URL}/matches/all`, { method: 'DELETE' });
-
       const fixtures = buildRoundRobinFixtures(teams, 'local_user', targetSeason);
-      await fetch(`${API_URL}/matches/bulk`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(fixtures)
-      });
+      const remainingMatches = matches.filter(m => (m.saison || 1) !== targetSeason);
+      setMatches([...remainingMatches, ...fixtures]);
 
-      showNotif(isNextSeason ? `${seasonLabel} lancée ! Effectifs conservés.` : `Tournoi réinitialisé avec notes et clubs de départ !`);
+      showNotif(`${seasonLabel} lancée ! Effectifs conservés.`);
 
       setSeasonFilter(targetSeason);
       setJourneeFilter(1);
@@ -948,8 +978,6 @@ export default function App() {
 
       localStorage.setItem('local_season', targetSeason);
       localStorage.setItem('local_journee', 1);
-
-      await fetchData();
     } catch (err) {
       alert(`Erreur génération : ${err.message}`);
     }
@@ -1034,8 +1062,6 @@ export default function App() {
     return count < 28;
   });
 
-  const selectedTransferPlayer = players.find(p => p.id === transferPlayerId);
-
   function handleFromTeamChange(e) {
     const newFromTeamId = e.target.value;
     setTransferFromTeamId(newFromTeamId);
@@ -1076,30 +1102,33 @@ export default function App() {
     }
 
     const selectedPlayer = players.find(p => p.id === transferPlayerId);
+    const destTeam = teams.find(t => t.id === transferToTeamId);
+    const origTeam = teams.find(t => t.id === transferFromTeamId);
     if (!selectedPlayer) return;
 
     setTransferLoading(true);
 
-    await fetch(`${API_URL}/players/${transferPlayerId}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        equipe_id: transferToTeamId,
-        valeur_marchande: parseInt(transferFee, 10)
-      })
+    const updatedPlayers = players.map(p => {
+      if (p.id === transferPlayerId) {
+        return { ...p, equipe_id: transferToTeamId, valeur_marchande: parseInt(transferFee, 10), teams: destTeam };
+      }
+      return p;
     });
 
-    await fetch(`${API_URL}/transfers`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        player_id: transferPlayerId,
-        old_team_id: transferFromTeamId,
-        new_team_id: transferToTeamId,
-        fee: parseInt(transferFee, 10),
-        user_id: 'local_user'
-      })
-    });
+    const newTransfer = {
+      id: Date.now(),
+      player_id: transferPlayerId,
+      old_team_id: transferFromTeamId,
+      new_team_id: transferToTeamId,
+      fee: parseInt(transferFee, 10),
+      user_id: 'local_user',
+      players: selectedPlayer,
+      old_team: origTeam,
+      new_team: destTeam
+    };
+
+    setPlayers(updatedPlayers);
+    setTransfers(prev => [newTransfer, ...prev]);
 
     showNotif(`Transfert de ${selectedPlayer.nom} effectué avec succès !`);
     setTransferFromTeamId('');
@@ -1107,7 +1136,6 @@ export default function App() {
     setTransferToTeamId('');
     setTransferFee(10000000);
     setTransferLoading(false);
-    fetchData();
   }
 
   async function handleCancelTransfer(transfer) {
@@ -1115,44 +1143,38 @@ export default function App() {
       return;
     }
 
-    try {
-      await fetch(`${API_URL}/players/${transfer.player_id}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ equipe_id: transfer.old_team_id })
-      });
+    const updatedPlayers = players.map(p => {
+      if (p.id === transfer.player_id) {
+        return { ...p, equipe_id: transfer.old_team_id, teams: transfer.old_team };
+      }
+      return p;
+    });
 
-      await fetch(`${API_URL}/transfers/${transfer.id}`, { method: 'DELETE' });
-
-      showNotif(`Transfert annulé : ${transfer.players?.nom || 'Joueur'} est retourné à son club.`);
-      await fetchData();
-    } catch (err) {
-      showNotif(`Erreur : ${err.message}`);
-    }
+    setPlayers(updatedPlayers);
+    setTransfers(prev => prev.filter(t => t.id !== transfer.id));
+    showNotif(`Transfert annulé : ${transfer.players?.nom || 'Joueur'} est retourné à son club.`);
   }
 
   async function handleDeletePlayer(playerId, playerNom) {
     if (!window.confirm(`Supprimer définitivement le joueur "${playerNom}" ?`)) return;
-    await fetch(`${API_URL}/players/${playerId}`, { method: 'DELETE' });
+    setPlayers(prev => prev.filter(p => p.id !== playerId));
     showNotif(`Le joueur "${playerNom}" a été supprimé.`);
-    fetchData();
   }
 
   async function handleUpdatePlayer(e) {
     e.preventDefault();
     if (!editingPlayer) return;
 
-    try {
-      const newGen = editingPlayer.general ? parseInt(editingPlayer.general, 10) : 75;
-      const newAge = editingPlayer.age ? parseInt(editingPlayer.age, 10) : 22;
-      const calculatedVal = editingPlayer.valeur_marchande !== undefined 
-        ? parseInt(editingPlayer.valeur_marchande, 10) 
-        : calculateMarketValue(newGen, newAge);
+    const newGen = editingPlayer.general ? parseInt(editingPlayer.general, 10) : 75;
+    const newAge = editingPlayer.age ? parseInt(editingPlayer.age, 10) : 22;
+    const calculatedVal = editingPlayer.valeur_marchande !== undefined 
+      ? parseInt(editingPlayer.valeur_marchande, 10) 
+      : calculateMarketValue(newGen, newAge);
 
-      await fetch(`${API_URL}/players/${editingPlayer.id}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+    const updatedPlayers = players.map(p => {
+      if (p.id === editingPlayer.id) {
+        return {
+          ...p,
           nom: editingPlayer.nom,
           poste: editingPlayer.poste,
           numero: editingPlayer.numero ? parseInt(editingPlayer.numero, 10) : 10,
@@ -1160,15 +1182,14 @@ export default function App() {
           general_base: newGen,
           age: newAge,
           valeur_marchande: calculatedVal
-        })
-      });
+        };
+      }
+      return p;
+    });
 
-      showNotif(`Joueur "${editingPlayer.nom}" mis à jour (Base: ${newGen} GEN) !`);
-      setEditingPlayer(null);
-      await fetchData();
-    } catch (err) {
-      showNotif(`Erreur : ${err.message}`);
-    }
+    setPlayers(updatedPlayers);
+    showNotif(`Joueur "${editingPlayer.nom}" mis à jour (Base: ${newGen} GEN) !`);
+    setEditingPlayer(null);
   }
 
   async function handleUpdateTeamLogo(e) {
@@ -1184,16 +1205,10 @@ export default function App() {
         reader.readAsDataURL(newLogoFile);
       });
 
-      await fetch(`${API_URL}/teams/${editingTeamLogo.id}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ logo_url: logoUrl })
-      });
-
+      setTeams(prev => prev.map(t => t.id === editingTeamLogo.id ? { ...t, logo_url: logoUrl } : t));
       showNotif(`Logo de "${editingTeamLogo.nom}" modifié !`);
       setEditingTeamLogo(null);
       setNewLogoFile(null);
-      fetchData();
     } catch (err) {
       showNotif(`Erreur : ${err.message}`);
     }
@@ -1202,21 +1217,16 @@ export default function App() {
 
   async function openMatchDetails(match) {
     setSelectedMatch(match);
-    try {
-      const allEvents = await fetch(`${API_URL}/match_events`).then(r => r.json());
-      const filtered = allEvents.filter(ev => ev.match_id === match.id);
-      const enriched = filtered.map(ev => {
-        const pObj = players.find(p => p.id === ev.player_id);
-        return {
-          ...ev,
-          player_nom: pObj?.nom || 'Joueur inconnu',
-          player_equipe_id: pObj?.equipe_id || null
-        };
-      });
-      setSelectedMatchEvents(enriched);
-    } catch (err) {
-      console.error(err);
-    }
+    const filtered = matchEvents.filter(ev => ev.match_id === match.id);
+    const enriched = filtered.map(ev => {
+      const pObj = players.find(p => p.id === ev.player_id);
+      return {
+        ...ev,
+        player_nom: pObj?.nom || 'Joueur inconnu',
+        player_equipe_id: pObj?.equipe_id || null
+      };
+    });
+    setSelectedMatchEvents(enriched);
   }
 
   function handleScoreInputChange(matchId, teamType, val) {
@@ -1241,19 +1251,8 @@ export default function App() {
         match, domTeam, extTeam, scoreDom, scoreExt, match.saison || 1, 'local_user'
       );
 
-      if (events.length > 0) {
-        await fetch(`${API_URL}/match_events/bulk`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(events)
-        });
-      }
-
-      await fetch(`${API_URL}/matches/${match.id}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ score_domicile: scoreDom, score_exterieur: scoreExt, statut: 'terminé' })
-      });
+      setMatches(prev => prev.map(m => m.id === match.id ? { ...m, score_domicile: scoreDom, score_exterieur: scoreExt, statut: 'terminé' } : m));
+      setMatchEvents(prev => [...prev.filter(e => e.match_id !== match.id), ...events]);
 
       const currentJ = match.journee;
       const currentS = match.saison || 1;
@@ -1262,7 +1261,6 @@ export default function App() {
       localStorage.setItem('local_journee', currentJ);
 
       showNotif(`Score ${scoreDom} - ${scoreExt} et événements enregistrés !`);
-      await fetchData();
 
       const otherMatchesInJ = seasonMatches.filter(m => m.journee === currentJ && m.id !== match.id);
       const allCompleted = otherMatchesInJ.every(m => m.statut === 'terminé');
@@ -1270,11 +1268,10 @@ export default function App() {
       if (allCompleted) {
         if (currentJ >= 19 && currentJ <= 23) {
           await triggerWinterMercato(currentJ, currentS);
-          await fetchData();
         }
-        if (currentJ % 5 === 0) {
+        // Évolution toutes les 4 journées
+        if (currentJ % 4 === 0) {
           await evaluateAndApplyPlayerEvolutions(currentJ, currentS);
-          await fetchData();
         }
       }
     } catch (err) {
@@ -1303,15 +1300,19 @@ export default function App() {
       }
     }
 
-    await fetch(`${API_URL}/teams`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ nom: newTeamName, logo_url: logoUrl })
-    });
+    const newTeam = {
+      id: 'team_' + Date.now(),
+      nom: newTeamName,
+      logo_url: logoUrl,
+      formation: '4-3-3',
+      points: 0
+    };
 
+    setTeams(prev => [...prev, newTeam]);
     setUploading(false);
     showNotif(`Équipe "${newTeamName}" créée !`);
-    setNewTeamName(''); setLogoFile(null); fetchData();
+    setNewTeamName(''); 
+    setLogoFile(null);
   }
 
   async function handleAddPlayer(e) {
@@ -1327,24 +1328,24 @@ export default function App() {
     const gen = parseInt(newPlayer.general, 10) || 75;
     const age = parseInt(newPlayer.age, 10) || 22;
     const val = parseInt(newPlayer.valeur, 10) || calculateMarketValue(gen, age);
+    const assignedTeam = teams.find(t => t.id === newPlayer.equipe_id);
 
-    await fetch(`${API_URL}/players`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        nom: newPlayer.nom,
-        equipe_id: newPlayer.equipe_id,
-        numero: parseInt(newPlayer.numero, 10) || 10,
-        poste: newPlayer.poste,
-        general: gen,
-        valeur_marchande: val,
-        age: age
-      })
-    });
+    const createdPlayer = {
+      id: 'player_' + Date.now(),
+      nom: newPlayer.nom,
+      equipe_id: newPlayer.equipe_id,
+      numero: parseInt(newPlayer.numero, 10) || 10,
+      poste: newPlayer.poste,
+      general: gen,
+      general_base: gen,
+      valeur_marchande: val,
+      age: age,
+      teams: assignedTeam
+    };
 
+    setPlayers(prev => [...prev, createdPlayer]);
     showNotif(`Joueur "${newPlayer.nom}" ajouté (${formatMoney(val)}) !`);
     setNewPlayer({ nom: '', equipe_id: newPlayer.equipe_id, numero: 10, general: 75, valeur: 10000000, age: 22, poste: 'MC' });
-    fetchData();
   }
 
   function formatMoney(amount) {
@@ -1436,20 +1437,9 @@ export default function App() {
     setSavingLineup(true);
     const starterIds = teamLineupPlayers.map(p => p.id);
 
-    try {
-      await fetch(`${API_URL}/teams/${selectedLineupTeam.id}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ formation: currentFormation, lineup_ids: starterIds })
-      });
-
-      showNotif(`Composition de "${selectedLineupTeam.nom}" (${currentFormation}) sauvegardée !`);
-      setTeams(prev => prev.map(t => t.id === selectedLineupTeam.id ? { ...t, formation: currentFormation, lineup_ids: starterIds } : t));
-      setSelectedLineupTeam(prev => ({ ...prev, formation: currentFormation, lineup_ids: starterIds }));
-      await fetchData();
-    } catch (err) {
-      showNotif(`Erreur : ${err.message}`);
-    }
+    setTeams(prev => prev.map(t => t.id === selectedLineupTeam.id ? { ...t, formation: currentFormation, lineup_ids: starterIds } : t));
+    setSelectedLineupTeam(prev => ({ ...prev, formation: currentFormation, lineup_ids: starterIds }));
+    showNotif(`Composition de "${selectedLineupTeam.nom}" (${currentFormation}) sauvegardée !`);
 
     setSavingLineup(false);
   }
@@ -1599,8 +1589,8 @@ export default function App() {
           <div className="flex items-center gap-3">
             <div className="bg-indigo-600 text-white p-2.5 rounded-xl shadow-lg shadow-indigo-500/20">⚽</div>
             <div>
-              <h1 className="text-xl font-extrabold tracking-tight text-white">LIGUE DE FOOTBALL (LOCAL NODE.JS)</h1>
-              <p className="text-xs text-emerald-400 font-medium">✓ Base locale PostgreSQL connectée</p>
+              <h1 className="text-xl font-extrabold tracking-tight text-white">LIGUE DE FOOTBALL</h1>
+              <p className="text-xs text-emerald-400 font-medium">✓ Mode individuel autonome (Sauvegarde locale)</p>
             </div>
           </div>
 
@@ -2335,7 +2325,7 @@ export default function App() {
                 <div>
                   <h3 className="text-lg font-bold text-white flex items-center gap-2">🔄 3. Gestion des Saisons</h3>
                   <p className="text-xs text-slate-400 mt-1 max-w-xl">
-                    Réinitialiser (🔄) remet tous les joueurs dans leur club d'origine avec leur note de base. Lancer la saison suivante (🚀) conserve tous vos effectifs actuels.
+                    Réinitialiser (🔄) remet votre partie à zéro en rechargeant les données initiales de la base. Lancer la saison suivante (🚀) conserve vos effectifs et transferts.
                   </p>
                 </div>
 
