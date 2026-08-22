@@ -68,6 +68,16 @@ function calculateMarketValue(gen, age) {
   return Math.max(250000, finalVal);
 }
 
+// Calcul de durée pondérée pour les blessures
+function generateInjuryDuration() {
+  const roll = Math.random() * 100;
+  if (roll < 50) return { label: '1 match', matches: 1 };
+  if (roll < 80) return { label: `${Math.floor(Math.random() * 2) + 2} matchs`, matches: Math.floor(Math.random() * 2) + 2 };
+  if (roll < 94) return { label: `${Math.floor(Math.random() * 3) + 4} matchs`, matches: Math.floor(Math.random() * 3) + 4 };
+  if (roll < 99) return { label: `${Math.floor(Math.random() * 6) + 7} matchs`, matches: Math.floor(Math.random() * 6) + 7 };
+  return { label: 'Fin de saison', matches: 20 };
+}
+
 const FORMATIONS = {
   '4-3-3': { name: '4-3-3 (Classique)', def: 4, mid: 3, att: 3 },
   '4-4-2': { name: '4-4-2 (Équilibré)', def: 4, mid: 4, att: 2 },
@@ -813,6 +823,11 @@ export default function App() {
     return activePlayers[0];
   }
 
+  function pickInjuredPlayer(activePlayers) {
+    if (!activePlayers || activePlayers.length === 0) return null;
+    return activePlayers[Math.floor(Math.random() * activePlayers.length)];
+  }
+
   // --- DÉ DE 0 À 7 INCLUS ---
   function handleRollDice(matchId) {
     const diceDom = Math.floor(Math.random() * 8); // 0 à 7
@@ -852,6 +867,7 @@ export default function App() {
         match_id: m.id,
         player_id: playerIn.id,
         type: 'remplacement',
+        detail: `entre pour ${playerOut.nom}`,
         minute: subMinute,
         saison: seasonNum,
         user_id: userId
@@ -879,6 +895,7 @@ export default function App() {
         match_id: m.id,
         player_id: playerIn.id,
         type: 'remplacement',
+        detail: `entre pour ${playerOut.nom}`,
         minute: subMinute,
         saison: seasonNum,
         user_id: userId
@@ -934,6 +951,41 @@ export default function App() {
       const minute = Math.floor(Math.random() * 88) + 2;
       const carded = pickCardPlayer(getActivePlayersAtMinute(extStarters, extSubstitutions, minute));
       if (carded) matchEventsList.push({ match_id: m.id, player_id: carded.id, type: 'carton_jaune', minute, saison: seasonNum, user_id: userId });
+    }
+
+    // ÉVÉNEMENT BLESSURE RARE (~8% de chance par camp)
+    if (Math.random() < 0.08) {
+      const minute = Math.floor(Math.random() * 85) + 5;
+      const injured = pickInjuredPlayer(getActivePlayersAtMinute(domStarters, domSubstitutions, minute));
+      if (injured) {
+        const duration = generateInjuryDuration();
+        matchEventsList.push({
+          match_id: m.id,
+          player_id: injured.id,
+          type: 'blessure',
+          detail: duration.label,
+          minute,
+          saison: seasonNum,
+          user_id: userId
+        });
+      }
+    }
+
+    if (Math.random() < 0.08) {
+      const minute = Math.floor(Math.random() * 85) + 5;
+      const injured = pickInjuredPlayer(getActivePlayersAtMinute(extStarters, extSubstitutions, minute));
+      if (injured) {
+        const duration = generateInjuryDuration();
+        matchEventsList.push({
+          match_id: m.id,
+          player_id: injured.id,
+          type: 'blessure',
+          detail: duration.label,
+          minute,
+          saison: seasonNum,
+          user_id: userId
+        });
+      }
     }
 
     return matchEventsList;
@@ -1301,7 +1353,6 @@ export default function App() {
     setLogoUpdating(false);
   }
 
-  // --- OUVERTURE DE DÉTAILS SÉCURISÉE SANS CRASH ---
   async function openMatchDetails(match) {
     const dom = teams.find(t => t.id === match.equipe_domicile_id) || { id: match.equipe_domicile_id, nom: 'Club Domicile', logo_url: '' };
     const ext = teams.find(t => t.id === match.equipe_exterieur_id) || { id: match.equipe_exterieur_id, nom: 'Club Extérieur', logo_url: '' };
@@ -1442,6 +1493,50 @@ export default function App() {
   function formatMoney(amount) {
     if (!amount) return '0 €';
     return new Intl.NumberFormat('fr-FR', { style: 'currency', currency: 'EUR', maximumFractionDigits: 0 }).format(amount);
+  }
+
+  // --- HELPER D'AFFICHAGE D'ICÔNE D'ÉVÉNEMENT ---
+  function renderEventBadge(ev) {
+    switch (ev.type) {
+      case 'but':
+        return (
+          <span className="flex items-center gap-1 font-extrabold text-white text-xs bg-emerald-500/20 border border-emerald-500/30 px-2 py-0.5 rounded-lg">
+            ⚽ But
+          </span>
+        );
+      case 'passe':
+        return (
+          <span className="flex items-center gap-1 font-bold text-indigo-300 text-xs bg-indigo-500/20 border border-indigo-500/30 px-2 py-0.5 rounded-lg">
+            🎯 Passe D.
+          </span>
+        );
+      case 'carton_jaune':
+        return (
+          <span className="flex items-center gap-1 font-bold text-amber-300 text-xs bg-amber-500/20 border border-amber-500/30 px-2 py-0.5 rounded-lg">
+            🟨 Jaune
+          </span>
+        );
+      case 'carton_rouge':
+        return (
+          <span className="flex items-center gap-1 font-bold text-rose-300 text-xs bg-rose-500/20 border border-rose-500/30 px-2 py-0.5 rounded-lg">
+            🟥 Rouge
+          </span>
+        );
+      case 'blessure':
+        return (
+          <span className="flex items-center gap-1 font-black text-rose-400 text-xs bg-rose-600/20 border border-rose-500/40 px-2 py-0.5 rounded-lg shadow-sm">
+            🚑 {ev.detail ? `Blessé (${ev.detail})` : 'Blessure'}
+          </span>
+        );
+      case 'remplacement':
+        return (
+          <span className="flex items-center gap-1 font-semibold text-slate-300 text-xs bg-slate-800 border border-slate-700 px-2 py-0.5 rounded-lg">
+            🔄 {ev.detail || 'Remplacement'}
+          </span>
+        );
+      default:
+        return <span className="text-xs text-slate-400 font-bold">{ev.type}</span>;
+    }
   }
 
   const teamRoster = selectedTeam ? getSortedTeamPlayers(selectedTeam.id) : [];
@@ -1586,7 +1681,6 @@ export default function App() {
     ? Math.round(teamLineupPlayers.reduce((acc, p) => acc + (p?.general || 75), 0) / teamLineupPlayers.length)
     : 0;
 
-  // Calcul fiable de 38 journées
   const maxJourneesCount = seasonMatches.length > 0
     ? Math.max(...seasonMatches.map(m => m.journee || 1))
     : (teams.length >= 2 ? (teams.length % 2 === 0 ? teams.length - 1 : teams.length) * 2 : 38);
@@ -1674,7 +1768,6 @@ export default function App() {
     ? selectedMatchEvents.filter(ev => ev.player_equipe_id === selectedMatch.equipe_exterieur_id) 
     : [];
 
-  // --- ÉCRAN DE CONNEXION / INSCRIPTION ---
   if (!currentUser) {
     return (
       <div className="min-h-screen bg-slate-950 text-white flex items-center justify-center p-4 font-sans">
@@ -2923,7 +3016,7 @@ export default function App() {
         </div>
       )}
 
-      {/* MODALE DÉTAILS MATCH CORRIGÉE */}
+      {/* MODALE DÉTAILS MATCH */}
       {selectedMatch && (
         <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-slate-900 border border-slate-800 rounded-3xl max-w-2xl w-full p-6 shadow-2xl relative max-h-[90vh] flex flex-col overflow-y-auto">
@@ -2951,26 +3044,42 @@ export default function App() {
               <div className="bg-slate-950/60 p-4 rounded-2xl border border-slate-800/80">
                 <span className="text-xs font-extrabold text-indigo-400 uppercase">{selectedMatch.dom?.nom}</span>
                 <div className="space-y-2 max-h-60 overflow-y-auto mt-2">
-                  {homeEvents.length === 0 ? <p className="text-[11px] text-slate-500 py-4 text-center italic">Aucun événement</p> : homeEvents.map(ev => (
-                    <div key={ev.id} className="flex items-center justify-between bg-slate-900/80 px-2.5 py-1.5 rounded-xl text-xs">
-                      <span className="font-mono text-slate-400 text-[10px]">{ev.minute ? `${ev.minute}'` : "45'"}</span>
-                      <span className="font-semibold text-white truncate">{ev.player_nom}</span>
-                      <span className="text-[10px] font-bold text-amber-400">{ev.type}</span>
-                    </div>
-                  ))}
+                  {homeEvents.length === 0 ? (
+                    <p className="text-[11px] text-slate-500 py-4 text-center italic">Aucun événement</p>
+                  ) : (
+                    homeEvents.map(ev => (
+                      <div key={ev.id} className="flex items-center justify-between bg-slate-900/80 px-2.5 py-1.5 rounded-xl text-xs">
+                        <div className="flex items-center gap-2 truncate">
+                          <span className="font-mono text-slate-400 text-[10px] shrink-0">{ev.minute ? `${ev.minute}'` : "45'"}</span>
+                          <span className="font-semibold text-white truncate">{ev.player_nom}</span>
+                        </div>
+                        <div className="shrink-0 ml-2">
+                          {renderEventBadge(ev)}
+                        </div>
+                      </div>
+                    ))
+                  )}
                 </div>
               </div>
 
               <div className="bg-slate-950/60 p-4 rounded-2xl border border-slate-800/80">
                 <span className="text-xs font-extrabold text-indigo-400 uppercase text-right block">{selectedMatch.ext?.nom}</span>
                 <div className="space-y-2 max-h-60 overflow-y-auto mt-2">
-                  {awayEvents.length === 0 ? <p className="text-[11px] text-slate-500 py-4 text-center italic">Aucun événement</p> : awayEvents.map(ev => (
-                    <div key={ev.id} className="flex items-center justify-between bg-slate-900/80 px-2.5 py-1.5 rounded-xl text-xs">
-                      <span className="font-mono text-slate-400 text-[10px]">{ev.minute ? `${ev.minute}'` : "45'"}</span>
-                      <span className="font-semibold text-white truncate">{ev.player_nom}</span>
-                      <span className="text-[10px] font-bold text-amber-400">{ev.type}</span>
-                    </div>
-                  ))}
+                  {awayEvents.length === 0 ? (
+                    <p className="text-[11px] text-slate-500 py-4 text-center italic">Aucun événement</p>
+                  ) : (
+                    awayEvents.map(ev => (
+                      <div key={ev.id} className="flex items-center justify-between bg-slate-900/80 px-2.5 py-1.5 rounded-xl text-xs">
+                        <div className="flex items-center gap-2 truncate">
+                          <span className="font-mono text-slate-400 text-[10px] shrink-0">{ev.minute ? `${ev.minute}'` : "45'"}</span>
+                          <span className="font-semibold text-white truncate">{ev.player_nom}</span>
+                        </div>
+                        <div className="shrink-0 ml-2">
+                          {renderEventBadge(ev)}
+                        </div>
+                      </div>
+                    ))
+                  )}
                 </div>
               </div>
             </div>
