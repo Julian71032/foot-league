@@ -1613,17 +1613,45 @@ export default function App() {
     buildLineupForFormation(allCombined, newFmt);
   }
 
+  // --- SAUVEGARDE DE LA COMPOSITION ROBUSTE & SYNCHRONISÉE ---
   async function handleSaveLineup() {
     if (!selectedLineupTeam) return;
 
     setSavingLineup(true);
     const starterIds = teamLineupPlayers.map(p => p.id);
+    const uKey = currentUser?.email || 'local_user';
 
-    setTeams(prev => prev.map(t => t.id === selectedLineupTeam.id ? { ...t, formation: currentFormation, lineup_ids: starterIds } : t));
-    setSelectedLineupTeam(prev => ({ ...prev, formation: currentFormation, lineup_ids: starterIds }));
-    showNotif(`Composition de "${selectedLineupTeam.nom}" (${currentFormation}) sauvegardée !`);
+    try {
+      // 1. Mise à jour API Render
+      await fetch(`${API_URL}/teams/${selectedLineupTeam.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          formation: currentFormation,
+          lineup_ids: starterIds
+        })
+      }).catch(() => console.log('Mode local actif'));
 
-    setSavingLineup(false);
+      // 2. Mise à jour State React
+      const updatedTeams = teams.map(t =>
+        t.id === selectedLineupTeam.id
+          ? { ...t, formation: currentFormation, lineup_ids: starterIds }
+          : t
+      );
+
+      setTeams(updatedTeams);
+      setSelectedLineupTeam(prev => ({ ...prev, formation: currentFormation, lineup_ids: starterIds }));
+
+      // 3. Persistance immédiate LocalStorage
+      localStorage.setItem(`local_teams_${uKey}`, JSON.stringify(updatedTeams));
+
+      showNotif(`✓ Composition de "${selectedLineupTeam.nom}" (${currentFormation}) enregistrée !`);
+    } catch (err) {
+      console.error('Erreur compo:', err);
+      showNotif(`Erreur : ${err.message}`);
+    } finally {
+      setSavingLineup(false);
+    }
   }
 
   function handleSelectSlot(type, index) {
@@ -1645,7 +1673,7 @@ export default function App() {
       updatedPitch[selectedSlot.index] = updatedPitch[index];
       updatedPitch[index] = temp;
       setTeamLineupPlayers(updatedPitch);
-      showNotif("Postes permutés ! Sauvegardez pour enregistrer.");
+      showNotif("Postes permutés ! N'oubliez pas d'enregistrer.");
     } else if (selectedSlot.type === 'bench' && type === 'pitch') {
       const benchP = updatedBench[selectedSlot.index];
       const pitchP = updatedPitch[index];
@@ -2190,7 +2218,7 @@ export default function App() {
                           <button
                             type="button"
                             onClick={() => openMatchDetails(m)}
-                            className="bg-indigo-600/20 hover:bg-indigo-600 text-indigo-300 hover:text-white border border-indigo-500/40 text-xs font-black tracking-widest px-3 py-2.5 rounded-xl transition-all cursor-pointer shadow-md active:scale-95 uppercase"
+                            className="bg-indigo-600/20 hover:bg-indigo-600 text-indigo-300 hover:text-white border border-indigo-500/40 text-xs font-black tracking-widest px-3.5 py-2.5 rounded-xl transition-all cursor-pointer shadow-md active:scale-95 uppercase"
                           >
                             VS
                           </button>
@@ -2724,7 +2752,7 @@ export default function App() {
         </div>
       )}
 
-      {/* MODALE TACTIQUE AVEC POSTE VISIBLE SUR LE BANC */}
+      {/* MODALE TACTIQUE */}
       {selectedLineupTeam && (
         <div className="fixed inset-0 bg-black/85 backdrop-blur-md z-50 flex items-center justify-center p-2 sm:p-4">
           <div className="bg-slate-900 border border-slate-800 rounded-3xl max-w-lg w-full p-4 sm:p-6 shadow-2xl relative max-h-[96vh] flex flex-col overflow-y-auto">
@@ -2800,13 +2828,13 @@ export default function App() {
                 type="button"
                 onClick={handleSaveLineup}
                 disabled={savingLineup}
-                className="w-full bg-emerald-600 hover:bg-emerald-500 disabled:bg-slate-800 text-white font-extrabold py-2.5 rounded-xl text-sm transition-all shadow-lg flex items-center justify-center gap-2 cursor-pointer"
+                className="w-full bg-emerald-600 hover:bg-emerald-500 disabled:bg-slate-800 text-white font-extrabold py-2.5 rounded-xl text-sm transition-all shadow-lg flex items-center justify-center gap-2 cursor-pointer active:scale-95"
               >
-                <span>💾</span> {savingLineup ? 'Sauvegarde...' : 'Sauvegarder la Composition'}
+                <span>💾</span> {savingLineup ? 'Enregistrement...' : 'Sauvegarder la Composition'}
               </button>
             </div>
 
-            {/* BANC AVEC POSTE BIEN AFFICHÉ */}
+            {/* BANC AVEC POSTES ET NUMÉROS BIEN VISIBLES */}
             <div className="mt-4 bg-slate-950 p-3 rounded-2xl border border-slate-800">
               <h4 className="text-[11px] font-extrabold uppercase tracking-wider text-slate-400 mb-2">🪑 Banc des Remplaçants ({teamBenchPlayers.length})</h4>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-40 overflow-y-auto pr-1">
