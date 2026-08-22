@@ -139,6 +139,7 @@ export default function App() {
   const [transferFee, setTransferFee] = useState(10000000);
   const [transferLoading, setTransferLoading] = useState(false);
 
+  // Séquence d'initialisation propre
   useEffect(() => {
     if (!document.getElementById('tailwind-cdn')) {
       const script = document.createElement('script');
@@ -147,15 +148,19 @@ export default function App() {
       document.head.appendChild(script);
     }
 
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setSession(session);
-      if (session) fetchUserProfile(session.user.id);
-    });
-
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+    supabase.auth.getSession().then(async ({ data: { session } }) => {
       setSession(session);
       if (session) {
-        fetchUserProfile(session.user.id);
+        await fetchUserProfile(session.user.id);
+        await fetchData(session.user.id);
+      }
+    });
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
+      setSession(session);
+      if (session) {
+        await fetchUserProfile(session.user.id);
+        await fetchData(session.user.id);
       } else {
         setUserProfile(null);
       }
@@ -164,18 +169,13 @@ export default function App() {
     return () => subscription.unsubscribe();
   }, []);
 
-  useEffect(() => {
-    if (session) {
-      fetchData();
-    }
-  }, [session]);
-
   function showNotif(msg) {
     setNotification(msg);
     setTimeout(() => setNotification(''), 4500);
   }
 
   async function fetchUserProfile(userId) {
+    if (!userId) return;
     const { data } = await supabase.from('profiles').select('*').eq('id', userId).single();
     if (data) {
       setUserProfile(data);
@@ -190,12 +190,13 @@ export default function App() {
   }
 
   async function handleSaveTournamentProgress() {
-    if (!session?.user?.id) return;
+    const currentUid = session?.user?.id;
+    if (!currentUid) return;
     setSavingProgress(true);
 
     try {
-      localStorage.setItem(`season_${session.user.id}`, seasonFilter);
-      localStorage.setItem(`journee_${session.user.id}`, journeeFilter);
+      localStorage.setItem(`season_${currentUid}`, seasonFilter);
+      localStorage.setItem(`journee_${currentUid}`, journeeFilter);
 
       await supabase
         .from('profiles')
@@ -203,7 +204,7 @@ export default function App() {
           current_season: parseInt(seasonFilter, 10),
           current_journee: parseInt(journeeFilter, 10)
         })
-        .eq('id', session.user.id);
+        .eq('id', currentUid);
 
       showNotif(`Progression sauvegardée ! Reprise à la Journée ${journeeFilter} (${getSeasonLabel(seasonFilter)})`);
     } catch (err) {
@@ -237,23 +238,26 @@ export default function App() {
   }
 
   async function handleLogout() {
-    if (session?.user?.id) {
-      localStorage.setItem(`season_${session.user.id}`, seasonFilter);
-      localStorage.setItem(`journee_${session.user.id}`, journeeFilter);
+    const currentUid = session?.user?.id;
+    if (currentUid) {
+      localStorage.setItem(`season_${currentUid}`, seasonFilter);
+      localStorage.setItem(`journee_${currentUid}`, journeeFilter);
     }
     await supabase.auth.signOut();
     showNotif("Déconnexion réussie. Votre progression a été sauvegardée.");
   }
 
-  // --- REQUÊTE SANS JOINTURE POUR SUPPRIMER LE TIMEOUT SUPABASE ---
-  async function fetchData() {
+  async function fetchData(uidOverride) {
+    const activeUserId = uidOverride || session?.user?.id;
+    if (!activeUserId) return;
+
     // 1. Charger les équipes
     const { data: dataTeams, error: errTeams } = await supabase.from('teams').select('*');
     if (errTeams) console.error('Erreur Teams:', errTeams.message);
     const currentTeams = dataTeams || [];
     setTeams(currentTeams);
 
-    // 2. Charger les joueurs avec la clé étrangère explicite
+    // 2. Charger les joueurs avec leurs notes actuelles
     const { data: dataPlayers, error: errPlayers } = await supabase
       .from('players')
       .select('*, teams!players_equipe_id_fkey(nom, logo_url)');
@@ -263,11 +267,11 @@ export default function App() {
       setPlayers(dataPlayers);
     }
 
-    // 3. Charger les matchs directement sans jointures lourdes
+    // 3. Charger les matchs directement sans jointures lourdes (Anti-timeout)
     const { data: rawMatches, error: matchError } = await supabase
       .from('matches')
       .select('*')
-      .eq('user_id', session.user.id)
+      .eq('user_id', activeUserId)
       .order('journee', { ascending: true })
       .order('id', { ascending: true });
 
@@ -277,7 +281,6 @@ export default function App() {
     }
 
     if (rawMatches) {
-      // Reconstituer les informations de dom et ext en mémoire
       const enrichedMatches = rawMatches.map(m => ({
         ...m,
         dom: currentTeams.find(t => t.id === m.equipe_domicile_id) || null,
@@ -287,8 +290,8 @@ export default function App() {
       setMatches(enrichedMatches);
 
       const maxS = Math.max(...enrichedMatches.map(m => m.saison || 1), 1);
-      const savedSeason = localStorage.getItem(`season_${session.user.id}`);
-      const savedJournee = localStorage.getItem(`journee_${session.user.id}`);
+      const savedSeason = localStorage.getItem(`season_${activeUserId}`);
+      const savedJournee = localStorage.getItem(`journee_${activeUserId}`);
 
       const activeSeason = savedSeason ? parseInt(savedSeason, 10) : maxS;
       setSeasonFilter(activeSeason);
@@ -309,7 +312,7 @@ export default function App() {
     const { data: dataEvents, error: errEvents } = await supabase
       .from('match_events')
       .select('*')
-      .eq('user_id', session.user.id);
+      .eq('user_id', activeUserId);
     if (errEvents) console.error('Erreur Events:', errEvents.message);
     if (dataEvents) setMatchEvents(dataEvents);
 
@@ -985,11 +988,23 @@ export default function App() {
         await supabase.from('match_events').insert(newEvents);
       }
 
-      showNotif(`Journée ${journeeFilter} simulée avec succès !`);
-      await fetchData();
-
       const currentJ = parseInt(journeeFilter, 10);
       const currentS = parseInt(seasonFilter, 10);
+
+      // Persistance automatique immédiate
+      localStorage.setItem(`season_${session.user.id}`, currentS);
+      localStorage.setItem(`journee_${session.user.id}`, currentJ);
+
+      await supabase
+        .from('profiles')
+        .update({
+          current_season: currentS,
+          current_journee: currentJ
+        })
+        .eq('id', session.user.id);
+
+      showNotif(`Journée ${journeeFilter} simulée avec succès !`);
+      await fetchData();
 
       // 1. MERCATO D'HIVER (JOURNÉES 19 À 23)
       if (currentJ >= 19 && currentJ <= 23) {
@@ -1081,7 +1096,6 @@ export default function App() {
     const seasonLabel = getSeasonLabel(targetSeason);
 
     const totalJournees = (teams.length % 2 === 0 ? teams.length - 1 : teams.length) * 2;
-    const totalMatchs = teams.length * (teams.length - 1);
 
     const confirmMsg = isNextSeason
       ? `Voulez-vous lancer la ${seasonLabel} ?\n\n- Vous conservez vos transferts et évolutions actuels.\n- ${totalJournees} Journées programmées.`
@@ -1159,6 +1173,14 @@ export default function App() {
       if (session?.user?.id) {
         localStorage.setItem(`season_${session.user.id}`, targetSeason);
         localStorage.setItem(`journee_${session.user.id}`, 1);
+
+        await supabase
+          .from('profiles')
+          .update({
+            current_season: targetSeason,
+            current_journee: 1
+          })
+          .eq('id', session.user.id);
       }
 
       await fetchData();
@@ -1574,11 +1596,24 @@ export default function App() {
 
       if (matchError) throw matchError;
 
+      const currentJ = match.journee;
+      const currentS = match.saison || 1;
+
+      // Persistance automatique immédiate
+      localStorage.setItem(`season_${session.user.id}`, currentS);
+      localStorage.setItem(`journee_${session.user.id}`, currentJ);
+
+      await supabase
+        .from('profiles')
+        .update({
+          current_season: currentS,
+          current_journee: currentJ
+        })
+        .eq('id', session.user.id);
+
       showNotif(`Score ${scoreDom} - ${scoreExt} et événements enregistrés !`);
       await fetchData();
 
-      const currentJ = match.journee;
-      const currentS = match.saison || 1;
       const otherMatchesInJ = seasonMatches.filter(m => m.journee === currentJ && m.id !== match.id);
       const allCompleted = otherMatchesInJ.every(m => m.statut === 'terminé');
 
