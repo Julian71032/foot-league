@@ -871,8 +871,8 @@ export default function App() {
 
   // --- DÉ DE 0 À 7 INCLUS ---
   function handleRollDice(matchId) {
-    const diceDom = Math.floor(Math.random() * 8);
-    const diceExt = Math.floor(Math.random() * 8);
+    const diceDom = Math.floor(Math.random() * 7);
+    const diceExt = Math.floor(Math.random() * 7);
 
     setScoresInput(prev => ({
       ...prev,
