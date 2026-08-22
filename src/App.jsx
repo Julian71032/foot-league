@@ -139,6 +139,7 @@ export default function App() {
   const [transferFee, setTransferFee] = useState(10000000);
   const [transferLoading, setTransferLoading] = useState(false);
 
+  // Séquence d'initialisation propre
   useEffect(() => {
     if (!document.getElementById('tailwind-cdn')) {
       const script = document.createElement('script');
@@ -256,17 +257,23 @@ export default function App() {
     const currentTeams = dataTeams || [];
     setTeams(currentTeams);
 
-    // 2. Charger les joueurs avec leur note de base
+    // 2. Charger les joueurs directement SANS jointure SQL complexe
     const { data: dataPlayers, error: errPlayers } = await supabase
       .from('players')
-      .select('*, teams!players_equipe_id_fkey(nom, logo_url)');
+      .select('*');
+
     if (errPlayers) {
-      console.error('Erreur Players:', errPlayers.message);
+      alert(`⚠️ ERREUR CHARGEMENT JOUEURS :\n${errPlayers.message}`);
     } else if (dataPlayers) {
-      setPlayers(dataPlayers);
+      // Associer les données du club en mémoire JavaScript
+      const enrichedPlayers = dataPlayers.map(p => ({
+        ...p,
+        teams: currentTeams.find(t => t.id === p.equipe_id) || null
+      }));
+      setPlayers(enrichedPlayers);
     }
 
-    // 3. Charger les matchs directement sans jointures lourdes (Anti-timeout)
+    // 3. Charger les matchs directement sans jointures lourdes
     const { data: rawMatches, error: matchError } = await supabase
       .from('matches')
       .select('*')
@@ -1443,12 +1450,7 @@ export default function App() {
 
       setTransfers([]);
       showNotif("Tous les transferts ont été réinitialisés et l'historique a été effacé !");
-      
-      const { data: dataTeams } = await supabase.from('teams').select('*');
-      if (dataTeams) setTeams(dataTeams);
-
-      const { data: dataPlayers } = await supabase.from('players').select('*, teams!players_equipe_id_fkey(nom, logo_url)');
-      if (dataPlayers) setPlayers(dataPlayers);
+      await fetchData();
     } catch (err) {
       showNotif(`Erreur : ${err.message}`);
     }
@@ -1486,7 +1488,7 @@ export default function App() {
           poste: editingPlayer.poste,
           numero: editingPlayer.numero ? parseInt(editingPlayer.numero, 10) : 10,
           general: newGen,
-          general_base: newGen, // Met à jour également la nouvelle note de référence
+          general_base: newGen,
           age: newAge,
           valeur_marchande: calculatedVal
         })
@@ -1695,7 +1697,7 @@ export default function App() {
       numero: parseInt(newPlayer.numero, 10) || 10,
       poste: newPlayer.poste,
       general: gen,
-      general_base: gen, // Note de base enregistrée
+      general_base: gen,
       valeur_marchande: val,
       age: age
     }]);
