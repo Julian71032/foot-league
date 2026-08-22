@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 
-const API_URL = 'http://localhost:5000/api';
+const API_URL = 'https://serveur-ligue.onrender.com/api';
 
 // --- LISTE DES POSTES ---
 const POSITIONS_LIST = [
