@@ -793,7 +793,12 @@ export default function App() {
 
   function pickGoalScorer(activePlayers) {
     if (!activePlayers || activePlayers.length === 0) return null;
-    const weighted = activePlayers.map(p => {
+    
+    // Exclure strictement les gardiens (G)
+    const outfieldPlayers = activePlayers.filter(p => (p.poste || '').trim().toUpperCase() !== 'G');
+    if (outfieldPlayers.length === 0) return null;
+
+    const weighted = outfieldPlayers.map(p => {
       let w = 1;
       const pos = p.poste || 'MC';
       if (['BU', 'AT'].includes(pos)) w = 14;
@@ -801,7 +806,6 @@ export default function App() {
       else if (['MOC', 'MD', 'MG'].includes(pos)) w = 5;
       else if (['MC', 'MDC'].includes(pos)) w = 2.5;
       else if (['DD', 'DG', 'DLD', 'DLG', 'DC'].includes(pos)) w = 1;
-      else if (pos === 'G') w = 0.01;
 
       w *= Math.pow((p.general || 75) / 75, 1.5);
       return { player: p, weight: w };
@@ -813,7 +817,7 @@ export default function App() {
       if (randomVal < item.weight) return item.player;
       randomVal -= item.weight;
     }
-    return activePlayers[0];
+    return outfieldPlayers[0];
   }
 
   function pickAssister(activePlayers, scorer) {
