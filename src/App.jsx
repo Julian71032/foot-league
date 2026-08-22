@@ -140,11 +140,12 @@ export default function App() {
   const [uploading, setUploading] = useState(false);
   const [newPlayer, setNewPlayer] = useState({ nom: '', equipe_id: '', numero: 10, general: 75, valeur: 10000000, age: 22, poste: 'MC' });
 
-  // Transferts
+  // Transferts Manuels
   const [transferFromTeamId, setTransferFromTeamId] = useState('');
   const [transferPlayerId, setTransferPlayerId] = useState('');
   const [transferToTeamId, setTransferToTeamId] = useState('');
   const [transferFee, setTransferFee] = useState(10000000);
+  const [transferType, setTransferType] = useState('achat'); // 'achat' ou 'pret'
   const [transferLoading, setTransferLoading] = useState(false);
 
   const isAdmin = currentUser?.email?.trim().toLowerCase() === ADMIN_EMAIL.toLowerCase();
@@ -455,7 +456,8 @@ export default function App() {
     return { starters: all.slice(0, 11), bench: all.slice(11) };
   }
 
-  async function triggerWinterMercato(journeeNum, currentSeasonNum) {
+  // --- MOTEUR DE MERCATO ULTRA-RÉALISTE AVEC PRÊTS ET STANDINGS ---
+  async function triggerAutomatedMercato(journeeNum, currentSeasonNum, maxTransfers = 4, isSummer = false) {
     if (!teams || teams.length < 2 || !players || players.length < 10) return;
 
     const teamCounts = {};
@@ -464,18 +466,20 @@ export default function App() {
     });
 
     const rankedTeams = [...classement];
-    const topClubs = rankedTeams.slice(0, Math.max(1, Math.floor(rankedTeams.length * 0.4)));
-    const midClubs = rankedTeams.slice(Math.floor(rankedTeams.length * 0.4), Math.floor(rankedTeams.length * 0.7));
-    const bottomClubs = rankedTeams.slice(Math.max(1, Math.floor(rankedTeams.length * 0.7)));
+    // Découpage strict par standing selon le classement actuel
+    const topClubs = rankedTeams.slice(0, Math.max(1, Math.floor(rankedTeams.length * 0.35))); // Top 35% (Grands Cadors)
+    const midClubs = rankedTeams.slice(Math.floor(rankedTeams.length * 0.35), Math.floor(rankedTeams.length * 0.70)); // Milieu de tableau
+    const bottomClubs = rankedTeams.slice(Math.floor(rankedTeams.length * 0.70)); // Bas de tableau
 
     const availablePool = [...players].sort(() => Math.random() - 0.5);
     const completedTransfers = [];
     const usedPlayerIds = new Set();
     const updatedPlayers = [...players];
     const newTransfersList = [...transfers];
+    const updatedTeamsList = [...teams];
 
     for (const player of availablePool) {
-      if (completedTransfers.length >= 3) break;
+      if (completedTransfers.length >= maxTransfers) break;
       if (usedPlayerIds.has(player.id)) continue;
 
       const currentGen = player.general || 75;
@@ -488,39 +492,73 @@ export default function App() {
 
       let destinationTeam = null;
       let reason = '';
+      let isLoan = false;
 
       const canBuy = (club) => club.id !== originTeamId && (teamCounts[club.id] || 0) < 28;
 
-      if ((age <= 23 && currentGen >= 77) || currentGen >= 83) {
+      // 1. Joueurs Stars (GEN >= 83) ou Top Prospects (<= 22 ans et GEN >= 78) -> STRICTEMENT TOP CLUBS
+      if (currentGen >= 83 || (age <= 22 && currentGen >= 78)) {
         const candidateDest = topClubs.filter(canBuy);
         if (candidateDest.length > 0) {
           destinationTeam = candidateDest[Math.floor(Math.random() * candidateDest.length)];
-          reason = age <= 23 ? "Jeune pépite recrutée par un cador" : "Transfert star de haut niveau";
+          reason = currentGen >= 83 ? "Transfert galactique vers un cador" : "Signature d'une pépite d'or mondiale";
         }
-      } else if (age >= 29 || currentGen <= 74) {
-        const candidateDest = bottomClubs.filter(canBuy);
+      } 
+      // 2. Joueurs solides / Titulaires (GEN 77 - 82) -> Cadors ou Milieu de tableau
+      else if (currentGen >= 77) {
+        const candidateDest = [...topClubs, ...midClubs].filter(canBuy);
         if (candidateDest.length > 0) {
           destinationTeam = candidateDest[Math.floor(Math.random() * candidateDest.length)];
-          reason = "En quête de temps de jeu et de relance";
+          reason = "Renfort majeur dans l'entrejeu/attaque";
         }
-      } else {
-        const candidateDest = [...midClubs, ...topClubs, ...bottomClubs].filter(canBuy);
+      } 
+      // 3. Jeunes en manque de temps de jeu (<= 22 ans et GEN <= 74) -> PRÊT vers Milieu ou Bas de tableau
+      else if (age <= 22 && Math.random() < 0.65) {
+        const candidateDest = [...midClubs, ...bottomClubs].filter(canBuy);
         if (candidateDest.length > 0) {
           destinationTeam = candidateDest[Math.floor(Math.random() * candidateDest.length)];
-          reason = "Renfort stratégique hivernal";
+          isLoan = true;
+          reason = "Prêt d'un an pour s'aguerrir et gagner du temps de jeu";
+        }
+      } 
+      // 4. Vétérans ou joueurs modestes (GEN <= 75 ou Âge >= 30) -> Bas de tableau ou Milieu
+      else {
+        const candidateDest = [...bottomClubs, ...midClubs].filter(canBuy);
+        if (candidateDest.length > 0) {
+          destinationTeam = candidateDest[Math.floor(Math.random() * candidateDest.length)];
+          reason = "Recherche de temps de jeu et maintien";
         }
       }
 
       if (destinationTeam) {
         usedPlayerIds.add(player.id);
-        const fee = player.valeur_marchande || calculateMarketValue(currentGen, age);
+        const fee = isLoan ? 0 : (player.valeur_marchande || calculateMarketValue(currentGen, age));
 
         teamCounts[originTeamId]--;
         teamCounts[destinationTeam.id]++;
 
+        // Mise à jour de l'effectif
         const pIdx = updatedPlayers.findIndex(p => p.id === player.id);
         if (pIdx !== -1) {
-          updatedPlayers[pIdx] = { ...updatedPlayers[pIdx], equipe_id: destinationTeam.id, teams: destinationTeam };
+          updatedPlayers[pIdx] = {
+            ...updatedPlayers[pIdx],
+            equipe_id: destinationTeam.id,
+            teams: destinationTeam,
+            is_loan: isLoan,
+            loan_parent_id: isLoan ? (player.loan_parent_id || originTeamId) : null
+          };
+        }
+
+        // Nettoyage de l'ancien 11 titulaire de l'équipe vendeuse (fix bug composition)
+        const oldTeamIdx = updatedTeamsList.findIndex(t => t.id === originTeamId);
+        if (oldTeamIdx !== -1 && updatedTeamsList[oldTeamIdx].lineup_ids) {
+          let lineIds = updatedTeamsList[oldTeamIdx].lineup_ids;
+          if (typeof lineIds === 'string') {
+            try { lineIds = JSON.parse(lineIds); } catch (e) { lineIds = []; }
+          }
+          if (Array.isArray(lineIds)) {
+            updatedTeamsList[oldTeamIdx].lineup_ids = lineIds.filter(id => id !== player.id);
+          }
         }
 
         const newTr = {
@@ -529,6 +567,7 @@ export default function App() {
           old_team_id: originTeam.id,
           new_team_id: destinationTeam.id,
           fee: fee,
+          type: isLoan ? 'pret' : 'achat',
           user_id: currentUser?.email || 'local_user',
           players: player,
           old_team: originTeam,
@@ -546,6 +585,7 @@ export default function App() {
           oldTeam: originTeam.nom,
           newTeam: destinationTeam.nom,
           fee: fee,
+          type: isLoan ? 'Prêt (1 an)' : 'Achat',
           reason: reason
         });
       }
@@ -553,8 +593,11 @@ export default function App() {
 
     if (completedTransfers.length > 0) {
       setPlayers(updatedPlayers);
+      setTeams(updatedTeamsList);
       setTransfers(newTransfersList);
       setMercatoReport({
+        isSummer,
+        title: isSummer ? "MERCATO ESTIVAL" : "MERCATO D'HIVER",
         journee: journeeNum,
         seasonLabel: getSeasonLabel(currentSeasonNum),
         transfers: completedTransfers
@@ -1057,8 +1100,14 @@ export default function App() {
 
       showNotif(`Journée ${journeeFilter} simulée avec succès !`);
 
-      if (currentJ >= 19 && currentJ <= 23) {
-        await triggerWinterMercato(currentJ, currentS);
+      // Mercato d'Hiver : 4 transferts (Journée 19)
+      if (currentJ === 19) {
+        await triggerAutomatedMercato(currentJ, currentS, 4, false);
+      }
+
+      // Fin de la 38e journée : Grand Mercato Estival de 15 transferts
+      if (currentJ === maxJourneesCount) {
+        await triggerAutomatedMercato(currentJ, currentS, 15, true);
       }
 
       if (currentJ % 4 === 0) {
@@ -1071,6 +1120,7 @@ export default function App() {
     setSimulating(false);
   }
 
+  // --- CHANGEMENT DE SAISON AVEC RETOUR DES PRÊTS AUTOMATIQUES ---
   async function handleStartNewSeason(isNextSeason = false) {
     if (!teams || teams.length < 2) {
       alert(`Erreur : Il vous faut au moins 2 équipes pour générer un calendrier.`);
@@ -1084,7 +1134,7 @@ export default function App() {
     const uKey = currentUser?.email || 'local_user';
 
     const confirmMsg = isNextSeason
-      ? `Voulez-vous lancer la ${seasonLabel} ?\n\n- Vous conservez vos transferts et évolutions actuels.\n- ${totalJournees} Journées programmées.`
+      ? `Voulez-vous lancer la ${seasonLabel} ?\n\n- Vous conservez vos transferts et évolutions actuels.\n- Les joueurs prêtés retournent dans leur club d'origine.\n- ${totalJournees} Journées programmées.`
       : `Voulez-vous RÉINITIALISER complètement votre tournoi (Saison 1) ?\n\n- Tous les joueurs retrouveront leur GÉNÉRAL DE DÉPART et leur club initial.`;
 
     if (!window.confirm(confirmMsg)) return;
@@ -1102,11 +1152,28 @@ export default function App() {
         return;
       }
 
+      // Retour automatique des prêts à la maison-mère
+      const cleanedPlayers = players.map(p => {
+        if (p.is_loan && p.loan_parent_id) {
+          const originalTeam = teams.find(t => t.id === p.loan_parent_id);
+          return {
+            ...p,
+            equipe_id: p.loan_parent_id,
+            teams: originalTeam,
+            is_loan: false,
+            loan_parent_id: null
+          };
+        }
+        return p;
+      });
+
+      setPlayers(cleanedPlayers);
+
       const fixtures = buildRoundRobinFixtures(teams, uKey, targetSeason);
       const remainingMatches = matches.filter(m => (m.saison || 1) !== targetSeason);
       setMatches([...remainingMatches, ...fixtures]);
 
-      showNotif(`${seasonLabel} lancée ! Effectifs conservés.`);
+      showNotif(`${seasonLabel} lancée ! Retour des joueurs prêtés.`);
 
       setSeasonFilter(targetSeason);
       setJourneeFilter(1);
@@ -1212,6 +1279,7 @@ export default function App() {
     }
   }
 
+  // Transfert / Prêt Manuel avec mise à jour du 11
   async function handleTransferPlayer(e) {
     e.preventDefault();
     if (!transferFromTeamId || !transferPlayerId || !transferToTeamId) {
@@ -1226,7 +1294,7 @@ export default function App() {
 
     const sellerCount = players.filter(p => p.equipe_id === transferFromTeamId).length;
     if (sellerCount <= 16) {
-      showNotif("Ce club a 16 joueurs ou moins : il ne peut plus vendre de joueur !");
+      showNotif("Ce club a 16 joueurs ou moins : il ne peut plus céder de joueur !");
       return;
     }
 
@@ -1243,11 +1311,35 @@ export default function App() {
 
     setTransferLoading(true);
 
+    const isLoan = transferType === 'pret';
+    const fee = isLoan ? 0 : parseInt(transferFee, 10);
+
     const updatedPlayers = players.map(p => {
       if (p.id === transferPlayerId) {
-        return { ...p, equipe_id: transferToTeamId, valeur_marchande: parseInt(transferFee, 10), teams: destTeam };
+        return {
+          ...p,
+          equipe_id: transferToTeamId,
+          valeur_marchande: fee,
+          teams: destTeam,
+          is_loan: isLoan,
+          loan_parent_id: isLoan ? (p.loan_parent_id || transferFromTeamId) : null
+        };
       }
       return p;
+    });
+
+    // Retrait propre du joueur dans la composition de départ de l'ancien club
+    const updatedTeamsList = teams.map(t => {
+      if (t.id === transferFromTeamId && t.lineup_ids) {
+        let lineIds = t.lineup_ids;
+        if (typeof lineIds === 'string') {
+          try { lineIds = JSON.parse(lineIds); } catch (e) { lineIds = []; }
+        }
+        if (Array.isArray(lineIds)) {
+          return { ...t, lineup_ids: lineIds.filter(id => id !== transferPlayerId) };
+        }
+      }
+      return t;
     });
 
     const newTransfer = {
@@ -1255,7 +1347,8 @@ export default function App() {
       player_id: transferPlayerId,
       old_team_id: transferFromTeamId,
       new_team_id: transferToTeamId,
-      fee: parseInt(transferFee, 10),
+      fee: fee,
+      type: transferType,
       user_id: currentUser?.email || 'local_user',
       players: selectedPlayer,
       old_team: origTeam,
@@ -1263,9 +1356,10 @@ export default function App() {
     };
 
     setPlayers(updatedPlayers);
+    setTeams(updatedTeamsList);
     setTransfers(prev => [newTransfer, ...prev]);
 
-    showNotif(`Transfert de ${selectedPlayer.nom} effectué avec succès !`);
+    showNotif(`${isLoan ? 'Prêt' : 'Transfert'} de ${selectedPlayer.nom} validé !`);
     setTransferFromTeamId('');
     setTransferPlayerId('');
     setTransferToTeamId('');
@@ -1274,20 +1368,20 @@ export default function App() {
   }
 
   async function handleCancelTransfer(transfer) {
-    if (!window.confirm(`Voulez-vous annuler le transfert de "${transfer.players?.nom || 'ce joueur'}" et le renvoyer à ${transfer.old_team?.nom || 'son ancien club'} ?`)) {
+    if (!window.confirm(`Voulez-vous annuler le mouvement de "${transfer.players?.nom || 'ce joueur'}" ?`)) {
       return;
     }
 
     const updatedPlayers = players.map(p => {
       if (p.id === transfer.player_id) {
-        return { ...p, equipe_id: transfer.old_team_id, teams: transfer.old_team };
+        return { ...p, equipe_id: transfer.old_team_id, teams: transfer.old_team, is_loan: false, loan_parent_id: null };
       }
       return p;
     });
 
     setPlayers(updatedPlayers);
     setTransfers(prev => prev.filter(t => t.id !== transfer.id));
-    showNotif(`Transfert annulé : ${transfer.players?.nom || 'Joueur'} est retourné à son club.`);
+    showNotif(`Mouvement annulé : ${transfer.players?.nom || 'Joueur'} est retourné à son club.`);
   }
 
   async function handleDeletePlayer(playerId, playerNom) {
@@ -1406,8 +1500,11 @@ export default function App() {
       const allCompleted = otherMatchesInJ.every(m => m.statut === 'terminé');
 
       if (allCompleted) {
-        if (currentJ >= 19 && currentJ <= 23) {
-          await triggerWinterMercato(currentJ, currentS);
+        if (currentJ === 19) {
+          await triggerAutomatedMercato(currentJ, currentS, 4, false);
+        }
+        if (currentJ === maxJourneesCount) {
+          await triggerAutomatedMercato(currentJ, currentS, 15, true);
         }
         if (currentJ % 4 === 0) {
           await evaluateAndApplyPlayerEvolutions(currentJ, currentS);
@@ -1613,7 +1710,6 @@ export default function App() {
     buildLineupForFormation(allCombined, newFmt);
   }
 
-  // --- SAUVEGARDE DE LA COMPOSITION ROBUSTE & SYNCHRONISÉE ---
   async function handleSaveLineup() {
     if (!selectedLineupTeam) return;
 
@@ -1622,7 +1718,6 @@ export default function App() {
     const uKey = currentUser?.email || 'local_user';
 
     try {
-      // 1. Mise à jour API Render
       await fetch(`${API_URL}/teams/${selectedLineupTeam.id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
@@ -1632,7 +1727,6 @@ export default function App() {
         })
       }).catch(() => console.log('Mode local actif'));
 
-      // 2. Mise à jour State React
       const updatedTeams = teams.map(t =>
         t.id === selectedLineupTeam.id
           ? { ...t, formation: currentFormation, lineup_ids: starterIds }
@@ -1641,8 +1735,6 @@ export default function App() {
 
       setTeams(updatedTeams);
       setSelectedLineupTeam(prev => ({ ...prev, formation: currentFormation, lineup_ids: starterIds }));
-
-      // 3. Persistance immédiate LocalStorage
       localStorage.setItem(`local_teams_${uKey}`, JSON.stringify(updatedTeams));
 
       showNotif(`✓ Composition de "${selectedLineupTeam.nom}" (${currentFormation}) enregistrée !`);
@@ -1882,7 +1974,7 @@ export default function App() {
     { id: 'classement', label: '🏆 Classement' },
     { id: 'matchs', label: '📅 Matchs' },
     { id: 'buteurs', label: '👟 Stats Joueurs' },
-    { id: 'transferts', label: '🔄 Transferts' }
+    { id: 'transferts', label: '🔄 Transferts & Prêts' }
   ];
 
   if (isAdmin) {
@@ -2195,7 +2287,6 @@ export default function App() {
                           </span>
                         </div>
 
-                        {/* SECTION SCORE ET ENTRÉES SANS FLÈCHES AVEC RECENTRAGE */}
                         <div className="flex items-center justify-center gap-2 sm:gap-3 shrink-0 my-2 sm:my-0">
                           <button
                             type="button"
@@ -2368,12 +2459,33 @@ export default function App() {
             <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl">
               <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-4">
                 <div>
-                  <h2 className="text-xl font-bold text-white flex items-center gap-2">🔄 Marché des Transferts</h2>
-                  <p className="text-xs text-slate-400 mt-1">16 joueurs min, 28 joueurs max par club.</p>
+                  <h2 className="text-xl font-bold text-white flex items-center gap-2">🔄 Marché des Transferts & Prêts</h2>
+                  <p className="text-xs text-slate-400 mt-1">16 joueurs min, 28 joueurs max par club. Les prêts durent 1 saison.</p>
                 </div>
               </div>
 
               <form onSubmit={handleTransferPlayer} className="space-y-5 max-w-2xl mt-4">
+                <div className="grid grid-cols-2 gap-3 bg-slate-950 p-2 rounded-xl border border-slate-800 mb-2">
+                  <button
+                    type="button"
+                    onClick={() => setTransferType('achat')}
+                    className={`py-2 text-xs font-extrabold rounded-lg transition-all ${
+                      transferType === 'achat' ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    🤝 Transfert Définitif
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setTransferType('pret')}
+                    className={`py-2 text-xs font-extrabold rounded-lg transition-all ${
+                      transferType === 'pret' ? 'bg-emerald-600 text-white shadow-md' : 'text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    📄 Prêt d'une Saison
+                  </button>
+                </div>
+
                 <div>
                   <label className="block text-xs font-semibold text-amber-400 uppercase tracking-wider mb-1.5">
                     1. Club de provenance
@@ -2393,7 +2505,7 @@ export default function App() {
 
                 <div>
                   <label className="block text-xs font-semibold text-indigo-400 uppercase tracking-wider mb-1.5">
-                    2. Joueur à transférer
+                    2. Joueur concerné
                   </label>
                   <select
                     value={transferPlayerId}
@@ -2404,7 +2516,7 @@ export default function App() {
                   >
                     <option value="">-- Choisir le joueur --</option>
                     {availablePlayersForTransfer.map((p) => (
-                      <option key={p.id} value={p.id}>#{p.numero || 10} {p.nom} - GEN: {p.general || 75}</option>
+                      <option key={p.id} value={p.id}>#{p.numero || 10} {p.nom} - GEN: {p.general || 75} ({p.poste})</option>
                     ))}
                   </select>
                 </div>
@@ -2428,40 +2540,54 @@ export default function App() {
                     </select>
                   </div>
 
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1.5">
-                      Montant du transfert (€)
-                    </label>
-                    <input
-                      type="number"
-                      step="500000"
-                      value={transferFee}
-                      onChange={(e) => setTransferFee(e.target.value)}
-                      disabled={!transferPlayerId}
-                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-sm text-white focus:outline-none"
-                      required
-                    />
-                  </div>
+                  {transferType === 'achat' ? (
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1.5">
+                        Montant du transfert (€)
+                      </label>
+                      <input
+                        type="number"
+                        step="500000"
+                        value={transferFee}
+                        onChange={(e) => setTransferFee(e.target.value)}
+                        disabled={!transferPlayerId}
+                        className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-sm text-white focus:outline-none"
+                        required
+                      />
+                    </div>
+                  ) : (
+                    <div className="flex flex-col justify-center">
+                      <label className="block text-xs font-semibold text-emerald-400 uppercase tracking-wider mb-1.5">
+                        Modalité de prêt
+                      </label>
+                      <div className="bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-xs text-emerald-400 font-bold">
+                        ✓ Prêt gratuit (Retour fin de saison)
+                      </div>
+                    </div>
+                  )}
                 </div>
 
                 <button
                   type="submit"
                   disabled={transferLoading || !transferFromTeamId || !transferPlayerId || !transferToTeamId}
-                  className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-3 rounded-xl text-sm transition-all cursor-pointer"
+                  className={`w-full text-white font-bold py-3 rounded-xl text-sm transition-all cursor-pointer shadow-lg ${
+                    transferType === 'pret' ? 'bg-emerald-600 hover:bg-emerald-500' : 'bg-indigo-600 hover:bg-indigo-500'
+                  }`}
                 >
-                  {transferLoading ? 'Transfert en cours...' : '🤝 Confirmer le Transfert'}
+                  {transferLoading ? 'Validation en cours...' : transferType === 'pret' ? '📄 Confirmer le Prêt' : '🤝 Confirmer le Transfert'}
                 </button>
               </form>
             </div>
 
             {transfers.length > 0 && (
               <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl">
-                <h3 className="text-lg font-bold text-white mb-4">📋 Historique des Transferts</h3>
+                <h3 className="text-lg font-bold text-white mb-4">📋 Historique des Mouvements</h3>
                 <div className="overflow-x-auto">
                   <table className="w-full text-left border-collapse">
                     <thead>
                       <tr className="border-b border-slate-800 text-slate-400 text-xs font-semibold uppercase">
                         <th className="py-3 px-4">Joueur</th>
+                        <th className="py-3 px-4">Type</th>
                         <th className="py-3 px-4">Ancien Club</th>
                         <th className="py-3 px-4">Nouveau Club</th>
                         <th className="py-3 px-4 text-right">Montant</th>
@@ -2469,12 +2595,21 @@ export default function App() {
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-800/60 text-sm">
-                      {transfers.slice(0, 15).map((t) => (
+                      {transfers.slice(0, 20).map((t) => (
                         <tr key={t.id} className="hover:bg-slate-800/30">
                           <td className="py-3.5 px-4 font-bold text-white">{t.players?.nom || 'Joueur inconnu'}</td>
+                          <td className="py-3.5 px-4">
+                            <span className={`text-[10px] font-black uppercase px-2 py-0.5 rounded-full border ${
+                              t.type === 'pret' ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' : 'bg-indigo-500/10 text-indigo-400 border-indigo-500/20'
+                            }`}>
+                              {t.type === 'pret' ? 'Prêt' : 'Transfert'}
+                            </span>
+                          </td>
                           <td className="py-3.5 px-4 text-rose-400 font-semibold">{t.old_team?.nom || '-'}</td>
                           <td className="py-3.5 px-4 text-emerald-400 font-semibold">{t.new_team?.nom || '-'}</td>
-                          <td className="py-3.5 px-4 text-right font-mono font-bold text-indigo-300">{formatMoney(t.fee)}</td>
+                          <td className="py-3.5 px-4 text-right font-mono font-bold text-indigo-300">
+                            {t.type === 'pret' ? 'Prêt gratuit' : formatMoney(t.fee)}
+                          </td>
                           <td className="py-3.5 px-4 text-center">
                             <button
                               type="button"
@@ -2642,7 +2777,7 @@ export default function App() {
                 <div>
                   <h3 className="text-lg font-bold text-white flex items-center gap-2">🔄 3. Gestion des Saisons</h3>
                   <p className="text-xs text-slate-400 mt-1 max-w-xl">
-                    Réinitialiser (🔄) remet votre partie locale à zéro. Lancer la saison suivante (🚀) conserve vos effectifs et transferts.
+                    Réinitialiser (🔄) remet votre partie locale à zéro. Lancer la saison suivante (🚀) conserve vos effectifs et rappelle les joueurs prêtés.
                   </p>
                 </div>
 
@@ -2668,15 +2803,19 @@ export default function App() {
         )}
       </main>
 
-      {/* MODALE MERCATO */}
+      {/* MODALE MERCATO (HIVER & ÉTÉ) */}
       {mercatoReport && (
         <div className="fixed inset-0 bg-black/85 backdrop-blur-md z-50 flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-800 rounded-3xl max-w-2xl w-full p-6 shadow-2xl relative max-h-[90vh] flex flex-col">
+          <div className="bg-slate-900 border border-slate-800 rounded-3xl max-w-3xl w-full p-6 shadow-2xl relative max-h-[90vh] flex flex-col">
             <button type="button" onClick={() => setMercatoReport(null)} className="absolute top-4 right-4 text-slate-400 hover:text-white font-bold text-xl cursor-pointer">✕</button>
             <div className="text-center mb-5 pb-3 border-b border-slate-800">
-              <div className="inline-block bg-indigo-600 text-white p-2.5 rounded-2xl text-xl mb-2">❄️</div>
-              <h3 className="text-xl font-black text-white">MERCATO D'HIVER EN DIRECT</h3>
-              <p className="text-xs text-indigo-400 font-semibold mt-0.5">3 Transferts officiels après la Journée {mercatoReport.journee}</p>
+              <div className="inline-block bg-indigo-600 text-white p-2.5 rounded-2xl text-xl mb-2">
+                {mercatoReport.isSummer ? '☀️' : '❄️'}
+              </div>
+              <h3 className="text-xl font-black text-white">{mercatoReport.title} EN DIRECT</h3>
+              <p className="text-xs text-indigo-400 font-semibold mt-0.5">
+                {mercatoReport.transfers.length} mouvements officiels • {mercatoReport.seasonLabel}
+              </p>
             </div>
 
             <div className="overflow-y-auto space-y-3 max-h-96 pr-1">
@@ -2688,6 +2827,11 @@ export default function App() {
                       <div className="flex items-center gap-2">
                         <p className="text-sm font-black text-white">{t.nom}</p>
                         <span className="text-[10px] bg-emerald-500/10 text-emerald-400 font-extrabold px-1.5 py-0.5 rounded border border-emerald-500/20 font-mono">{t.general} GEN</span>
+                        <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${
+                          t.type.includes('Prêt') ? 'bg-emerald-500/20 text-emerald-300' : 'bg-indigo-500/20 text-indigo-300'
+                        }`}>
+                          {t.type}
+                        </span>
                       </div>
                       <p className="text-[11px] text-slate-500 italic mt-0.5">{t.reason}</p>
                     </div>
@@ -2697,7 +2841,9 @@ export default function App() {
                     <span className="text-rose-400 font-bold text-xs">{t.oldTeam}</span>
                     <span className="text-slate-500">➜</span>
                     <span className="text-emerald-400 font-bold text-xs">{t.newTeam}</span>
-                    <span className="text-xs font-black font-mono px-2.5 py-1 rounded-xl bg-indigo-500/10 text-indigo-300">{formatMoney(t.fee)}</span>
+                    <span className="text-xs font-black font-mono px-2.5 py-1 rounded-xl bg-indigo-500/10 text-indigo-300">
+                      {t.fee > 0 ? formatMoney(t.fee) : 'Prêt gratuit'}
+                    </span>
                   </div>
                 </div>
               ))}
@@ -2752,7 +2898,7 @@ export default function App() {
         </div>
       )}
 
-      {/* MODALE TACTIQUE */}
+      {/* MODALE TACTIQUE AVEC NETTOYAGE DES DOUBLONS */}
       {selectedLineupTeam && (
         <div className="fixed inset-0 bg-black/85 backdrop-blur-md z-50 flex items-center justify-center p-2 sm:p-4">
           <div className="bg-slate-900 border border-slate-800 rounded-3xl max-w-lg w-full p-4 sm:p-6 shadow-2xl relative max-h-[96vh] flex flex-col overflow-y-auto">
@@ -2834,7 +2980,6 @@ export default function App() {
               </button>
             </div>
 
-            {/* BANC AVEC POSTES ET NUMÉROS BIEN VISIBLES */}
             <div className="mt-4 bg-slate-950 p-3 rounded-2xl border border-slate-800">
               <h4 className="text-[11px] font-extrabold uppercase tracking-wider text-slate-400 mb-2">🪑 Banc des Remplaçants ({teamBenchPlayers.length})</h4>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-40 overflow-y-auto pr-1">
@@ -2907,7 +3052,9 @@ export default function App() {
                   {teamRoster.map((j) => (
                     <tr key={j.id} className="hover:bg-slate-800/30">
                       <td className="py-3 px-3 font-mono font-bold text-amber-400">#{j.numero || 10}</td>
-                      <td className="py-3 px-3 font-semibold text-white">{j.nom}</td>
+                      <td className="py-3 px-3 font-semibold text-white">
+                        {j.nom} {j.is_loan && <span className="text-[10px] bg-emerald-500/20 text-emerald-300 px-1 rounded ml-1 font-bold">En prêt</span>}
+                      </td>
                       <td className="py-3 px-3 text-xs text-indigo-300 font-bold">{j.poste || 'N/A'}</td>
                       <td className="py-3 px-3 text-center font-extrabold text-emerald-400">{j.general || 75}</td>
                       <td className="py-3 px-3 text-center text-slate-300 font-medium">{j.age || '-'} ans</td>
