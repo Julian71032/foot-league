@@ -122,7 +122,6 @@ function compressImage(file, maxSize = 128) {
   });
 }
 
-// Fonction de remplacement chirurgical poste pour poste
 function patchLineupOnPlayerDeparture(team, departingPlayer, allPlayersList) {
   let lineIds = team.lineup_ids;
   if (typeof lineIds === 'string') {
@@ -138,12 +137,10 @@ function patchLineupOnPlayerDeparture(team, departingPlayer, allPlayersList) {
 
   const depCat = getPositionCategory(departingPlayer.poste);
 
-  // Recherche du meilleur joueur du banc de la même ligne
   let candidate = bench
     .filter(p => getPositionCategory(p.poste) === depCat)
     .sort((a, b) => (b.general || 0) - (a.general || 0))[0];
 
-  // Si aucun joueur de la même ligne, on prend le meilleur joueur de champ disponible
   if (!candidate && depCat !== 'GK') {
     candidate = bench
       .filter(p => p.poste !== 'G')
@@ -544,7 +541,6 @@ export default function App() {
       });
   };
 
-  // Récupération stricte du 11 titulaire sans réorganisation automatique intempestive
   function getTeamStartersAndBench(team) {
     if (!team) return { starters: [], bench: [] };
     const all = getSortedTeamPlayers(team.id);
@@ -565,7 +561,6 @@ export default function App() {
       }
     }
 
-    // Si aucune composition n'a jamais été enregistrée, on initialise une première fois
     return { starters: all.slice(0, 11), bench: all.slice(11) };
   }
 
@@ -652,7 +647,6 @@ export default function App() {
           };
         }
 
-        // Remplacement chirurgical dans l'équipe d'origine sans toucher aux autres
         const oldTeamIdx = updatedTeamsList.findIndex(t => String(t.id) === String(originTeamId));
         if (oldTeamIdx !== -1) {
           const patchedIds = patchLineupOnPlayerDeparture(updatedTeamsList[oldTeamIdx], player, updatedPlayers);
@@ -804,7 +798,6 @@ export default function App() {
         else if (perfScore <= -1.5) delta = -1;
       }
 
-      // Bridage cumulatif [-3, +3] sur toute la saison
       const currentCumulative = currentSeasonMap[player.id] || 0;
       let allowedDelta = 0;
 
@@ -1419,7 +1412,6 @@ export default function App() {
     }
   }
 
-  // Transfert manuel avec ajustement propre du 11
   async function handleTransferPlayer(e) {
     e.preventDefault();
     if (!transferFromTeamId || !transferPlayerId || !transferToTeamId) {
@@ -1468,7 +1460,6 @@ export default function App() {
       return p;
     });
 
-    // Remplacement chirurgical dans l'ancien club
     const updatedTeamsList = teams.map(t => {
       if (String(t.id) === String(transferFromTeamId)) {
         const patchedIds = patchLineupOnPlayerDeparture(t, selectedPlayer, updatedPlayers);
@@ -1525,7 +1516,6 @@ export default function App() {
     showNotif(`Le joueur "${playerNom}" a été supprimé.`);
   }
 
-  // Mise à jour de joueur sans toucher à l'ordonnancement de la compo
   async function handleUpdatePlayer(e) {
     e.preventDefault();
     if (!editingPlayer) return;
@@ -1925,10 +1915,12 @@ export default function App() {
   }
 
   const formationConfig = FORMATIONS[currentFormation] || FORMATIONS['4-3-3'];
-  const pitchGK = teamLineupPlayers.slice(0, 1);
-  const pitchDEF = teamLineupPlayers.slice(1, 1 + formationConfig.def);
-  const pitchMID = teamLineupPlayers.slice(1 + formationConfig.def, 1 + formationConfig.def + formationConfig.mid);
-  const pitchATT = teamLineupPlayers.slice(1 + formationConfig.def + formationConfig.mid, 11);
+
+  // Découpage avec index réels exacts
+  const pitchGK = [{ p: teamLineupPlayers[0], idx: 0 }];
+  const pitchDEF = teamLineupPlayers.slice(1, 1 + formationConfig.def).map((p, i) => ({ p, idx: 1 + i }));
+  const pitchMID = teamLineupPlayers.slice(1 + formationConfig.def, 1 + formationConfig.def + formationConfig.mid).map((p, i) => ({ p, idx: 1 + formationConfig.def + i }));
+  const pitchATT = teamLineupPlayers.slice(1 + formationConfig.def + formationConfig.mid, 11).map((p, i) => ({ p, idx: 1 + formationConfig.def + formationConfig.mid + i }));
 
   const pitchAvgGen = teamLineupPlayers.length > 0
     ? Math.round(teamLineupPlayers.reduce((acc, p) => acc + (p?.general || 75), 0) / teamLineupPlayers.length)
@@ -2755,7 +2747,7 @@ export default function App() {
                             <button
                               type="button"
                               onClick={() => handleCancelTransfer(t)}
-                              className="bg-rose-500/10 hover:bg-rose-600 text-rose-400 hover:text-white border border-rose-500/30 text-xs font-bold px-3 py-1.5 rounded-lg transition-all cursor-pointer"
+                              className="bg-rose-500/10 hover:bg-rose-600 text-rose-400 hover:text-white border border-rose-500/30 text-xs font-bold px-3.5 py-2 rounded-xl transition-all cursor-pointer"
                             >
                               ↩ Annuler
                             </button>
@@ -3085,27 +3077,31 @@ export default function App() {
               <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-28 h-28 border-2 border-white/25 rounded-full pointer-events-none"></div>
               <div className="absolute top-1/2 left-0 right-0 h-0.5 bg-white/25 pointer-events-none"></div>
 
+              {/* Ligne Attaque */}
               <div className="relative z-10 flex justify-around items-center pt-2">
-                {pitchATT.map((p, idx) => (
-                  <PitchPlayerSlot key={p?.id || idx} player={p} globalIndex={1 + formationConfig.def + formationConfig.mid + idx} />
+                {pitchATT.map((slot) => (
+                  <PitchPlayerSlot key={slot.p?.id || slot.idx} player={slot.p} globalIndex={slot.idx} />
                 ))}
               </div>
 
+              {/* Ligne Milieu */}
               <div className="relative z-10 flex justify-around items-center py-2">
-                {pitchMID.map((p, idx) => (
-                  <PitchPlayerSlot key={p?.id || idx} player={p} globalIndex={1 + formationConfig.def + idx} />
+                {pitchMID.map((slot) => (
+                  <PitchPlayerSlot key={slot.p?.id || slot.idx} player={slot.p} globalIndex={slot.idx} />
                 ))}
               </div>
 
+              {/* Ligne Défense */}
               <div className="relative z-10 flex justify-around items-center py-2">
-                {pitchDEF.map((p, idx) => (
-                  <PitchPlayerSlot key={p?.id || idx} player={p} globalIndex={1 + idx} />
+                {pitchDEF.map((slot) => (
+                  <PitchPlayerSlot key={slot.p?.id || slot.idx} player={slot.p} globalIndex={slot.idx} />
                 ))}
               </div>
 
+              {/* Gardien */}
               <div className="relative z-10 flex justify-center items-center pb-2">
-                {pitchGK.map((p) => (
-                  <PitchPlayerSlot key={p?.id || 'gk'} player={p} globalIndex={0} />
+                {pitchGK.map((slot) => (
+                  <PitchPlayerSlot key={slot.p?.id || slot.idx} player={slot.p} globalIndex={slot.idx} />
                 ))}
               </div>
             </div>
