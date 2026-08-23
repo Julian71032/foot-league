@@ -1584,13 +1584,16 @@ export default function App() {
     setLogoUpdating(false);
   }
 
-  async function openMatchDetails(match) {
+ async function openMatchDetails(match) {
     const dom = teams.find(t => String(t.id) === String(match.equipe_domicile_id)) || { id: match.equipe_domicile_id, nom: 'Club Domicile', logo_url: '' };
     const ext = teams.find(t => String(t.id) === String(match.equipe_exterieur_id)) || { id: match.equipe_exterieur_id, nom: 'Club Extérieur', logo_url: '' };
 
     setSelectedMatch({ ...match, dom, ext });
 
-    const filtered = matchEvents.filter(ev => ev.match_id === match.id);
+    const filtered = matchEvents
+      .filter(ev => ev.match_id === match.id)
+      .sort((a, b) => (parseInt(a.minute, 10) || 0) - (parseInt(b.minute, 10) || 0));
+
     const enriched = filtered.map(ev => {
       const pObj = players.find(p => String(p.id) === String(ev.player_id));
       return {
