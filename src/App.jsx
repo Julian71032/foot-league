@@ -254,6 +254,7 @@ export default function App() {
     }
   }, [currentUser]);
 
+  // Persistance continue des données dans le localStorage
   useEffect(() => {
     if (!loading && currentUser && teams.length > 0) {
       const uKey = currentUser.email;
@@ -443,6 +444,7 @@ export default function App() {
     showNotif(`Calendrier généré : ${newFixtures.length} matchs programmés pour la Saison ${s} !`);
   }
 
+  // --- CHARGEMENT ROBUSTE SANS ÉCRASEMENT DES DONNÉES LOCALES ---
   async function fetchUserData(userEmail) {
     setLoading(true);
     try {
@@ -462,24 +464,29 @@ export default function App() {
         localTransfers = JSON.parse(localStorage.getItem(`local_transfers_${uKey}`));
         localEvolutions = JSON.parse(localStorage.getItem(`local_evolutions_${uKey}`));
       } catch (e) {
-        console.error("Cache local ignoré.");
+        console.error("Cache local corrompu.");
       }
 
       let currentTeams = Array.isArray(localTeams) ? localTeams : [];
       let currentPlayers = Array.isArray(localPlayers) ? localPlayers : [];
       let currentMatches = Array.isArray(localMatches) ? localMatches : [];
       let currentEvents = Array.isArray(localEvents) ? localEvents : [];
+      let currentTransfers = Array.isArray(localTransfers) ? localTransfers : [];
       let currentEvolutions = (localEvolutions && typeof localEvolutions === 'object') ? localEvolutions : {};
 
+      // Si aucune donnée n'existe en local, on interroge l'API
       if (currentTeams.length === 0 || currentPlayers.length === 0) {
         const [resTeams, resPlayers] = await Promise.all([
           fetch(`${API_URL}/teams`).then(r => r.json()).catch(() => []),
           fetch(`${API_URL}/players`).then(r => r.json()).catch(() => [])
         ]);
 
-        currentTeams = Array.isArray(resTeams) ? resTeams : [];
-        currentPlayers = Array.isArray(resPlayers) ? resPlayers : [];
-        currentMatches = buildRoundRobinFixtures(currentTeams, uKey, 1);
+        currentTeams = Array.isArray(resTeams) && resTeams.length > 0 ? resTeams : currentTeams;
+        currentPlayers = Array.isArray(resPlayers) && resPlayers.length > 0 ? resPlayers : currentPlayers;
+
+        if (currentMatches.length === 0 && currentTeams.length >= 2) {
+          currentMatches = buildRoundRobinFixtures(currentTeams, uKey, 1);
+        }
 
         try {
           localStorage.setItem(`local_teams_${uKey}`, JSON.stringify(currentTeams));
@@ -490,18 +497,11 @@ export default function App() {
         } catch(e) {}
       }
 
-      if (currentMatches.length === 0 && currentTeams.length >= 2) {
-        currentMatches = buildRoundRobinFixtures(currentTeams, uKey, 1);
-        try {
-          localStorage.setItem(`local_matches_${uKey}`, JSON.stringify(currentMatches));
-        } catch(e) {}
-      }
-
       setTeams(currentTeams);
       setPlayers(currentPlayers);
       setMatches(currentMatches);
       setMatchEvents(currentEvents);
-      setTransfers(localTransfers && Array.isArray(localTransfers) ? localTransfers : []);
+      setTransfers(currentTransfers);
       setSeasonEvolutions(currentEvolutions);
 
       const maxS = currentMatches.length > 0 ? Math.max(...currentMatches.map(m => m.saison || 1), 1) : 1;
@@ -519,6 +519,8 @@ export default function App() {
         );
         if (firstUnfinished) {
           setJourneeFilter(firstUnfinished.journee || 1);
+        } else {
+          setJourneeFilter(1);
         }
       }
     } catch (err) {
@@ -563,6 +565,7 @@ export default function App() {
     return { starters: all.slice(0, 11), bench: all.slice(11) };
   }
 
+  // Mercato automatisé : Min 18 en hiver, 17 en été, Max 28, et doublure obligatoire au poste
   async function triggerAutomatedMercato(journeeNum, currentSeasonNum, maxTransfers = 4, isSummer = false) {
     if (!teams || teams.length < 2 || !players || players.length < 10) return;
 
@@ -587,6 +590,7 @@ export default function App() {
     const availablePool = [...players].sort(() => Math.random() - 0.5);
     const completedTransfers = [];
     const usedPlayerIds = new Set();
+    const minSellerQuota = isSummer ? 17 : 18;
 
     for (const player of availablePool) {
       if (completedTransfers.length >= maxTransfers) break;
@@ -599,7 +603,7 @@ export default function App() {
       const originTeam = teams.find(t => String(t.id) === String(originTeamId));
       if (!originTeam) continue;
 
-      if ((teamCounts[originTeamId] || 0) <= 18) continue;
+      if ((teamCounts[originTeamId] || 0) <= minSellerQuota) continue;
       if ((teamPosCounts[originTeamId]?.[playerPos] || 0) <= 1) continue;
 
       let destinationTeam = null;
@@ -912,462 +916,6 @@ export default function App() {
         seasonLabel: getSeasonLabel(currentSeasonNum),
         players: changedPlayers.sort((a, b) => b.delta - a.delta)
       });
-    }
-  }
-
-  function simulateGoals(lambda) {
-    let L = Math.exp(-lambda);
-    let k = 0;
-    let p = 1;
-    do {
-      k++;
-      p *= Math.random();
-    } while (p > L);
-    return Math.max(0, k - 1);
-  }
-
-  function pickGoalScorer(activePlayers) {
-    if (!activePlayers || activePlayers.length === 0) return null;
-    
-    const outfieldPlayers = activePlayers.filter(p => (p.poste || '').trim().toUpperCase() !== 'G');
-    if (outfieldPlayers.length === 0) return null;
-
-    const weighted = outfieldPlayers.map(p => {
-      let w = 1;
-      const pos = p.poste || 'MC';
-      if (['BU', 'AT'].includes(pos)) w = 14;
-      else if (['AD', 'AG', 'SA'].includes(pos)) w = 10;
-      else if (['MOC', 'MD', 'MG'].includes(pos)) w = 5;
-      else if (['MC', 'MDC'].includes(pos)) w = 2.5;
-      else if (['DD', 'DG', 'DLD', 'DLG', 'DC'].includes(pos)) w = 1;
-
-      w *= Math.pow((p.general || 75) / 75, 1.5);
-      return { player: p, weight: w };
-    });
-
-    const totalWeight = weighted.reduce((acc, item) => acc + item.weight, 0);
-    let randomVal = Math.random() * totalWeight;
-    for (const item of weighted) {
-      if (randomVal < item.weight) return item.player;
-      randomVal -= item.weight;
-    }
-    return outfieldPlayers[0];
-  }
-
-  function pickAssister(activePlayers, scorer) {
-    if (!activePlayers || activePlayers.length < 2) return null;
-    const candidates = activePlayers.filter(p => p.id !== scorer?.id && (p.poste || '').trim().toUpperCase() !== 'G');
-    if (candidates.length === 0) return null;
-
-    const weighted = candidates.map(p => {
-      let w = 1;
-      const pos = p.poste || 'MC';
-      if (['MOC', 'MC', 'MD', 'MG'].includes(pos)) w = 12;
-      else if (['AD', 'AG', 'SA'].includes(pos)) w = 10;
-      else if (['DD', 'DG', 'DLD', 'DLG'].includes(pos)) w = 6;
-      else if (['BU', 'AT'].includes(pos)) w = 4;
-      else if (['MDC', 'DC'].includes(pos)) w = 2;
-
-      w *= (p.general || 75) / 75;
-      return { player: p, weight: w };
-    });
-
-    const totalWeight = weighted.reduce((acc, item) => acc + item.weight, 0);
-    let randomVal = Math.random() * totalWeight;
-    for (const item of weighted) {
-      if (randomVal < item.weight) return item.player;
-      randomVal -= item.weight;
-    }
-    return candidates[0];
-  }
-
-  function pickCardPlayer(activePlayers) {
-    if (!activePlayers || activePlayers.length === 0) return null;
-    const weighted = activePlayers.map(p => {
-      let w = 1;
-      const pos = p.poste || 'MC';
-      if (['MDC', 'DC'].includes(pos)) w = 8;
-      else if (['DD', 'DG', 'DLD', 'DLG', 'MC'].includes(pos)) w = 5;
-      else if (['MOC', 'MD', 'MG'].includes(pos)) w = 3;
-      else w = 1;
-      return { player: p, weight: w };
-    });
-    const totalWeight = weighted.reduce((acc, item) => acc + item.weight, 0);
-    let randomVal = Math.random() * totalWeight;
-    for (const item of weighted) {
-      if (randomVal < item.weight) return item.player;
-      randomVal -= item.weight;
-    }
-    return activePlayers[0];
-  }
-
-  function pickInjuredPlayer(activePlayers) {
-    if (!activePlayers || activePlayers.length === 0) return null;
-    return activePlayers[Math.floor(Math.random() * activePlayers.length)];
-  }
-
-  function handleRollDice(matchId) {
-    const diceDom = Math.floor(Math.random() * 7);
-    const diceExt = Math.floor(Math.random() * 7);
-
-    setScoresInput(prev => ({
-      ...prev,
-      [matchId]: { dom: diceDom, ext: diceExt }
-    }));
-    showNotif(`🎲 Lancer de dé : ${diceDom} - ${diceExt}`);
-  }
-
-  function generateMatchEventsForCustomScore(m, domTeam, extTeam, scoreDom, scoreExt, seasonNum, userId) {
-    const { starters: domStarters, bench: domBench } = getTeamStartersAndBench(domTeam);
-    const { starters: extStarters, bench: extBench } = getTeamStartersAndBench(extTeam);
-
-    const matchEventsList = [];
-
-    const domSubsCount = Math.min(domBench.length, Math.floor(Math.random() * 4) + 1);
-    const domSubstitutions = [];
-    const availableDomBench = [...domBench];
-    const currentDomActive = [...domStarters];
-
-    for (let s = 0; s < domSubsCount; s++) {
-      if (availableDomBench.length === 0) break;
-      const subMinute = Math.floor(Math.random() * 40) + 46;
-      
-      const outCandidates = currentDomActive.filter(p => p.poste !== 'G');
-      if (outCandidates.length === 0) break;
-      const playerOut = outCandidates[Math.floor(Math.random() * outCandidates.length)];
-      const outCat = getPositionCategory(playerOut.poste);
-
-      let inIdx = availableDomBench.findIndex(p => getPositionCategory(p.poste) === outCat);
-      if (inIdx === -1) {
-        inIdx = availableDomBench.findIndex(p => p.poste !== 'G');
-      }
-      if (inIdx === -1) break;
-
-      const playerIn = availableDomBench.splice(inIdx, 1)[0];
-      const outIdx = currentDomActive.findIndex(p => p.id === playerOut.id);
-      if (outIdx !== -1) currentDomActive[outIdx] = playerIn;
-
-      domSubstitutions.push({ minute: subMinute, playerIn, playerOut });
-      matchEventsList.push({
-        match_id: m.id,
-        player_id: playerIn.id,
-        type: 'remplacement',
-        detail: `entre pour ${playerOut.nom}`,
-        minute: subMinute,
-        journee: m.journee,
-        saison: seasonNum,
-        user_id: userId
-      });
-    }
-
-    const extSubsCount = Math.min(extBench.length, Math.floor(Math.random() * 4) + 1);
-    const extSubstitutions = [];
-    const availableExtBench = [...extBench];
-    const currentExtActive = [...extStarters];
-
-    for (let s = 0; s < extSubsCount; s++) {
-      if (availableExtBench.length === 0) break;
-      const subMinute = Math.floor(Math.random() * 40) + 46;
-      
-      const outCandidates = currentExtActive.filter(p => p.poste !== 'G');
-      if (outCandidates.length === 0) break;
-      const playerOut = outCandidates[Math.floor(Math.random() * outCandidates.length)];
-      const outCat = getPositionCategory(playerOut.poste);
-
-      let inIdx = availableExtBench.findIndex(p => getPositionCategory(p.poste) === outCat);
-      if (inIdx === -1) {
-        inIdx = availableExtBench.findIndex(p => p.poste !== 'G');
-      }
-      if (inIdx === -1) break;
-
-      const playerIn = availableExtBench.splice(inIdx, 1)[0];
-      const outIdx = currentExtActive.findIndex(p => p.id === playerOut.id);
-      if (outIdx !== -1) currentExtActive[outIdx] = playerIn;
-
-      extSubstitutions.push({ minute: subMinute, playerIn, playerOut });
-      matchEventsList.push({
-        match_id: m.id,
-        player_id: playerIn.id,
-        type: 'remplacement',
-        detail: `entre pour ${playerOut.nom}`,
-        minute: subMinute,
-        journee: m.journee,
-        saison: seasonNum,
-        user_id: userId
-      });
-    }
-
-    const getActivePlayersAtMinute = (starters, substitutions, minute) => {
-      let active = [...starters];
-      substitutions.forEach(sub => {
-        if (minute >= sub.minute) {
-          const idx = active.findIndex(p => p.id === sub.playerOut.id);
-          if (idx !== -1) active[idx] = sub.playerIn;
-        }
-      });
-      return active;
-    };
-
-    for (let i = 0; i < scoreDom; i++) {
-      const minute = Math.floor(Math.random() * 90) + 1;
-      const activeAtMin = getActivePlayersAtMinute(domStarters, domSubstitutions, minute);
-      const scorer = pickGoalScorer(activeAtMin);
-      if (scorer) {
-        matchEventsList.push({ match_id: m.id, player_id: scorer.id, type: 'but', minute, journee: m.journee, saison: seasonNum, user_id: userId });
-        if (Math.random() < 0.75) {
-          const assister = pickAssister(activeAtMin, scorer);
-          if (assister) matchEventsList.push({ match_id: m.id, player_id: assister.id, type: 'passe', minute, journee: m.journee, saison: seasonNum, user_id: userId });
-        }
-      }
-    }
-
-    for (let i = 0; i < scoreExt; i++) {
-      const minute = Math.floor(Math.random() * 90) + 1;
-      const activeAtMin = getActivePlayersAtMinute(extStarters, extSubstitutions, minute);
-      const scorer = pickGoalScorer(activeAtMin);
-      if (scorer) {
-        matchEventsList.push({ match_id: m.id, player_id: scorer.id, type: 'but', minute, journee: m.journee, saison: seasonNum, user_id: userId });
-        if (Math.random() < 0.75) {
-          const assister = pickAssister(extStarters, scorer);
-          if (assister) matchEventsList.push({ match_id: m.id, player_id: assister.id, type: 'passe', minute, journee: m.journee, saison: seasonNum, user_id: userId });
-        }
-      }
-    }
-
-    const numYellowDom = Math.random() < 0.65 ? Math.floor(Math.random() * 3) + 1 : 0;
-    for (let y = 0; y < numYellowDom; y++) {
-      const minute = Math.floor(Math.random() * 88) + 2;
-      const carded = pickCardPlayer(getActivePlayersAtMinute(domStarters, domSubstitutions, minute));
-      if (carded) matchEventsList.push({ match_id: m.id, player_id: carded.id, type: 'carton_jaune', minute, journee: m.journee, saison: seasonNum, user_id: userId });
-    }
-
-    const numYellowExt = Math.random() < 0.65 ? Math.floor(Math.random() * 3) + 1 : 0;
-    for (let y = 0; y < numYellowExt; y++) {
-      const minute = Math.floor(Math.random() * 88) + 2;
-      const carded = pickCardPlayer(getActivePlayersAtMinute(extStarters, extSubstitutions, minute));
-      if (carded) matchEventsList.push({ match_id: m.id, player_id: carded.id, type: 'carton_jaune', minute, journee: m.journee, saison: seasonNum, user_id: userId });
-    }
-
-    if (Math.random() < 0.035) {
-      const minute = Math.floor(Math.random() * 80) + 10;
-      const cardedRed = pickCardPlayer(getActivePlayersAtMinute(domStarters, domSubstitutions, minute));
-      if (cardedRed) {
-        matchEventsList.push({ match_id: m.id, player_id: cardedRed.id, type: 'carton_rouge', minute, journee: m.journee, saison: seasonNum, user_id: userId });
-      }
-    }
-
-    if (Math.random() < 0.035) {
-      const minute = Math.floor(Math.random() * 80) + 10;
-      const cardedRed = pickCardPlayer(getActivePlayersAtMinute(extStarters, extSubstitutions, minute));
-      if (cardedRed) {
-        matchEventsList.push({ match_id: m.id, player_id: cardedRed.id, type: 'carton_rouge', minute, journee: m.journee, saison: seasonNum, user_id: userId });
-      }
-    }
-
-    if (Math.random() < 0.08) {
-      const minute = Math.floor(Math.random() * 85) + 5;
-      const injured = pickInjuredPlayer(getActivePlayersAtMinute(domStarters, domSubstitutions, minute));
-      if (injured) {
-        const duration = generateInjuryDuration();
-        matchEventsList.push({
-          match_id: m.id,
-          player_id: injured.id,
-          type: 'blessure',
-          detail: duration.label,
-          duration_matches: duration.matches,
-          minute,
-          journee: m.journee,
-          saison: seasonNum,
-          user_id: userId
-        });
-      }
-    }
-
-    if (Math.random() < 0.08) {
-      const minute = Math.floor(Math.random() * 85) + 5;
-      const injured = pickInjuredPlayer(getActivePlayersAtMinute(extStarters, extSubstitutions, minute));
-      if (injured) {
-        const duration = generateInjuryDuration();
-        matchEventsList.push({
-          match_id: m.id,
-          player_id: injured.id,
-          type: 'blessure',
-          detail: duration.label,
-          duration_matches: duration.matches,
-          minute,
-          journee: m.journee,
-          saison: seasonNum,
-          user_id: userId
-        });
-      }
-    }
-
-    return matchEventsList;
-  }
-
-  function simulateSingleMatchWithSubs(m, domTeam, extTeam, seasonNum, userId) {
-    const { starters: domStarters } = getTeamStartersAndBench(domTeam);
-    const { starters: extStarters } = getTeamStartersAndBench(extTeam);
-
-    const domGen = domStarters.length > 0 ? domStarters.reduce((acc, p) => acc + (p.general || 75), 0) / domStarters.length : 75;
-    const extGen = extStarters.length > 0 ? extStarters.reduce((acc, p) => acc + (p.general || 75), 0) / extStarters.length : 75;
-
-    const diff = (domGen + 1.5) - extGen;
-    const domLambda = Math.max(0.3, Math.min(4.5, 1.45 + (diff * 0.12)));
-    const extLambda = Math.max(0.2, Math.min(4.0, 1.10 - (diff * 0.10)));
-
-    const scoreDom = simulateGoals(domLambda);
-    const scoreExt = simulateGoals(extLambda);
-
-    const events = generateMatchEventsForCustomScore(m, domTeam, extTeam, scoreDom, scoreExt, seasonNum, userId);
-
-    return { scoreDom, scoreExt, events };
-  }
-
-  async function handleSimulateJournee() {
-    const currentJourneeMatches = seasonMatches.filter(m => m.journee === parseInt(journeeFilter, 10));
-    if (currentJourneeMatches.length === 0) {
-      alert("Aucun match à simuler pour cette journée.");
-      return;
-    }
-
-    const unplayedCount = currentJourneeMatches.filter(m => m.statut !== 'terminé').length;
-    const confirmText = unplayedCount === 0
-      ? `Tous les matchs de la Journée ${journeeFilter} sont déjà joués. Voulez-vous re-simuler cette journée ?`
-      : `Voulez-vous simuler automatiquement les ${currentJourneeMatches.length} matchs de la Journée ${journeeFilter} ?`;
-
-    if (!window.confirm(confirmText)) return;
-
-    setSimulating(true);
-
-    try {
-      const newEventsAll = [];
-      const updatedMatches = [...matches];
-      const uKey = currentUser?.email || 'local_user';
-
-      for (const m of currentJourneeMatches) {
-        const domTeam = teams.find(t => String(t.id) === String(m.equipe_domicile_id)) || { id: m.equipe_domicile_id, nom: 'Club Dom' };
-        const extTeam = teams.find(t => String(t.id) === String(m.equipe_exterieur_id)) || { id: m.equipe_exterieur_id, nom: 'Club Ext' };
-        const simResult = simulateSingleMatchWithSubs(m, domTeam, extTeam, m.saison || 1, uKey);
-
-        const mIdx = updatedMatches.findIndex(matchItem => matchItem.id === m.id);
-        if (mIdx !== -1) {
-          updatedMatches[mIdx] = {
-            ...updatedMatches[mIdx],
-            score_domicile: simResult.scoreDom,
-            score_exterieur: simResult.scoreExt,
-            statut: 'terminé'
-          };
-        }
-
-        newEventsAll.push(...simResult.events);
-      }
-
-      const cleanEvents = matchEvents.filter(e => !currentJourneeMatches.some(m => m.id === e.match_id));
-      const nextEvents = [...cleanEvents, ...newEventsAll];
-
-      setMatches(updatedMatches);
-      setMatchEvents(nextEvents);
-
-      const currentJ = parseInt(journeeFilter, 10);
-      const currentS = parseInt(seasonFilter, 10);
-
-      localStorage.setItem(`local_season_${uKey}`, currentS);
-      localStorage.setItem(`local_journee_${uKey}`, currentJ);
-
-      showNotif(`Journée ${journeeFilter} simulée avec succès !`);
-
-      if (currentJ >= 19 && currentJ <= 23) {
-        await triggerAutomatedMercato(currentJ, currentS, 4, false);
-      }
-      if (currentJ === maxJourneesCount) {
-        await triggerAutomatedMercato(currentJ, currentS, 15, true);
-      }
-      if (currentJ % 4 === 0) {
-        await evaluateAndApplyPlayerEvolutions(currentJ, currentS, updatedMatches, nextEvents);
-      }
-    } catch (err) {
-      alert(`Erreur de simulation : ${err.message}`);
-    }
-
-    setSimulating(false);
-  }
-
-  // --- PASSAGE À LA SAISON SUIVANTE (+1 AN D'ÂGE POUR TOUS LES JOUEURS) ---
-  async function handleStartNewSeason(isNextSeason = false) {
-    if (!teams || teams.length < 2) {
-      alert(`Erreur : Il vous faut au moins 2 équipes pour générer un calendrier.`);
-      return;
-    }
-
-    const currentMaxSeason = matches.length > 0 ? Math.max(...matches.map(m => m.saison || 1), 1) : 1;
-    const targetSeason = isNextSeason ? currentMaxSeason + 1 : 1;
-    const seasonLabel = getSeasonLabel(targetSeason);
-    const totalJournees = (teams.length % 2 === 0 ? teams.length - 1 : teams.length) * 2;
-    const uKey = currentUser?.email || 'local_user';
-
-    const confirmMsg = isNextSeason
-      ? `Voulez-vous lancer la ${seasonLabel} ?\n\n- Vous conservez vos transferts et évolutions actuels.\n- Tous les joueurs prennent +1 an d'âge.\n- Les joueurs prêtés retournent dans leur club d'origine.\n- ${totalJournees} Journées programmées.`
-      : `Voulez-vous RÉINITIALISER complètement votre tournoi (Saison 1) ?\n\n- Tous les joueurs retrouveront leur GÉNÉRAL DE DÉPART et leur club initial.`;
-
-    if (!window.confirm(confirmMsg)) return;
-
-    try {
-      if (!isNextSeason) {
-        localStorage.removeItem(`local_teams_${uKey}`);
-        localStorage.removeItem(`local_players_${uKey}`);
-        localStorage.removeItem(`local_matches_${uKey}`);
-        localStorage.removeItem(`local_events_${uKey}`);
-        localStorage.removeItem(`local_transfers_${uKey}`);
-        localStorage.removeItem(`local_season_${uKey}`);
-        localStorage.removeItem(`local_journee_${uKey}`);
-        localStorage.removeItem(`local_evolutions_${uKey}`);
-        await fetchUserData(uKey);
-        return;
-      }
-
-      // Incrémentation de l'âge (+1 an) et retour des prêts
-      const cleanedPlayers = players.map(p => {
-        const newAge = (p.age || 24) + 1;
-        const currentGen = p.general || 75;
-        const newVal = calculateMarketValue(currentGen, newAge);
-
-        if (p.is_loan && p.loan_parent_id) {
-          const originalTeam = teams.find(t => String(t.id) === String(p.loan_parent_id));
-          return {
-            ...p,
-            age: newAge,
-            valeur_marchande: newVal,
-            equipe_id: p.loan_parent_id,
-            teams: originalTeam,
-            is_loan: false,
-            loan_parent_id: null
-          };
-        }
-        return {
-          ...p,
-          age: newAge,
-          valeur_marchande: newVal
-        };
-      });
-
-      setPlayers(cleanedPlayers);
-
-      const fixtures = buildRoundRobinFixtures(teams, uKey, targetSeason);
-      const remainingMatches = matches.filter(m => (m.saison || 1) !== targetSeason);
-      setMatches([...remainingMatches, ...fixtures]);
-
-      showNotif(`${seasonLabel} lancée ! +1 an pour tous les joueurs & retour des prêts.`);
-
-      setSeasonFilter(targetSeason);
-      setJourneeFilter(1);
-      setSeasonEvolutions({});
-
-      localStorage.setItem(`local_season_${uKey}`, targetSeason);
-      localStorage.setItem(`local_journee_${uKey}`, 1);
-      localStorage.setItem(`local_evolutions_${uKey}`, JSON.stringify({}));
-    } catch (err) {
-      alert(`Erreur génération : ${err.message}`);
     }
   }
 
@@ -1700,8 +1248,9 @@ export default function App() {
         if (currentJ >= 19 && currentJ <= 23) {
           await triggerAutomatedMercato(currentJ, currentS, 4, false);
         }
-        if (currentJ === maxJourneesCount) {
-          await triggerAutomatedMercato(currentJ, currentS, 15, true);
+        const totalJ = seasonMatchesNow.length > 0 ? Math.max(...seasonMatchesNow.map(m => m.journee || 1)) : 38;
+        if (currentJ >= totalJ) {
+          await triggerAutomatedMercato(currentJ, currentS, 12, true);
         }
         if (currentJ % 4 === 0) {
           await evaluateAndApplyPlayerEvolutions(currentJ, currentS, nextMatches, nextEvents);
@@ -3058,7 +2607,7 @@ export default function App() {
       {/* MODALE ÉVOLUTION */}
       {evolutionReport && (
         <div className="fixed inset-0 bg-black/85 backdrop-blur-md z-50 flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-800 rounded-3xl max-w-xl w-full p-6 shadow-2xl relative max-h-[90vh] flex flex-col">
+          <div className="bg-slate-900 border border-slate-800 rounded-3xl max-w-xl w-full p-6 shadow-2xl relative max-h-[90vh] flex flex-col overflow-y-auto">
             <button type="button" onClick={() => setEvolutionReport(null)} className="absolute top-4 right-4 text-slate-400 hover:text-white font-bold text-xl cursor-pointer">✕</button>
             <div className="text-center mb-4 pb-3 border-b border-slate-800">
               <div className="inline-block bg-indigo-600 text-white p-2 rounded-xl text-lg mb-2">📈</div>
