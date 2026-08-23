@@ -86,81 +86,6 @@ function generateInjuryDuration() {
   return { label: 'Fin de saison', matches: 38 };
 }
 
-function getPlayerStatusAt(playerId, targetJournee, targetSeason, eventsList) {
-  const currentJ = parseInt(targetJournee, 10) || 1;
-  const currentS = parseInt(targetSeason, 10) || 1;
-
-  const playerEvents = eventsList.filter(
-    e => String(e.player_id) === String(playerId) && (parseInt(e.saison, 10) || 1) === currentS
-  );
-
-  const injuries = playerEvents.filter(e => e.type === 'blessure');
-  for (const inj of injuries) {
-    const startJ = parseInt(inj.journee, 10) || 1;
-    const duration = parseInt(inj.duration_matches, 10) || 1;
-    if (currentJ >= startJ && currentJ < startJ + duration) {
-      const remaining = (startJ + duration) - currentJ;
-      return {
-        available: false,
-        type: 'blessure',
-        remaining,
-        badgeText: `🚑 Blessé (${remaining} m.)`,
-        badgeClass: 'bg-rose-600/20 text-rose-400 border-rose-500/30'
-      };
-    }
-  }
-
-  const redCards = playerEvents.filter(e => e.type === 'carton_rouge');
-  for (const red of redCards) {
-    const redJ = parseInt(red.journee, 10) || 1;
-    if (currentJ === redJ + 1) {
-      return {
-        available: false,
-        type: 'rouge',
-        remaining: 1,
-        badgeText: '🟥 Suspendu (Rouge)',
-        badgeClass: 'bg-red-600/20 text-red-400 border-red-500/40'
-      };
-    }
-  }
-
-  const yellowCards = playerEvents
-    .filter(e => e.type === 'carton_jaune')
-    .map(e => parseInt(e.journee, 10) || 1)
-    .sort((a, b) => a - b);
-
-  let suspendedJournees = new Set();
-  let currentWindow = [];
-
-  for (const j of yellowCards) {
-    currentWindow = currentWindow.filter(pastJ => j - pastJ <= 10);
-    currentWindow.push(j);
-
-    if (currentWindow.length >= 3) {
-      suspendedJournees.add(j + 1);
-      currentWindow = [];
-    }
-  }
-
-  if (suspendedJournees.has(currentJ)) {
-    return {
-      available: false,
-      type: 'jaunes',
-      remaining: 1,
-      badgeText: '🟨 Suspendu (3 Jaunes)',
-      badgeClass: 'bg-amber-600/20 text-amber-400 border-amber-500/40'
-    };
-  }
-
-  return {
-    available: true,
-    type: 'ok',
-    remaining: 0,
-    badgeText: '✓ Disponible',
-    badgeClass: 'text-emerald-400'
-  };
-}
-
 function compressImage(file, maxSize = 128) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -575,14 +500,10 @@ export default function App() {
       });
   };
 
-  function getTeamStartersAndBench(team, targetJournee = journeeFilter) {
-    if (!team) return { starters: [], bench: [], unavailable: [] };
+  // Tous les joueurs sont toujours disponibles sans blocage
+  function getTeamStartersAndBench(team) {
+    if (!team) return { starters: [], bench: [] };
     const all = getSortedTeamPlayers(team.id);
-    const currentS = parseInt(seasonFilter, 10) || 1;
-    const targetJ = parseInt(targetJournee, 10) || 1;
-
-    const available = all.filter(p => getPlayerStatusAt(p.id, targetJ, currentS, matchEvents).available);
-    const unavailable = all.filter(p => !getPlayerStatusAt(p.id, targetJ, currentS, matchEvents).available);
 
     let savedIds = team.lineup_ids;
     if (typeof savedIds === 'string') {
@@ -590,17 +511,17 @@ export default function App() {
     }
 
     if (Array.isArray(savedIds) && savedIds.length >= 11) {
-      const map = new Map(available.map(p => [p.id, p]));
+      const map = new Map(all.map(p => [p.id, p]));
       const starters = savedIds.map(id => map.get(id)).filter(Boolean);
       const starterSet = new Set(starters.map(p => p.id));
-      const bench = available.filter(p => !starterSet.has(p.id));
+      const bench = all.filter(p => !starterSet.has(p.id));
 
       if (starters.length >= 11) {
-        return { starters: starters.slice(0, 11), bench, unavailable };
+        return { starters: starters.slice(0, 11), bench };
       }
     }
 
-    return { starters: available.slice(0, 11), bench: available.slice(11), unavailable };
+    return { starters: all.slice(0, 11), bench: all.slice(11) };
   }
 
   async function triggerAutomatedMercato(journeeNum, currentSeasonNum, maxTransfers = 4, isSummer = false) {
@@ -843,7 +764,7 @@ export default function App() {
         else if (perfScore <= -1.5) delta = -1;
       }
 
-      // Vérification et bridage cumulatif pour respecter strictement [-3, +3] sur toute la saison
+      // Bridage cumulatif [-3, +3] sur toute la saison
       const currentCumulative = currentSeasonMap[player.id] || 0;
       let allowedDelta = 0;
 
@@ -1025,11 +946,12 @@ export default function App() {
   }
 
   function generateMatchEventsForCustomScore(m, domTeam, extTeam, scoreDom, scoreExt, seasonNum, userId) {
-    const { starters: domStarters, bench: domBench } = getTeamStartersAndBench(domTeam, m.journee);
-    const { starters: extStarters, bench: extBench } = getTeamStartersAndBench(extTeam, m.journee);
+    const { starters: domStarters, bench: domBench } = getTeamStartersAndBench(domTeam);
+    const { starters: extStarters, bench: extBench } = getTeamStartersAndBench(extTeam);
 
     const matchEventsList = [];
 
+    // Remplacements Domicile Réalistes Poste pour Poste
     const domSubsCount = Math.min(domBench.length, Math.floor(Math.random() * 4) + 1);
     const domSubstitutions = [];
     const availableDomBench = [...domBench];
@@ -1067,6 +989,7 @@ export default function App() {
       });
     }
 
+    // Remplacements Extérieur Réalistes Poste pour Poste
     const extSubsCount = Math.min(extBench.length, Math.floor(Math.random() * 4) + 1);
     const extSubstitutions = [];
     const availableExtBench = [...extBench];
@@ -1213,8 +1136,8 @@ export default function App() {
   }
 
   function simulateSingleMatchWithSubs(m, domTeam, extTeam, seasonNum, userId) {
-    const { starters: domStarters } = getTeamStartersAndBench(domTeam, m.journee);
-    const { starters: extStarters } = getTeamStartersAndBench(extTeam, m.journee);
+    const { starters: domStarters } = getTeamStartersAndBench(domTeam);
+    const { starters: extStarters } = getTeamStartersAndBench(extTeam);
 
     const domGen = domStarters.length > 0 ? domStarters.reduce((acc, p) => acc + (p.general || 75), 0) / domStarters.length : 75;
     const extGen = extStarters.length > 0 ? extStarters.reduce((acc, p) => acc + (p.general || 75), 0) / extStarters.length : 75;
@@ -1794,7 +1717,7 @@ export default function App() {
       case 'blessure':
         return (
           <span className="flex items-center gap-1 font-black text-rose-400 text-xs bg-rose-600/20 border border-rose-500/40 px-2 py-0.5 rounded-lg shadow-sm">
-            🚑 {ev.detail ? `Blessé (${ev.detail})` : 'Blessure'}
+            🚑 Blessure
           </span>
         );
       case 'remplacement':
@@ -1815,7 +1738,7 @@ export default function App() {
     setSelectedLineupTeam(fullTeam);
     setSelectedSlot(null);
 
-    const { starters, bench } = getTeamStartersAndBench(fullTeam, journeeFilter);
+    const { starters, bench } = getTeamStartersAndBench(fullTeam);
     const savedFormation = fullTeam.formation || '4-3-3';
     setCurrentFormation(savedFormation);
 
@@ -3222,7 +3145,6 @@ export default function App() {
                   <tr className="border-b border-slate-800 text-slate-400 text-xs font-semibold uppercase">
                     <th className="py-2.5 px-3">#</th>
                     <th className="py-2.5 px-3">Joueur</th>
-                    <th className="py-2.5 px-3">Statut</th>
                     <th className="py-2.5 px-3">Poste</th>
                     <th className="py-2.5 px-3 text-center">GEN</th>
                     <th className="py-2.5 px-3 text-center">Âge</th>
@@ -3233,38 +3155,29 @@ export default function App() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-800/50 text-sm">
-                  {teamRoster.map((j) => {
-                    const status = getPlayerStatusAt(j.id, journeeFilter, seasonFilter, matchEvents);
-
-                    return (
-                      <tr key={j.id} className="hover:bg-slate-800/30">
-                        <td className="py-3 px-3 font-mono font-bold text-amber-400">#{j.numero || 10}</td>
-                        <td className="py-3 px-3 font-semibold text-white">
-                          {j.nom}
-                          {j.is_loan && <span className="text-[10px] bg-emerald-500/20 text-emerald-300 px-1.5 py-0.5 rounded ml-2 font-bold">En prêt</span>}
+                  {teamRoster.map((j) => (
+                    <tr key={j.id} className="hover:bg-slate-800/30">
+                      <td className="py-3 px-3 font-mono font-bold text-amber-400">#{j.numero || 10}</td>
+                      <td className="py-3 px-3 font-semibold text-white">
+                        {j.nom}
+                        {j.is_loan && <span className="text-[10px] bg-emerald-500/20 text-emerald-300 px-1.5 py-0.5 rounded ml-2 font-bold">En prêt</span>}
+                      </td>
+                      <td className="py-3 px-3 text-xs text-indigo-300 font-bold">{j.poste || 'N/A'}</td>
+                      <td className="py-3 px-3 text-center font-extrabold text-emerald-400">{j.general || 75}</td>
+                      <td className="py-3 px-3 text-center text-slate-300 font-medium">{j.age || '-'} ans</td>
+                      <td className="py-3 px-3 text-center text-amber-400 font-bold">⚽ {j.buts}</td>
+                      <td className="py-3 px-3 text-center text-indigo-400 font-bold">🎯 {j.passes_decisives}</td>
+                      <td className="py-3 px-3 text-right font-mono text-xs text-slate-300">{formatMoney(j.valeur_marchande)}</td>
+                      {isAdmin && (
+                        <td className="py-3 px-3 text-center">
+                          <div className="flex items-center justify-center gap-1">
+                            <button onClick={() => setEditingPlayer(j)} className="bg-amber-500/20 hover:bg-amber-600 text-amber-300 hover:text-white p-1.5 rounded-lg text-xs cursor-pointer">✏️</button>
+                            <button onClick={() => handleDeletePlayer(j.id, j.nom)} className="bg-rose-500/20 hover:bg-rose-600 text-rose-300 hover:text-white p-1.5 rounded-lg text-xs cursor-pointer">🗑️</button>
+                          </div>
                         </td>
-                        <td className="py-3 px-3">
-                          <span className={`px-2 py-0.5 rounded border text-[10px] font-black ${status.badgeClass}`}>
-                            {status.badgeText}
-                          </span>
-                        </td>
-                        <td className="py-3 px-3 text-xs text-indigo-300 font-bold">{j.poste || 'N/A'}</td>
-                        <td className="py-3 px-3 text-center font-extrabold text-emerald-400">{j.general || 75}</td>
-                        <td className="py-3 px-3 text-center text-slate-300 font-medium">{j.age || '-'} ans</td>
-                        <td className="py-3 px-3 text-center text-amber-400 font-bold">⚽ {j.buts}</td>
-                        <td className="py-3 px-3 text-center text-indigo-400 font-bold">🎯 {j.passes_decisives}</td>
-                        <td className="py-3 px-3 text-right font-mono text-xs text-slate-300">{formatMoney(j.valeur_marchande)}</td>
-                        {isAdmin && (
-                          <td className="py-3 px-3 text-center">
-                            <div className="flex items-center justify-center gap-1">
-                              <button onClick={() => setEditingPlayer(j)} className="bg-amber-500/20 hover:bg-amber-600 text-amber-300 hover:text-white p-1.5 rounded-lg text-xs cursor-pointer">✏️</button>
-                              <button onClick={() => handleDeletePlayer(j.id, j.nom)} className="bg-rose-500/20 hover:bg-rose-600 text-rose-300 hover:text-white p-1.5 rounded-lg text-xs cursor-pointer">🗑️</button>
-                            </div>
-                          </td>
-                        )}
-                      </tr>
-                    );
-                  })}
+                      )}
+                    </tr>
+                  ))}
                 </tbody>
               </table>
             </div>
