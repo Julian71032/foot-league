@@ -719,7 +719,6 @@ export default function App() {
     }
   }
 
-  // --- FORMULE RÉÉQUILIBRÉE DES ÉVOLUTIONS (PÉNALITÉS RÉALISTES POUR LES ATTAQUANTS) ---
   async function evaluateAndApplyPlayerEvolutions(targetJournee, currentSeasonNum, latestMatches, latestEvents) {
     const startJournee = targetJournee - 3;
     const endJournee = targetJournee;
@@ -753,7 +752,7 @@ export default function App() {
         if (m.score_domicile === 0) teamRecords[m.equipe_exterieur_id].cleanSheets++;
         if (m.score_exterieur > m.score_domicile) teamRecords[m.equipe_exterieur_id].wins++;
         else if (m.score_exterieur < m.score_domicile) teamRecords[m.equipe_exterieur_id].losses++;
-        else teamRecords[m.equipe_exterieur_id].draws++;
+        else teamRecords[m.equipe_domicile_id].draws++;
       }
     });
 
@@ -777,16 +776,13 @@ export default function App() {
       let perfScore = 0;
 
       if (['BU', 'AT', 'AD', 'AG', 'SA'].includes(pos)) {
-        // Gain réajusté par contribution
         perfScore += buts * 2.2;
         perfScore += passes * 1.5;
-        // Malus si l'attaquant est muet / stérile sur les 4 matchs
         if (buts === 0 && passes === 0) {
           perfScore -= 2.2;
         } else if (buts + passes === 1) {
           perfScore -= 0.8;
         }
-        // Impact des victoires / défaites collectives
         perfScore += (tRec.wins * 0.7) - (tRec.losses * 1.0);
       } else if (['MOC', 'MC', 'MD', 'MG'].includes(pos)) {
         perfScore += buts * 2.8;
@@ -1297,6 +1293,7 @@ export default function App() {
     setSimulating(false);
   }
 
+  // --- PASSAGE À LA SAISON SUIVANTE (+1 AN D'ÂGE POUR TOUS LES JOUEURS) ---
   async function handleStartNewSeason(isNextSeason = false) {
     if (!teams || teams.length < 2) {
       alert(`Erreur : Il vous faut au moins 2 équipes pour générer un calendrier.`);
@@ -1310,7 +1307,7 @@ export default function App() {
     const uKey = currentUser?.email || 'local_user';
 
     const confirmMsg = isNextSeason
-      ? `Voulez-vous lancer la ${seasonLabel} ?\n\n- Vous conservez vos transferts et évolutions actuels.\n- Les joueurs prêtés retournent dans leur club d'origine.\n- ${totalJournees} Journées programmées.`
+      ? `Voulez-vous lancer la ${seasonLabel} ?\n\n- Vous conservez vos transferts et évolutions actuels.\n- Tous les joueurs prennent +1 an d'âge.\n- Les joueurs prêtés retournent dans leur club d'origine.\n- ${totalJournees} Journées programmées.`
       : `Voulez-vous RÉINITIALISER complètement votre tournoi (Saison 1) ?\n\n- Tous les joueurs retrouveront leur GÉNÉRAL DE DÉPART et leur club initial.`;
 
     if (!window.confirm(confirmMsg)) return;
@@ -1329,18 +1326,29 @@ export default function App() {
         return;
       }
 
+      // Incrémentation de l'âge (+1 an) et retour des prêts
       const cleanedPlayers = players.map(p => {
+        const newAge = (p.age || 24) + 1;
+        const currentGen = p.general || 75;
+        const newVal = calculateMarketValue(currentGen, newAge);
+
         if (p.is_loan && p.loan_parent_id) {
           const originalTeam = teams.find(t => String(t.id) === String(p.loan_parent_id));
           return {
             ...p,
+            age: newAge,
+            valeur_marchande: newVal,
             equipe_id: p.loan_parent_id,
             teams: originalTeam,
             is_loan: false,
             loan_parent_id: null
           };
         }
-        return p;
+        return {
+          ...p,
+          age: newAge,
+          valeur_marchande: newVal
+        };
       });
 
       setPlayers(cleanedPlayers);
@@ -1349,7 +1357,7 @@ export default function App() {
       const remainingMatches = matches.filter(m => (m.saison || 1) !== targetSeason);
       setMatches([...remainingMatches, ...fixtures]);
 
-      showNotif(`${seasonLabel} lancée ! Retour des joueurs prêtés.`);
+      showNotif(`${seasonLabel} lancée ! +1 an pour tous les joueurs & retour des prêts.`);
 
       setSeasonFilter(targetSeason);
       setJourneeFilter(1);
@@ -2968,7 +2976,7 @@ export default function App() {
                 <div>
                   <h3 className="text-lg font-bold text-white flex items-center gap-2">🔄 3. Gestion des Saisons</h3>
                   <p className="text-xs text-slate-400 mt-1 max-w-xl">
-                    Réinitialiser (🔄) remet votre partie locale à zéro. Lancer la saison suivante (🚀) conserve vos effectifs et rappelle les joueurs prêtés.
+                    Réinitialiser (🔄) remet votre partie locale à zéro. Lancer la saison suivante (🚀) conserve vos effectifs, ajoute +1 an à tous les joueurs et rappelle les joueurs prêtés.
                   </p>
                 </div>
 
@@ -3171,6 +3179,7 @@ export default function App() {
               </button>
             </div>
 
+            {/* BANC DES REMPLAÇANTS */}
             <div className="mt-4 bg-slate-950 p-3 rounded-2xl border border-slate-800">
               <h4 className="text-[11px] font-extrabold uppercase tracking-wider text-slate-400 mb-2">🪑 Banc des Remplaçants ({teamBenchPlayers.length})</h4>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-40 overflow-y-auto pr-1">
