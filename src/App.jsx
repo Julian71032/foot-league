@@ -564,6 +564,7 @@ export default function App() {
     return { starters: all.slice(0, 11), bench: all.slice(11) };
   }
 
+  // Mercato automatisé : Minimum 18 joueurs pour vendre, Maximum 28 pour recruter
   async function triggerAutomatedMercato(journeeNum, currentSeasonNum, maxTransfers = 4, isSummer = false) {
     if (!teams || teams.length < 2 || !players || players.length < 10) return;
 
@@ -594,12 +595,14 @@ export default function App() {
       const originTeam = teams.find(t => String(t.id) === String(originTeamId));
       if (!originTeam) continue;
 
-      if ((teamCounts[originTeamId] || 0) <= 16) continue;
+      // Interdiction formelle de vendre si le club a 18 joueurs ou moins
+      if ((teamCounts[originTeamId] || 0) <= 18) continue;
 
       let destinationTeam = null;
       let reason = '';
       let isLoan = false;
 
+      // Interdiction formelle d'acheter si le club a 28 joueurs ou plus
       const canBuy = (club) => String(club.id) !== String(originTeamId) && (teamCounts[club.id] || 0) < 28;
 
       if (currentGen >= 83 || (age <= 22 && currentGen >= 78)) {
@@ -689,7 +692,7 @@ export default function App() {
       setTransfers(newTransfersList);
       setMercatoReport({
         isSummer,
-        title: isSummer ? "MERCATO ESTIVAL" : "MERCATO D'HIVER",
+        title: isSummer ? "MERCATO ESTIVAL" : `MERCATO D'HIVER (J${journeeNum})`,
         journee: journeeNum,
         seasonLabel: getSeasonLabel(currentSeasonNum),
         transfers: completedTransfers
@@ -1185,6 +1188,7 @@ export default function App() {
     return { scoreDom, scoreExt, events };
   }
 
+  // Simulation automatique d'une journée avec gestion du mercato d'hiver (J19 à J23)
   async function handleSimulateJournee() {
     const currentJourneeMatches = seasonMatches.filter(m => m.journee === parseInt(journeeFilter, 10));
     if (currentJourneeMatches.length === 0) {
@@ -1235,10 +1239,12 @@ export default function App() {
 
       showNotif(`Journée ${journeeFilter} simulée avec succès !`);
 
-      if (currentJ === 19) {
+      // Mercato d'Hiver : 4 transferts par journée entre la 19e et la 23e journée
+      if (currentJ >= 19 && currentJ <= 23) {
         await triggerAutomatedMercato(currentJ, currentS, 4, false);
       }
 
+      // Mercato Estival complet à la fin de la saison : 15 transferts
       if (currentJ === maxJourneesCount) {
         await triggerAutomatedMercato(currentJ, currentS, 15, true);
       }
@@ -1384,13 +1390,15 @@ export default function App() {
     .filter(j => j.passes_decisives > 0)
     .sort((a, b) => b.passes_decisives - a.passes_decisives);
 
+  // Vendeurs éligibles : Strictement plus de 18 joueurs
   const availableSellerTeams = teams.filter(t => {
     const count = players.filter(p => String(p.equipe_id) === String(t.id)).length;
-    return count > 16;
+    return count > 18;
   });
 
   const availablePlayersForTransfer = players.filter(p => String(p.equipe_id) === String(transferFromTeamId));
 
+  // Acheteurs éligibles : Strictement moins de 28 joueurs
   const availableDestinationTeams = teams.filter(t => {
     if (String(t.id) === String(transferFromTeamId)) return false;
     const count = players.filter(p => String(p.equipe_id) === String(t.id)).length;
@@ -1412,6 +1420,7 @@ export default function App() {
     }
   }
 
+  // Transfert manuel avec contrôle strict : Min 18 pour vendre, Max 28 pour acheter
   async function handleTransferPlayer(e) {
     e.preventDefault();
     if (!transferFromTeamId || !transferPlayerId || !transferToTeamId) {
@@ -1425,8 +1434,8 @@ export default function App() {
     }
 
     const sellerCount = players.filter(p => String(p.equipe_id) === String(transferFromTeamId)).length;
-    if (sellerCount <= 16) {
-      showNotif("Ce club a 16 joueurs ou moins : il ne peut plus céder de joueur !");
+    if (sellerCount <= 18) {
+      showNotif("Ce club a 18 joueurs ou moins : il ne peut plus vendre de joueur !");
       return;
     }
 
@@ -1630,9 +1639,11 @@ export default function App() {
       const allCompleted = otherMatchesInJ.every(m => m.statut === 'terminé');
 
       if (allCompleted) {
-        if (currentJ === 19) {
+        // Mercato d'Hiver : 4 transferts par journée entre la 19e et la 23e journée
+        if (currentJ >= 19 && currentJ <= 23) {
           await triggerAutomatedMercato(currentJ, currentS, 4, false);
         }
+        // Mercato Estival complet à la fin de la saison : 15 transferts
         if (currentJ === maxJourneesCount) {
           await triggerAutomatedMercato(currentJ, currentS, 15, true);
         }
@@ -1645,6 +1656,7 @@ export default function App() {
     }
   }
 
+  // Création d'équipe avec quota maximum
   async function handleAddTeam(e) {
     e.preventDefault();
     if (!newTeamName) return;
@@ -1676,6 +1688,7 @@ export default function App() {
     setLogoFile(null);
   }
 
+  // Ajout de joueur avec vérification stricte du plafond de 28
   async function handleAddPlayer(e) {
     e.preventDefault();
     if (!newPlayer.nom || !newPlayer.equipe_id) return;
@@ -1916,7 +1929,6 @@ export default function App() {
 
   const formationConfig = FORMATIONS[currentFormation] || FORMATIONS['4-3-3'];
 
-  // Découpage avec index réels exacts
   const pitchGK = [{ p: teamLineupPlayers[0], idx: 0 }];
   const pitchDEF = teamLineupPlayers.slice(1, 1 + formationConfig.def).map((p, i) => ({ p, idx: 1 + i }));
   const pitchMID = teamLineupPlayers.slice(1 + formationConfig.def, 1 + formationConfig.def + formationConfig.mid).map((p, i) => ({ p, idx: 1 + formationConfig.def + i }));
@@ -2593,7 +2605,7 @@ export default function App() {
               <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-4">
                 <div>
                   <h2 className="text-xl font-bold text-white flex items-center gap-2">🔄 Marché des Transferts & Prêts</h2>
-                  <p className="text-xs text-slate-400 mt-1">16 joueurs min, 28 joueurs max par club. Les prêts durent 1 saison.</p>
+                  <p className="text-xs text-slate-400 mt-1">18 joueurs min pour vendre, 28 joueurs max par club. Les prêts durent 1 saison.</p>
                 </div>
               </div>
 
@@ -2621,7 +2633,7 @@ export default function App() {
 
                 <div>
                   <label className="block text-xs font-semibold text-amber-400 uppercase tracking-wider mb-1.5">
-                    1. Club de provenance
+                    1. Club de provenance (Min. 19 joueurs pour vendre)
                   </label>
                   <select
                     value={transferFromTeamId}
@@ -2657,7 +2669,7 @@ export default function App() {
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div>
                     <label className="block text-xs font-semibold text-emerald-400 uppercase tracking-wider mb-1.5">
-                      3. Club de destination
+                      3. Club de destination (Max. 27 joueurs pour acheter)
                     </label>
                     <select
                       value={transferToTeamId}
@@ -2668,7 +2680,7 @@ export default function App() {
                     >
                       <option value="">-- Choisir la nouvelle équipe --</option>
                       {availableDestinationTeams.map((t) => (
-                        <option key={t.id} value={t.id}>{t.nom}</option>
+                        <option key={t.id} value={t.id}>{t.nom} ({players.filter(p => String(p.equipe_id) === String(t.id)).length}/28)</option>
                       ))}
                     </select>
                   </div>
