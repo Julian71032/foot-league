@@ -181,6 +181,9 @@ export default function App() {
   const [authPassword, setAuthPassword] = useState('');
   const [authError, setAuthError] = useState('');
 
+  // MULTI-LIGUES : 'custom' ou 'ligue1'
+  const [selectedLeague, setSelectedLeague] = useState('custom');
+
   const [tab, setTab] = useState('classement');
   const [teams, setTeams] = useState([]);
   const [players, setPlayers] = useState([]);
@@ -356,12 +359,12 @@ export default function App() {
     setSavingProgress(true);
     const uKey = currentUser.email;
     localStorage.setItem(`local_season_${uKey}`, seasonFilter);
-    localStorage.setItem(`local_journee_${uKey}`, journeeFilter);
+    localStorage.setItem(`local_journee_${uKey}_${selectedLeague}`, journeeFilter);
     showNotif(`Progression sauvegardée ! Reprise à la Journée ${journeeFilter} (${getSeasonLabel(seasonFilter)})`);
     setSavingProgress(false);
   }
 
-  function buildRoundRobinFixtures(allTeams, userId, seasonNum) {
+  function buildRoundRobinFixtures(allTeams, userId, seasonNum, ligueId = 'custom') {
     if (!allTeams || allTeams.length < 2) return [];
 
     const list = [...allTeams].sort(() => Math.random() - 0.5);
@@ -391,13 +394,14 @@ export default function App() {
           }
 
           allerMatches.push({
-            id: `${seasonNum}-${journee}-${home.id}-${away.id}`,
+            id: `${ligueId}-${seasonNum}-${journee}-${home.id}-${away.id}`,
             equipe_domicile_id: home.id,
             equipe_exterieur_id: away.id,
             journee: journee,
             saison: seasonNum,
             statut: 'à venir',
-            user_id: userId
+            user_id: userId,
+            ligue_id: ligueId
           });
         }
       }
@@ -410,34 +414,40 @@ export default function App() {
     }
 
     const retourMatches = allerMatches.map(m => ({
-      id: `${seasonNum}-${m.journee + numRounds}-${m.equipe_exterieur_id}-${m.equipe_domicile_id}`,
+      id: `${ligueId}-${seasonNum}-${m.journee + numRounds}-${m.equipe_exterieur_id}-${m.equipe_domicile_id}`,
       equipe_domicile_id: m.equipe_exterieur_id,
       equipe_exterieur_id: m.equipe_domicile_id,
       journee: m.journee + numRounds,
       saison: seasonNum,
       statut: 'à venir',
-      user_id: userId
+      user_id: userId,
+      ligue_id: ligueId
     }));
 
     return [...allerMatches, ...retourMatches];
   }
 
   function handleGenerateCurrentSchedule() {
-    if (!teams || teams.length < 2) {
-      alert("Il vous faut au moins 2 équipes pour générer un calendrier.");
+    const currentLeagueTeams = (teams || []).filter(t => (t.ligue_id || 'custom') === selectedLeague);
+    if (currentLeagueTeams.length < 2) {
+      alert("Il vous faut au moins 2 équipes dans cette ligue pour générer un calendrier.");
       return;
     }
     const uKey = currentUser?.email || 'local_user';
     const s = parseInt(seasonFilter, 10) || 1;
-    const newFixtures = buildRoundRobinFixtures(teams, uKey, s);
-    const otherSeasonMatches = (matches || []).filter(m => m && (m.saison || 1) !== s);
-    const fullMatches = [...otherSeasonMatches, ...newFixtures];
+    const newFixtures = buildRoundRobinFixtures(currentLeagueTeams, uKey, s, selectedLeague);
+    
+    // On conserve les matchs des autres ligues et autres saisons
+    const otherMatches = (matches || []).filter(
+      m => m && ((m.saison || 1) !== s || (m.ligue_id || 'custom') !== selectedLeague)
+    );
+    const fullMatches = [...otherMatches, ...newFixtures];
     
     setMatches(fullMatches);
     localStorage.setItem(`local_matches_${uKey}`, JSON.stringify(fullMatches));
     setJourneeFilter(1);
-    localStorage.setItem(`local_journee_${uKey}`, 1);
-    showNotif(`Calendrier généré : ${newFixtures.length} matchs programmés pour la Saison ${s} !`);
+    localStorage.setItem(`local_journee_${uKey}_${selectedLeague}`, 1);
+    showNotif(`Calendrier généré pour ${selectedLeague === 'ligue1' ? 'la Ligue 1' : 'la Ligue Principale'} (Saison ${s}) !`);
   }
 
   async function fetchUserData(userEmail) {
@@ -479,7 +489,12 @@ export default function App() {
         currentPlayers = Array.isArray(resPlayers) && resPlayers.length > 0 ? resPlayers : currentPlayers;
 
         if (currentMatches.length === 0 && currentTeams.length >= 2) {
-          currentMatches = buildRoundRobinFixtures(currentTeams, uKey, 1);
+          const customTeams = currentTeams.filter(t => (t.ligue_id || 'custom') === 'custom');
+          const ligue1Teams = currentTeams.filter(t => t.ligue_id === 'ligue1');
+          
+          const customMatches = buildRoundRobinFixtures(customTeams, uKey, 1, 'custom');
+          const ligue1Matches = buildRoundRobinFixtures(ligue1Teams, uKey, 1, 'ligue1');
+          currentMatches = [...customMatches, ...ligue1Matches];
         }
 
         try {
@@ -501,7 +516,7 @@ export default function App() {
       const validMatches = (currentMatches || []).filter(Boolean);
       const maxS = validMatches.length > 0 ? Math.max(...validMatches.map(m => m.saison || 1), 1) : 1;
       const savedSeason = localStorage.getItem(`local_season_${uKey}`);
-      const savedJournee = localStorage.getItem(`local_journee_${uKey}`);
+      const savedJournee = localStorage.getItem(`local_journee_${uKey}_${selectedLeague}`);
 
       const activeSeason = savedSeason ? parseInt(savedSeason, 10) : maxS;
       setSeasonFilter(activeSeason);
@@ -510,7 +525,7 @@ export default function App() {
         setJourneeFilter(parseInt(savedJournee, 10) || 1);
       } else {
         const firstUnfinished = validMatches.find(
-          m => m && m.statut !== 'terminé' && (m.saison || 1) === activeSeason
+          m => m && m.statut !== 'terminé' && (m.saison || 1) === activeSeason && (m.ligue_id || 'custom') === selectedLeague
         );
         if (firstUnfinished) {
           setJourneeFilter(firstUnfinished.journee || 1);
@@ -560,14 +575,21 @@ export default function App() {
     return { starters: all.slice(0, 11), bench: all.slice(11) };
   }
 
+  // Mercato automatisé
   async function triggerAutomatedMercato(journeeNum, currentSeasonNum, maxTransfers = 4, isSummer = false) {
-    if (!teams || teams.length < 2 || !players || players.length < 10) return;
+    const currentLeagueTeams = (teams || []).filter(t => (t.ligue_id || 'custom') === selectedLeague);
+    const currentLeaguePlayers = (players || []).filter(p => {
+      const t = currentLeagueTeams.find(tm => String(tm.id) === String(p.equipe_id));
+      return !!t;
+    });
+
+    if (currentLeagueTeams.length < 2 || currentLeaguePlayers.length < 10) return;
 
     const teamCounts = {};
     const teamPosCounts = {};
 
-    teams.forEach(t => {
-      const tPlayers = players.filter(p => p && String(p.equipe_id) === String(t.id));
+    currentLeagueTeams.forEach(t => {
+      const tPlayers = currentLeaguePlayers.filter(p => p && String(p.equipe_id) === String(t.id));
       teamCounts[t.id] = tPlayers.length;
       teamPosCounts[t.id] = {};
       tPlayers.forEach(p => {
@@ -581,7 +603,7 @@ export default function App() {
     const midClubs = rankedTeams.slice(Math.floor(rankedTeams.length * 0.35), Math.floor(rankedTeams.length * 0.70));
     const bottomClubs = rankedTeams.slice(Math.floor(rankedTeams.length * 0.70));
 
-    const availablePool = [...players].sort(() => Math.random() - 0.5);
+    const availablePool = [...currentLeaguePlayers].sort(() => Math.random() - 0.5);
     const completedTransfers = [];
     const usedPlayerIds = new Set();
     const minSellerQuota = isSummer ? 17 : 18;
@@ -594,7 +616,7 @@ export default function App() {
       const age = player.age || 24;
       const originTeamId = player.equipe_id;
       const playerPos = player.poste || 'MC';
-      const originTeam = teams.find(t => String(t.id) === String(originTeamId));
+      const originTeam = currentLeagueTeams.find(t => String(t.id) === String(originTeamId));
       if (!originTeam) continue;
 
       if ((teamCounts[originTeamId] || 0) <= minSellerQuota) continue;
@@ -722,7 +744,7 @@ export default function App() {
     const endJournee = targetJournee;
 
     const blockMatches = (latestMatches || []).filter(
-      m => m && (m.saison || 1) === currentSeasonNum && m.journee >= startJournee && m.journee <= endJournee && m.statut === 'terminé'
+      m => m && (m.saison || 1) === currentSeasonNum && m.journee >= startJournee && m.journee <= endJournee && m.statut === 'terminé' && (m.ligue_id || 'custom') === selectedLeague
     );
     const blockMatchIds = new Set(blockMatches.map(m => m.id));
 
@@ -730,8 +752,9 @@ export default function App() {
       e => e && (e.saison || 1) === currentSeasonNum && blockMatchIds.has(e.match_id)
     );
 
+    const currentLeagueTeams = (teams || []).filter(t => (t.ligue_id || 'custom') === selectedLeague);
     const teamRecords = {};
-    teams.forEach(t => {
+    currentLeagueTeams.forEach(t => {
       teamRecords[t.id] = { wins: 0, losses: 0, draws: 0, goalsConceded: 0, cleanSheets: 0, matchCount: 0 };
     });
 
@@ -756,8 +779,9 @@ export default function App() {
 
     const candidates = [];
     const currentSeasonMapForCalc = { ...(seasonEvolutions[currentSeasonNum] || {}) };
+    const currentLeaguePlayers = (players || []).filter(p => currentLeagueTeams.some(t => String(t.id) === String(p.equipe_id)));
 
-    for (const player of players) {
+    for (const player of currentLeaguePlayers) {
       if (!player) continue;
       const currentGen = player.general || 75;
       const currentVal = player.valeur_marchande || 10000000;
@@ -1272,7 +1296,7 @@ export default function App() {
       const currentS = parseInt(seasonFilter, 10);
 
       localStorage.setItem(`local_season_${uKey}`, currentS);
-      localStorage.setItem(`local_journee_${uKey}`, currentJ);
+      localStorage.setItem(`local_journee_${uKey}_${selectedLeague}`, currentJ);
 
       showNotif(`Journée ${journeeFilter} simulée avec succès !`);
 
@@ -1296,20 +1320,21 @@ export default function App() {
   }
 
   async function handleStartNewSeason(isNextSeason = false) {
-    if (!teams || teams.length < 2) {
+    const currentLeagueTeams = (teams || []).filter(t => (t.ligue_id || 'custom') === selectedLeague);
+    if (currentLeagueTeams.length < 2) {
       alert(`Erreur : Il vous faut au moins 2 équipes pour générer un calendrier.`);
       return;
     }
 
-    const validMatches = (matches || []).filter(Boolean);
-    const currentMaxSeason = validMatches.length > 0 ? Math.max(...validMatches.map(m => m.saison || 1), 1) : 1;
+    const leagueMatches = (matches || []).filter(m => m && (m.ligue_id || 'custom') === selectedLeague);
+    const currentMaxSeason = leagueMatches.length > 0 ? Math.max(...leagueMatches.map(m => m.saison || 1), 1) : 1;
     const targetSeason = isNextSeason ? currentMaxSeason + 1 : 1;
     const seasonLabel = getSeasonLabel(targetSeason);
-    const totalJournees = (teams.length % 2 === 0 ? teams.length - 1 : teams.length) * 2;
+    const totalJournees = (currentLeagueTeams.length % 2 === 0 ? currentLeagueTeams.length - 1 : currentLeagueTeams.length) * 2;
     const uKey = currentUser?.email || 'local_user';
 
     const confirmMsg = isNextSeason
-      ? `Voulez-vous lancer la ${seasonLabel} ?\n\n- Vous conservez vos transferts et évolutions actuels.\n- Tous les joueurs prennent +1 an d'âge.\n- Les joueurs prêtés retournent dans leur club d'origine.\n- ${totalJournees} Journées programmées.`
+      ? `Voulez-vous lancer la ${seasonLabel} (${selectedLeague === 'ligue1' ? 'Ligue 1' : 'Ligue Principale'}) ?\n\n- Vous conservez vos transferts et évolutions actuels.\n- Tous les joueurs prennent +1 an d'âge.\n- Les joueurs prêtés retournent dans leur club d'origine.\n- ${totalJournees} Journées programmées.`
       : `Voulez-vous RÉINITIALISER complètement votre tournoi (Saison 1) ?\n\n- Tous les joueurs retrouveront leur GÉNÉRAL DE DÉPART et leur club initial.`;
 
     if (!window.confirm(confirmMsg)) return;
@@ -1322,7 +1347,8 @@ export default function App() {
         localStorage.removeItem(`local_events_${uKey}`);
         localStorage.removeItem(`local_transfers_${uKey}`);
         localStorage.removeItem(`local_season_${uKey}`);
-        localStorage.removeItem(`local_journee_${uKey}`);
+        localStorage.removeItem(`local_journee_${uKey}_custom`);
+        localStorage.removeItem(`local_journee_${uKey}_ligue1`);
         localStorage.removeItem(`local_evolutions_${uKey}`);
         await fetchUserData(uKey);
         return;
@@ -1354,8 +1380,10 @@ export default function App() {
 
       setPlayers(cleanedPlayers);
 
-      const fixtures = buildRoundRobinFixtures(teams, uKey, targetSeason);
-      const remainingMatches = (matches || []).filter(m => m && (m.saison || 1) !== targetSeason);
+      const fixtures = buildRoundRobinFixtures(currentLeagueTeams, uKey, targetSeason, selectedLeague);
+      const remainingMatches = (matches || []).filter(
+        m => m && ((m.saison || 1) !== targetSeason || (m.ligue_id || 'custom') !== selectedLeague)
+      );
       setMatches([...remainingMatches, ...fixtures]);
 
       showNotif(`${seasonLabel} lancée ! +1 an pour tous les joueurs & retour des prêts.`);
@@ -1365,21 +1393,29 @@ export default function App() {
       setSeasonEvolutions({});
 
       localStorage.setItem(`local_season_${uKey}`, targetSeason);
-      localStorage.setItem(`local_journee_${uKey}`, 1);
+      localStorage.setItem(`local_journee_${uKey}_${selectedLeague}`, 1);
       localStorage.setItem(`local_evolutions_${uKey}`, JSON.stringify({}));
     } catch (err) {
       alert(`Erreur génération : ${err.message}`);
     }
   }
 
-  const seasonMatches = (matches || []).filter(m => m && (m.saison || 1) === (parseInt(seasonFilter, 10) || 1));
-  const seasonEvents = (matchEvents || []).filter(e => e && (e.saison || 1) === (parseInt(seasonFilter, 10) || 1));
+  // --- FILTRAGE DE LA LIGUE ACTIVE ---
+  const currentLeagueTeams = (teams || []).filter(t => (t.ligue_id || 'custom') === selectedLeague);
+
+  const seasonMatches = (matches || []).filter(
+    m => m && (m.saison || 1) === (parseInt(seasonFilter, 10) || 1) && (m.ligue_id || 'custom') === selectedLeague
+  );
+  
+  const seasonEvents = (matchEvents || []).filter(
+    e => e && (e.saison || 1) === (parseInt(seasonFilter, 10) || 1)
+  );
 
   const availableSeasons = Array.from(
-    new Set([...(matches || []).filter(Boolean).map(m => m.saison || 1), 1, parseInt(seasonFilter, 10) || 1])
+    new Set([...(matches || []).filter(m => m && (m.ligue_id || 'custom') === selectedLeague).map(m => m.saison || 1), 1, parseInt(seasonFilter, 10) || 1])
   ).sort((a, b) => a - b);
 
-  const classement = (teams || []).map(team => {
+  const classement = currentLeagueTeams.map(team => {
     let points = 0;
     let joues = 0;
     let victoires = 0;
@@ -1431,21 +1467,21 @@ export default function App() {
   }).filter(Boolean);
 
   const topButeurs = [...playersWithStats]
-    .filter(j => j.buts > 0)
+    .filter(j => j.buts > 0 && currentLeagueTeams.some(t => String(t.id) === String(j.equipe_id)))
     .sort((a, b) => b.buts - a.buts);
 
   const topPasseurs = [...playersWithStats]
-    .filter(j => j.passes_decisives > 0)
+    .filter(j => j.passes_decisives > 0 && currentLeagueTeams.some(t => String(t.id) === String(j.equipe_id)))
     .sort((a, b) => b.passes_decisives - a.passes_decisives);
 
-  const availableSellerTeams = (teams || []).filter(t => {
+  const availableSellerTeams = currentLeagueTeams.filter(t => {
     const count = (players || []).filter(p => p && String(p.equipe_id) === String(t.id)).length;
     return count > 18;
   });
 
   const availablePlayersForTransfer = (players || []).filter(p => p && String(p.equipe_id) === String(transferFromTeamId));
 
-  const availableDestinationTeams = (teams || []).filter(t => {
+  const availableDestinationTeams = currentLeagueTeams.filter(t => {
     if (String(t.id) === String(transferFromTeamId)) return false;
     const count = (players || []).filter(p => p && String(p.equipe_id) === String(t.id)).length;
     return count < 28;
@@ -1692,11 +1728,11 @@ export default function App() {
       const currentS = match.saison || 1;
 
       localStorage.setItem(`local_season_${uKey}`, currentS);
-      localStorage.setItem(`local_journee_${uKey}`, currentJ);
+      localStorage.setItem(`local_journee_${uKey}_${selectedLeague}`, currentJ);
 
       showNotif(`Score ${scoreDom} - ${scoreExt} et événements enregistrés !`);
 
-      const seasonMatchesNow = nextMatches.filter(m => m && (m.saison || 1) === currentS);
+      const seasonMatchesNow = nextMatches.filter(m => m && (m.saison || 1) === currentS && (m.ligue_id || 'custom') === selectedLeague);
       const matchesInJ = seasonMatchesNow.filter(m => m && m.journee === currentJ);
       const allCompleted = matchesInJ.every(m => m && m.statut === 'terminé');
 
@@ -1738,12 +1774,13 @@ export default function App() {
       nom: newTeamName,
       logo_url: logoUrl,
       formation: '4-3-3',
-      points: 0
+      points: 0,
+      ligue_id: selectedLeague
     };
 
     setTeams(prev => [...prev, newTeam]);
     setUploading(false);
-    showNotif(`Équipe "${newTeamName}" créée !`);
+    showNotif(`Équipe "${newTeamName}" créée dans la ligue actuelle !`);
     setNewTeamName(''); 
     setLogoFile(null);
   }
@@ -2000,7 +2037,7 @@ export default function App() {
 
   const maxJourneesCount = seasonMatches.length > 0
     ? Math.max(...seasonMatches.map(m => m.journee || 1))
-    : (teams.length >= 2 ? (teams.length % 2 === 0 ? teams.length - 1 : teams.length) * 2 : 38);
+    : (currentLeagueTeams.length >= 2 ? (currentLeagueTeams.length % 2 === 0 ? currentLeagueTeams.length - 1 : currentLeagueTeams.length) * 2 : 38);
 
   const currentMatchesList = seasonMatches.filter(m => m && m.journee === (parseInt(journeeFilter, 10) || 1));
   const isCurrentJourneeCompleted = currentMatchesList.length > 0 && currentMatchesList.every(m => m && m.statut === 'terminé');
@@ -2013,7 +2050,7 @@ export default function App() {
     if (journeeFilter < maxJourneesCount) {
       const nextJ = journeeFilter + 1;
       setJourneeFilter(nextJ);
-      localStorage.setItem(`local_journee_${currentUser.email}`, nextJ);
+      localStorage.setItem(`local_journee_${currentUser.email}_${selectedLeague}`, nextJ);
     } else {
       showNotif("Vous êtes sur la dernière journée de cette saison !");
     }
@@ -2023,7 +2060,7 @@ export default function App() {
     if (journeeFilter > 1) {
       const prevJ = journeeFilter - 1;
       setJourneeFilter(prevJ);
-      localStorage.setItem(`local_journee_${currentUser.email}`, prevJ);
+      localStorage.setItem(`local_journee_${currentUser.email}_${selectedLeague}`, prevJ);
     }
   }
 
@@ -2200,7 +2237,35 @@ export default function App() {
             </div>
           </div>
 
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center gap-3">
+            {/* SÉLECTEUR DE LIGUE ACTIF */}
+            <div className="flex items-center bg-slate-950 p-1 rounded-xl border border-slate-800">
+              <button
+                onClick={() => {
+                  setSelectedLeague('custom');
+                  const savedJ = localStorage.getItem(`local_journee_${currentUser.email}_custom`);
+                  setJourneeFilter(savedJ ? parseInt(savedJ, 10) : 1);
+                }}
+                className={`px-3 py-1.5 rounded-lg text-xs font-black transition-all ${
+                  selectedLeague === 'custom' ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                🏆 Ligue Principale
+              </button>
+              <button
+                onClick={() => {
+                  setSelectedLeague('ligue1');
+                  const savedJ = localStorage.getItem(`local_journee_${currentUser.email}_ligue1`);
+                  setJourneeFilter(savedJ ? parseInt(savedJ, 10) : 1);
+                }}
+                className={`px-3 py-1.5 rounded-lg text-xs font-black transition-all ${
+                  selectedLeague === 'ligue1' ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                🇫🇷 Ligue 1
+              </button>
+            </div>
+
             <nav className="flex items-center gap-2">
               <div className="flex items-center bg-slate-950/60 p-1.5 rounded-xl border border-slate-800/80">
                 {navTabs.map((item) => (
@@ -2243,7 +2308,9 @@ export default function App() {
           <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl">
             <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-6">
               <div>
-                <h2 className="text-xl font-bold flex items-center gap-2 text-white">🏆 Classement Général</h2>
+                <h2 className="text-xl font-bold flex items-center gap-2 text-white">
+                  🏆 Classement Général — {selectedLeague === 'ligue1' ? 'Ligue 1' : 'Ligue Principale'}
+                </h2>
                 <div className="flex flex-wrap items-center gap-3 mt-1.5 text-xs text-slate-400">
                   <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full bg-emerald-500 inline-block"></span> Top 4 : Qualification</span>
                   <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full bg-rose-500 inline-block"></span> 3 Derniers : Relégation</span>
@@ -2259,7 +2326,7 @@ export default function App() {
                     setSeasonFilter(s);
                     setJourneeFilter(1);
                     localStorage.setItem(`local_season_${currentUser.email}`, s);
-                    localStorage.setItem(`local_journee_${currentUser.email}`, 1);
+                    localStorage.setItem(`local_journee_${currentUser.email}_${selectedLeague}`, 1);
                   }}
                   className="bg-slate-900 border border-slate-700 text-indigo-400 font-bold text-xs rounded-lg px-3 py-1.5 focus:outline-none focus:border-indigo-500 cursor-pointer"
                 >
@@ -2357,7 +2424,9 @@ export default function App() {
           <div className="space-y-6">
             <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
               <div>
-                <h2 className="text-xl font-bold text-white flex items-center gap-2">📅 Calendrier des Rencontres</h2>
+                <h2 className="text-xl font-bold text-white flex items-center gap-2">
+                  📅 Calendrier — {selectedLeague === 'ligue1' ? 'Ligue 1' : 'Ligue Principale'}
+                </h2>
                 <p className="text-xs text-slate-400 mt-1">
                   {!isCurrentJourneeCompleted ? (
                     <span className="text-amber-400 font-semibold">⚠️ Jouez ou simulez la Journée {journeeFilter} avant d'avancer</span>
@@ -2377,7 +2446,7 @@ export default function App() {
                       setSeasonFilter(s);
                       setJourneeFilter(1);
                       localStorage.setItem(`local_season_${currentUser.email}`, s);
-                      localStorage.setItem(`local_journee_${currentUser.email}`, 1);
+                      localStorage.setItem(`local_journee_${currentUser.email}_${selectedLeague}`, 1);
                     }}
                     className="bg-slate-900 border border-slate-700 text-indigo-400 font-bold text-xs rounded-lg px-2.5 py-1 focus:outline-none focus:border-indigo-500 cursor-pointer"
                   >
@@ -2457,13 +2526,13 @@ export default function App() {
             <div className="grid gap-4 sm:grid-cols-1">
               {seasonMatches.filter((m) => m && m.journee === (parseInt(journeeFilter, 10) || 1)).length === 0 ? (
                 <div className="bg-slate-900 border border-slate-800 rounded-2xl p-12 text-center">
-                  <p className="text-slate-400 font-medium text-sm mb-4">Aucun match programmé pour la Saison {seasonFilter}.</p>
+                  <p className="text-slate-400 font-medium text-sm mb-4">Aucun match programmé pour {selectedLeague === 'ligue1' ? 'la Ligue 1' : 'la Ligue Principale'} (Saison {seasonFilter}).</p>
                   <button
                     type="button"
                     onClick={handleGenerateCurrentSchedule}
                     className="bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold px-5 py-3 rounded-xl transition-all shadow-lg cursor-pointer flex items-center gap-2 mx-auto"
                   >
-                    <span>🔄</span> Générer le Calendrier
+                    <span>🔄</span> Générer le Calendrier de la Ligue
                   </button>
                 </div>
               ) : (
@@ -2563,8 +2632,10 @@ export default function App() {
           <div className="space-y-6">
             <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl flex items-center justify-between">
               <div>
-                <h2 className="text-xl font-bold text-white flex items-center gap-2">🏅 Statistiques Individuelles</h2>
-                <p className="text-xs text-slate-400">Performances enregistrées sur la saison sélectionnée</p>
+                <h2 className="text-xl font-bold text-white flex items-center gap-2">
+                  🏅 Stats Joueurs — {selectedLeague === 'ligue1' ? 'Ligue 1' : 'Ligue Principale'}
+                </h2>
+                <p className="text-xs text-slate-400">Performances individuelles enregistrées dans la ligue</p>
               </div>
 
               <div className="flex items-center gap-2 bg-slate-950 p-1.5 rounded-xl border border-slate-800">
@@ -2590,7 +2661,7 @@ export default function App() {
                 <h3 className="text-lg font-bold mb-4 text-white flex items-center gap-2">⚽ Meilleurs Buteurs</h3>
                 <div className="overflow-x-auto">
                   {topButeurs.length === 0 ? (
-                    <p className="text-xs text-slate-500 text-center py-6">Aucun buteur dans cette saison.</p>
+                    <p className="text-xs text-slate-500 text-center py-6">Aucun buteur dans cette ligue pour le moment.</p>
                   ) : (
                     <table className="w-full text-left border-collapse">
                       <thead>
@@ -2625,7 +2696,7 @@ export default function App() {
                 <h3 className="text-lg font-bold mb-4 text-white flex items-center gap-2">🎯 Meilleurs Passeurs</h3>
                 <div className="overflow-x-auto">
                   {topPasseurs.length === 0 ? (
-                    <p className="text-xs text-slate-500 text-center py-6">Aucune passe décisive dans cette saison.</p>
+                    <p className="text-xs text-slate-500 text-center py-6">Aucune passe décisive dans cette ligue pour le moment.</p>
                   ) : (
                     <table className="w-full text-left border-collapse">
                       <thead>
@@ -2664,8 +2735,10 @@ export default function App() {
             <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl">
               <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-4">
                 <div>
-                  <h2 className="text-xl font-bold text-white flex items-center gap-2">🔄 Marché des Transferts & Prêts</h2>
-                  <p className="text-xs text-slate-400 mt-1">18 joueurs min pour vendre, 28 joueurs max par club. Les prêts durent 1 saison.</p>
+                  <h2 className="text-xl font-bold text-white flex items-center gap-2">
+                    🔄 Marché des Transferts ({selectedLeague === 'ligue1' ? 'Ligue 1' : 'Ligue Principale'})
+                  </h2>
+                  <p className="text-xs text-slate-400 mt-1">18 joueurs min pour vendre, 28 max par club. Doublure requise par poste.</p>
                 </div>
               </div>
 
@@ -2840,7 +2913,7 @@ export default function App() {
 
             <div className="grid gap-6 md:grid-cols-2">
               <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl">
-                <h3 className="text-lg font-bold text-white mb-4">1. Créer une Équipe</h3>
+                <h3 className="text-lg font-bold text-white mb-4">1. Créer une Équipe dans {selectedLeague === 'ligue1' ? 'Ligue 1' : 'Ligue Principale'}</h3>
                 <form onSubmit={handleAddTeam} className="space-y-4">
                   <div>
                     <label className="block text-xs font-medium text-slate-400 mb-1">Nom</label>
@@ -2858,7 +2931,7 @@ export default function App() {
                     <input
                       type="file"
                       accept="image/*"
-                      onChange={(e) => setNewLogoFile(e.target.files[0])}
+                      onChange={(e) => setLogoFile(e.target.files[0])}
                       className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2 text-xs text-slate-300"
                     />
                   </div>
@@ -2880,7 +2953,7 @@ export default function App() {
                       required
                     >
                       <option value="">-- Choisir l'équipe --</option>
-                      {teams.map((t) => (
+                      {currentLeagueTeams.map((t) => (
                         <option key={t.id} value={t.id}>{t.nom}</option>
                       ))}
                     </select>
@@ -2980,7 +3053,7 @@ export default function App() {
             <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl">
               <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
                 <div>
-                  <h3 className="text-lg font-bold text-white flex items-center gap-2">🔄 3. Gestion des Saisons</h3>
+                  <h3 className="text-lg font-bold text-white flex items-center gap-2">🔄 3. Gestion des Saisons ({selectedLeague === 'ligue1' ? 'Ligue 1' : 'Ligue Principale'})</h3>
                   <p className="text-xs text-slate-400 mt-1 max-w-xl">
                     Réinitialiser (🔄) remet votre partie locale à zéro. Lancer la saison suivante (🚀) conserve vos effectifs, ajoute +1 an à tous les joueurs et rappelle les joueurs prêtés.
                   </p>
@@ -3405,7 +3478,7 @@ export default function App() {
           <div className="bg-slate-900 border border-slate-800 rounded-3xl max-w-2xl w-full p-6 shadow-2xl relative max-h-[90vh] flex flex-col overflow-y-auto">
             <button type="button" onClick={() => setSelectedMatch(null)} className="absolute top-4 right-4 text-slate-400 hover:text-white font-bold text-xl cursor-pointer">✕</button>
             <h3 className="text-lg font-extrabold text-white text-center mb-1">Détails de la Rencontre</h3>
-            <p className="text-xs text-slate-400 text-center mb-4">{getSeasonLabel(selectedMatch.saison || 1)} - Journée {selectedMatch.journee}</p>
+            <p className="text-xs text-slate-400 text-center mb-4">{getSeasonLabel(selectedMatch.saison || 1)} - Journée {selectedMatch.journee} ({selectedLeague === 'ligue1' ? 'Ligue 1' : 'Ligue Principale'})</p>
 
             <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800 flex items-center justify-between gap-2 mb-6">
               <div className="flex items-center justify-end gap-3 flex-1 min-w-0">
