@@ -1506,16 +1506,28 @@ export default function App() {
   }
 
   // Mise à jour de logo avec compression auto
-  async function handleUpdateTeamLogo(e) {
+ async function handleUpdateTeamLogo(e) {
     e.preventDefault();
     if (!editingTeamLogo || !newLogoFile) return;
 
     setLogoUpdating(true);
     try {
+      // 1. Compression légère du logo
       const logoUrl = await compressImage(newLogoFile, 128);
 
+      // 2. Envoi direct sur la base de données Render
+      await fetch(`${API_URL}/teams/${editingTeamLogo.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          logo_url: logoUrl
+        })
+      });
+
+      // 3. Mise à jour de l'affichage local
       setTeams(prev => prev.map(t => t.id === editingTeamLogo.id ? { ...t, logo_url: logoUrl } : t));
-      showNotif(`✓ Logo de "${editingTeamLogo.nom}" optimisé et sauvegardé !`);
+      
+      showNotif(`✓ Logo de "${editingTeamLogo.nom}" sauvegardé pour tous les joueurs !`);
       setEditingTeamLogo(null);
       setNewLogoFile(null);
     } catch (err) {
