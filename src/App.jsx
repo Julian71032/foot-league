@@ -96,6 +96,43 @@ function getPlayerInjuryStatus(playerId, targetJournee, targetSeason, events) {
   return { injured: false, remaining: 0, label: '' };
 }
 
+// Compression d'image automatique pour éviter la saturation mémoire (QuotaExceededError)
+function compressImage(file, maxSize = 128) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.readAsDataURL(file);
+    reader.onload = (event) => {
+      const img = new Image();
+      img.src = event.target.result;
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        let width = img.width;
+        let height = img.height;
+
+        if (width > height) {
+          if (width > maxSize) {
+            height = Math.round((height * maxSize) / width);
+            width = maxSize;
+          }
+        } else {
+          if (height > maxSize) {
+            width = Math.round((width * maxSize) / height);
+            height = maxSize;
+          }
+        }
+
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0, width, height);
+        resolve(canvas.toDataURL('image/png', 0.8));
+      };
+      img.onerror = (err) => reject(err);
+    };
+    reader.onerror = (err) => reject(err);
+  });
+}
+
 const FORMATIONS = {
   '4-3-3': { name: '4-3-3 (Classique)', def: 4, mid: 3, att: 3 },
   '4-4-2': { name: '4-4-2 (Équilibré)', def: 4, mid: 4, att: 2 },
@@ -195,38 +232,59 @@ export default function App() {
     }
   }, [currentUser]);
 
+  // Sauvegardes sécurisées avec gestion de quota
   useEffect(() => {
     if (!loading && currentUser && teams.length > 0) {
       const uKey = currentUser.email;
-      localStorage.setItem(`local_teams_${uKey}`, JSON.stringify(teams));
+      try {
+        localStorage.setItem(`local_teams_${uKey}`, JSON.stringify(teams));
+      } catch (e) {
+        console.warn("Storage plein, persistance mémoire active");
+      }
     }
   }, [teams, loading, currentUser]);
 
   useEffect(() => {
     if (!loading && currentUser && players.length > 0) {
       const uKey = currentUser.email;
-      localStorage.setItem(`local_players_${uKey}`, JSON.stringify(players));
+      try {
+        localStorage.setItem(`local_players_${uKey}`, JSON.stringify(players));
+      } catch (e) {
+        console.warn("Storage plein, persistance mémoire active");
+      }
     }
   }, [players, loading, currentUser]);
 
   useEffect(() => {
     if (!loading && currentUser && matches.length > 0) {
       const uKey = currentUser.email;
-      localStorage.setItem(`local_matches_${uKey}`, JSON.stringify(matches));
+      try {
+        localStorage.setItem(`local_matches_${uKey}`, JSON.stringify(matches));
+      } catch (e) {
+        console.warn("Storage plein, persistance mémoire active");
+      }
     }
   }, [matches, loading, currentUser]);
 
   useEffect(() => {
     if (!loading && currentUser) {
       const uKey = currentUser.email;
-      localStorage.setItem(`local_events_${uKey}`, JSON.stringify(matchEvents));
+      try {
+        localStorage.setItem(`local_events_${uKey}`, JSON.stringify(matchEvents));
+      } catch (e) {
+        console.warn("Storage plein, persistance mémoire active");
+      }
     }
   }, [matchEvents, loading, currentUser]);
 
   useEffect(() => {
     if (!loading && currentUser) {
       const uKey = currentUser.email;
-      localStorage.setItem(`local_transfers_${uKey}`, JSON.stringify(transfers));
+      try {
+        localStorage.setItem(`local_transfers_${uKey}`, JSON.stringify(transfers));
+      } catch (e) {
+        console.warn("Storage plein, persistance mémoire active");
+      }
     }
   }, [transfers, loading, currentUser]);
 
@@ -402,16 +460,22 @@ export default function App() {
         currentPlayers = Array.isArray(resPlayers) ? resPlayers : [];
         currentMatches = buildRoundRobinFixtures(currentTeams, uKey, 1);
 
-        localStorage.setItem(`local_teams_${uKey}`, JSON.stringify(currentTeams));
-        localStorage.setItem(`local_players_${uKey}`, JSON.stringify(currentPlayers));
-        localStorage.setItem(`local_matches_${uKey}`, JSON.stringify(currentMatches));
-        localStorage.setItem(`local_events_${uKey}`, JSON.stringify([]));
-        localStorage.setItem(`local_transfers_${uKey}`, JSON.stringify([]));
+        try {
+          localStorage.setItem(`local_teams_${uKey}`, JSON.stringify(currentTeams));
+          localStorage.setItem(`local_players_${uKey}`, JSON.stringify(currentPlayers));
+          localStorage.setItem(`local_matches_${uKey}`, JSON.stringify(currentMatches));
+          localStorage.setItem(`local_events_${uKey}`, JSON.stringify([]));
+          localStorage.setItem(`local_transfers_${uKey}`, JSON.stringify([]));
+        } catch(e) {
+          console.warn("Storage saturé au bootstrap");
+        }
       }
 
       if (currentMatches.length === 0 && currentTeams.length >= 2) {
         currentMatches = buildRoundRobinFixtures(currentTeams, uKey, 1);
-        localStorage.setItem(`local_matches_${uKey}`, JSON.stringify(currentMatches));
+        try {
+          localStorage.setItem(`local_matches_${uKey}`, JSON.stringify(currentMatches));
+        } catch(e) {}
       }
 
       setTeams(currentTeams);
@@ -840,7 +904,6 @@ export default function App() {
 
   function pickAssister(activePlayers, scorer) {
     if (!activePlayers || activePlayers.length < 2) return null;
-    // Exclure le buteur et les gardiens
     const candidates = activePlayers.filter(p => p.id !== scorer?.id && (p.poste || '').trim().toUpperCase() !== 'G');
     if (candidates.length === 0) return null;
 
@@ -1017,7 +1080,6 @@ export default function App() {
       if (carded) matchEventsList.push({ match_id: m.id, player_id: carded.id, type: 'carton_jaune', minute, journee: m.journee, saison: seasonNum, user_id: userId });
     }
 
-    // Enregistrement de la durée de blessure exacte
     if (Math.random() < 0.08) {
       const minute = Math.floor(Math.random() * 85) + 5;
       const injured = pickInjuredPlayer(getActivePlayersAtMinute(domStarters, domSubstitutions, minute));
@@ -1443,21 +1505,17 @@ export default function App() {
     setEditingPlayer(null);
   }
 
+  // Mise à jour de logo avec compression auto
   async function handleUpdateTeamLogo(e) {
     e.preventDefault();
     if (!editingTeamLogo || !newLogoFile) return;
 
     setLogoUpdating(true);
     try {
-      const logoUrl = await new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(reader.result);
-        reader.onerror = (err) => reject(err);
-        reader.readAsDataURL(newLogoFile);
-      });
+      const logoUrl = await compressImage(newLogoFile, 128);
 
       setTeams(prev => prev.map(t => t.id === editingTeamLogo.id ? { ...t, logo_url: logoUrl } : t));
-      showNotif(`Logo de "${editingTeamLogo.nom}" modifié !`);
+      showNotif(`✓ Logo de "${editingTeamLogo.nom}" optimisé et sauvegardé !`);
       setEditingTeamLogo(null);
       setNewLogoFile(null);
     } catch (err) {
@@ -1537,6 +1595,7 @@ export default function App() {
     }
   }
 
+  // Ajout d'équipe avec compression auto
   async function handleAddTeam(e) {
     e.preventDefault();
     if (!newTeamName) return;
@@ -1545,12 +1604,7 @@ export default function App() {
 
     if (logoFile) {
       try {
-        logoUrl = await new Promise((resolve, reject) => {
-          const reader = new FileReader();
-          reader.onload = () => resolve(reader.result);
-          reader.onerror = (err) => reject(err);
-          reader.readAsDataURL(logoFile);
-        });
+        logoUrl = await compressImage(logoFile, 128);
       } catch (err) {
         showNotif(`Erreur image : ${err.message}`);
         setUploading(false);
@@ -1737,7 +1791,10 @@ export default function App() {
 
       setTeams(updatedTeams);
       setSelectedLineupTeam(prev => ({ ...prev, formation: currentFormation, lineup_ids: starterIds }));
-      localStorage.setItem(`local_teams_${uKey}`, JSON.stringify(updatedTeams));
+      
+      try {
+        localStorage.setItem(`local_teams_${uKey}`, JSON.stringify(updatedTeams));
+      } catch (e) {}
 
       showNotif(`✓ Composition de "${selectedLineupTeam.nom}" (${currentFormation}) enregistrée !`);
     } catch (err) {
@@ -2289,6 +2346,7 @@ export default function App() {
                           </span>
                         </div>
 
+                        {/* SECTION SCORE ET ENTRÉES SANS FLÈCHES AVEC RECENTRAGE */}
                         <div className="flex items-center justify-center gap-2 sm:gap-3 shrink-0 my-2 sm:my-0">
                           <button
                             type="button"
@@ -2805,7 +2863,7 @@ export default function App() {
         )}
       </main>
 
-      {/* MODALE MERCATO (HIVER & ÉTÉ) */}
+      {/* MODALE MERCATO */}
       {mercatoReport && (
         <div className="fixed inset-0 bg-black/85 backdrop-blur-md z-50 flex items-center justify-center p-4">
           <div className="bg-slate-900 border border-slate-800 rounded-3xl max-w-3xl w-full p-6 shadow-2xl relative max-h-[90vh] flex flex-col">
