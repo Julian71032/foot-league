@@ -40,6 +40,16 @@ function getPositionRank(posteStr) {
   return POSITION_ORDER[code] ?? 99;
 }
 
+// Catégorie tactique stricte (Lignes cohérentes)
+function getPositionCategory(posteStr) {
+  const p = (posteStr || '').trim().toUpperCase();
+  if (p === 'G') return 'GK';
+  if (['DC', 'DD', 'DG', 'DLD', 'DLG'].includes(p)) return 'DEF';
+  if (['MDC', 'MC', 'MOC', 'MD', 'MG'].includes(p)) return 'MID';
+  if (['BU', 'AT', 'AD', 'AG', 'SA'].includes(p)) return 'ATT';
+  return 'MID';
+}
+
 function getSeasonLabel(seasonNum) {
   const startYear = 2026 + (parseInt(seasonNum, 10) - 1);
   return `Saison ${seasonNum} (${startYear}/${startYear + 1})`;
@@ -77,7 +87,7 @@ function generateInjuryDuration() {
   return { label: 'Fin de saison', matches: 38 };
 }
 
-// --- MOTEUR DE GESTION DES INDISPONIBILITÉS (BLESSURES + ROUGES + ACCUMULATION DE JAUNES) ---
+// Calcul de l'état d'indisponibilité (Blessures + Cartons Rouges + 3 Cartons Jaunes)
 function getPlayerStatusAt(playerId, targetJournee, targetSeason, eventsList) {
   const currentJ = parseInt(targetJournee, 10) || 1;
   const currentS = parseInt(targetSeason, 10) || 1;
@@ -86,7 +96,7 @@ function getPlayerStatusAt(playerId, targetJournee, targetSeason, eventsList) {
     e => String(e.player_id) === String(playerId) && (parseInt(e.saison, 10) || 1) === currentS
   );
 
-  // 1. Vérification des blessures
+  // 1. Blessures
   const injuries = playerEvents.filter(e => e.type === 'blessure');
   for (const inj of injuries) {
     const startJ = parseInt(inj.journee, 10) || 1;
@@ -103,7 +113,7 @@ function getPlayerStatusAt(playerId, targetJournee, targetSeason, eventsList) {
     }
   }
 
-  // 2. Vérification des cartons rouges directs (1 match de suspension automatique pour le match suivant)
+  // 2. Carton Rouge
   const redCards = playerEvents.filter(e => e.type === 'carton_rouge');
   for (const red of redCards) {
     const redJ = parseInt(red.journee, 10) || 1;
@@ -118,7 +128,7 @@ function getPlayerStatusAt(playerId, targetJournee, targetSeason, eventsList) {
     }
   }
 
-  // 3. Vérification de l'accumulation des cartons jaunes (3 jaunes sur 10 journées glissantes = 1 match de suspension)
+  // 3. Accumulation de 3 Cartons Jaunes
   const yellowCards = playerEvents
     .filter(e => e.type === 'carton_jaune')
     .map(e => parseInt(e.journee, 10) || 1)
@@ -557,7 +567,6 @@ export default function App() {
       });
   };
 
-  // Exclut de manière stricte les blessés et suspendus de la compo et du banc
   function getTeamStartersAndBench(team, targetJournee = journeeFilter) {
     if (!team) return { starters: [], bench: [], unavailable: [] };
     const all = getSortedTeamPlayers(team.id);
@@ -870,10 +879,12 @@ export default function App() {
           updatedPlayers[pIdx] = { ...updatedPlayers[pIdx], general: newGen, valeur_marchande: newVal };
         }
 
+        const assignedTeam = teams.find(t => String(t.id) === String(c.player.equipe_id));
+
         changedPlayers.push({
           id: c.player.id,
           nom: c.player.nom,
-          teamName: c.player.teams?.nom || 'Club',
+          teamName: assignedTeam?.nom || c.player.teams?.nom || 'Club',
           poste: c.player.poste,
           oldGen: c.currentGen,
           newGen: newGen,
@@ -991,8 +1002,8 @@ export default function App() {
   }
 
   function handleRollDice(matchId) {
-    const diceDom = Math.floor(Math.random() * 7);
-    const diceExt = Math.floor(Math.random() * 7);
+    const diceDom = Math.floor(Math.random() * 7); // 0 à 6
+    const diceExt = Math.floor(Math.random() * 7); // 0 à 6
 
     setScoresInput(prev => ({
       ...prev,
@@ -1007,6 +1018,7 @@ export default function App() {
 
     const matchEventsList = [];
 
+    // Remplacements Domicile Réalistes Poste pour Poste
     const domSubsCount = Math.min(domBench.length, Math.floor(Math.random() * 4) + 1);
     const domSubstitutions = [];
     const availableDomBench = [...domBench];
@@ -1015,11 +1027,19 @@ export default function App() {
     for (let s = 0; s < domSubsCount; s++) {
       if (availableDomBench.length === 0) break;
       const subMinute = Math.floor(Math.random() * 40) + 46;
-      const playerIn = availableDomBench.splice(Math.floor(Math.random() * availableDomBench.length), 1)[0];
+      
       const outCandidates = currentDomActive.filter(p => p.poste !== 'G');
       if (outCandidates.length === 0) break;
       const playerOut = outCandidates[Math.floor(Math.random() * outCandidates.length)];
+      const outCat = getPositionCategory(playerOut.poste);
 
+      let inIdx = availableDomBench.findIndex(p => getPositionCategory(p.poste) === outCat);
+      if (inIdx === -1) {
+        inIdx = availableDomBench.findIndex(p => p.poste !== 'G');
+      }
+      if (inIdx === -1) break;
+
+      const playerIn = availableDomBench.splice(inIdx, 1)[0];
       const outIdx = currentDomActive.findIndex(p => p.id === playerOut.id);
       if (outIdx !== -1) currentDomActive[outIdx] = playerIn;
 
@@ -1036,6 +1056,7 @@ export default function App() {
       });
     }
 
+    // Remplacements Extérieur Réalistes Poste pour Poste
     const extSubsCount = Math.min(extBench.length, Math.floor(Math.random() * 4) + 1);
     const extSubstitutions = [];
     const availableExtBench = [...extBench];
@@ -1044,11 +1065,19 @@ export default function App() {
     for (let s = 0; s < extSubsCount; s++) {
       if (availableExtBench.length === 0) break;
       const subMinute = Math.floor(Math.random() * 40) + 46;
-      const playerIn = availableExtBench.splice(Math.floor(Math.random() * availableExtBench.length), 1)[0];
+      
       const outCandidates = currentExtActive.filter(p => p.poste !== 'G');
       if (outCandidates.length === 0) break;
       const playerOut = outCandidates[Math.floor(Math.random() * outCandidates.length)];
+      const outCat = getPositionCategory(playerOut.poste);
 
+      let inIdx = availableExtBench.findIndex(p => getPositionCategory(p.poste) === outCat);
+      if (inIdx === -1) {
+        inIdx = availableExtBench.findIndex(p => p.poste !== 'G');
+      }
+      if (inIdx === -1) break;
+
+      const playerIn = availableExtBench.splice(inIdx, 1)[0];
       const outIdx = currentExtActive.findIndex(p => p.id === playerOut.id);
       if (outIdx !== -1) currentExtActive[outIdx] = playerIn;
 
@@ -1116,7 +1145,6 @@ export default function App() {
       if (carded) matchEventsList.push({ match_id: m.id, player_id: carded.id, type: 'carton_jaune', minute, journee: m.journee, saison: seasonNum, user_id: userId });
     }
 
-    // Carton rouge rare (~3.5% par camp)
     if (Math.random() < 0.035) {
       const minute = Math.floor(Math.random() * 80) + 10;
       const cardedRed = pickCardPlayer(getActivePlayersAtMinute(domStarters, domSubstitutions, minute));
@@ -1133,7 +1161,6 @@ export default function App() {
       }
     }
 
-    // Blessure rare (~8% par camp)
     if (Math.random() < 0.08) {
       const minute = Math.floor(Math.random() * 85) + 5;
       const injured = pickInjuredPlayer(getActivePlayersAtMinute(domStarters, domSubstitutions, minute));
@@ -1216,8 +1243,8 @@ export default function App() {
       const uKey = currentUser?.email || 'local_user';
 
       for (const m of currentJourneeMatches) {
-        const domTeam = teams.find(t => t.id === m.equipe_domicile_id) || { id: m.equipe_domicile_id, nom: 'Club Dom' };
-        const extTeam = teams.find(t => t.id === m.equipe_exterieur_id) || { id: m.equipe_exterieur_id, nom: 'Club Ext' };
+        const domTeam = teams.find(t => String(t.id) === String(m.equipe_domicile_id)) || { id: m.equipe_domicile_id, nom: 'Club Dom' };
+        const extTeam = teams.find(t => String(t.id) === String(m.equipe_exterieur_id)) || { id: m.equipe_exterieur_id, nom: 'Club Ext' };
         const simResult = simulateSingleMatchWithSubs(m, domTeam, extTeam, m.saison || 1, uKey);
 
         const mIdx = updatedMatches.findIndex(matchItem => matchItem.id === m.id);
@@ -1559,7 +1586,6 @@ export default function App() {
     setEditingPlayer(null);
   }
 
-  // Mise à jour de logo synchronisée Render + compression
   async function handleUpdateTeamLogo(e) {
     e.preventDefault();
     if (!editingTeamLogo || !newLogoFile) return;
@@ -1584,7 +1610,7 @@ export default function App() {
     setLogoUpdating(false);
   }
 
- async function openMatchDetails(match) {
+  async function openMatchDetails(match) {
     const dom = teams.find(t => String(t.id) === String(match.equipe_domicile_id)) || { id: match.equipe_domicile_id, nom: 'Club Domicile', logo_url: '' };
     const ext = teams.find(t => String(t.id) === String(match.equipe_exterieur_id)) || { id: match.equipe_exterieur_id, nom: 'Club Extérieur', logo_url: '' };
 
@@ -1702,22 +1728,20 @@ export default function App() {
     const gen = parseInt(newPlayer.general, 10) || 75;
     const age = parseInt(newPlayer.age, 10) || 22;
     const val = parseInt(newPlayer.valeur, 10) || calculateMarketValue(gen, age);
-    const assignedTeam = teams.find(t => String(t.id) === String(c.player.equipe_id));
+    const assignedTeam = teams.find(t => String(t.id) === String(newPlayer.equipe_id));
 
-        changedPlayers.push({
-          id: c.player.id,
-          nom: c.player.nom,
-          teamName: assignedTeam?.nom || c.player.teams?.nom || 'Club',
-          poste: c.player.poste,
-          oldGen: c.currentGen,
-          newGen: newGen,
-          delta: c.delta,
-          seasonTotal: currentSeasonMap[c.player.id],
-          oldVal: c.currentVal,
-          newVal: newVal,
-          buts: c.buts,
-          passes: c.passes
-        });
+    const createdPlayer = {
+      id: 'player_' + Date.now(),
+      nom: newPlayer.nom,
+      equipe_id: newPlayer.equipe_id,
+      numero: parseInt(newPlayer.numero, 10) || 10,
+      poste: newPlayer.poste,
+      general: gen,
+      general_base: gen,
+      valeur_marchande: val,
+      age: age,
+      teams: assignedTeam
+    };
 
     setPlayers(prev => [...prev, createdPlayer]);
     showNotif(`Joueur "${newPlayer.nom}" ajouté (${formatMoney(val)}) !`);
@@ -1869,6 +1893,7 @@ export default function App() {
     }
   }
 
+  // Permutation manuelle réaliste avec vérification stricte des lignes
   function handleSelectSlot(type, index) {
     if (!selectedSlot) {
       setSelectedSlot({ type, index });
@@ -1883,6 +1908,31 @@ export default function App() {
     const updatedPitch = [...teamLineupPlayers];
     const updatedBench = [...teamBenchPlayers];
 
+    const p1 = selectedSlot.type === 'pitch' ? updatedPitch[selectedSlot.index] : updatedBench[selectedSlot.index];
+    const p2 = type === 'pitch' ? updatedPitch[index] : updatedBench[index];
+
+    if (!p1 || !p2) {
+      setSelectedSlot(null);
+      return;
+    }
+
+    const cat1 = getPositionCategory(p1.poste);
+    const cat2 = getPositionCategory(p2.poste);
+
+    // Règle 1 : Les gardiens ne s'échangent qu'entre gardiens
+    if ((cat1 === 'GK' || cat2 === 'GK') && cat1 !== cat2) {
+      showNotif("⚠️ Un gardien (G) ne peut être échangé qu'avec un autre gardien !");
+      setSelectedSlot(null);
+      return;
+    }
+
+    // Règle 2 : Empêcher les échanges illogiques (Défenseur avec un Attaquant)
+    if ((cat1 === 'DEF' && cat2 === 'ATT') || (cat1 === 'ATT' && cat2 === 'DEF')) {
+      showNotif("⚠️ Incohérence tactique : un défenseur ne peut pas occuper un poste d'attaquant direct.");
+      setSelectedSlot(null);
+      return;
+    }
+
     if (selectedSlot.type === 'pitch' && type === 'pitch') {
       const temp = updatedPitch[selectedSlot.index];
       updatedPitch[selectedSlot.index] = updatedPitch[index];
@@ -1890,21 +1940,17 @@ export default function App() {
       setTeamLineupPlayers(updatedPitch);
       showNotif("Postes permutés ! N'oubliez pas d'enregistrer.");
     } else if (selectedSlot.type === 'bench' && type === 'pitch') {
-      const benchP = updatedBench[selectedSlot.index];
-      const pitchP = updatedPitch[index];
-      updatedPitch[index] = benchP;
-      updatedBench[selectedSlot.index] = pitchP;
+      updatedPitch[index] = p1;
+      updatedBench[selectedSlot.index] = p2;
       setTeamLineupPlayers(updatedPitch);
       setTeamBenchPlayers(updatedBench);
-      showNotif(`Changement : ${benchP.nom} entre pour ${pitchP.nom}`);
+      showNotif(`Changement : ${p1.nom} entre pour ${p2.nom}`);
     } else if (selectedSlot.type === 'pitch' && type === 'bench') {
-      const pitchP = updatedPitch[selectedSlot.index];
-      const benchP = updatedBench[index];
-      updatedPitch[selectedSlot.index] = benchP;
-      updatedBench[index] = pitchP;
+      updatedPitch[selectedSlot.index] = p2;
+      updatedBench[index] = p1;
       setTeamLineupPlayers(updatedPitch);
       setTeamBenchPlayers(updatedBench);
-      showNotif(`Changement : ${benchP.nom} entre pour ${pitchP.nom}`);
+      showNotif(`Changement : ${p2.nom} entre pour ${p1.nom}`);
     }
 
     setSelectedSlot(null);
@@ -1999,7 +2045,8 @@ export default function App() {
     );
   };
 
- const homeEvents = selectedMatch 
+  // Tri chronologique croissant des événements (de la première à la dernière minute)
+  const homeEvents = selectedMatch 
     ? selectedMatchEvents
         .filter(ev => String(ev.player_equipe_id) === String(selectedMatch.equipe_domicile_id))
         .sort((a, b) => (parseInt(a.minute, 10) || 0) - (parseInt(b.minute, 10) || 0))
