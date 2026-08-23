@@ -122,6 +122,50 @@ function compressImage(file, maxSize = 128) {
   });
 }
 
+// Fonction de remplacement chirurgical poste pour poste
+function patchLineupOnPlayerDeparture(team, departingPlayer, allPlayersList) {
+  let lineIds = team.lineup_ids;
+  if (typeof lineIds === 'string') {
+    try { lineIds = JSON.parse(lineIds); } catch (e) { lineIds = []; }
+  }
+  if (!Array.isArray(lineIds) || !lineIds.includes(departingPlayer.id)) {
+    return lineIds;
+  }
+
+  const teamRoster = allPlayersList.filter(p => String(p.equipe_id) === String(team.id) && String(p.id) !== String(departingPlayer.id));
+  const startersSet = new Set(lineIds);
+  const bench = teamRoster.filter(p => !startersSet.has(p.id));
+
+  const depCat = getPositionCategory(departingPlayer.poste);
+
+  // Recherche du meilleur joueur du banc de la même ligne
+  let candidate = bench
+    .filter(p => getPositionCategory(p.poste) === depCat)
+    .sort((a, b) => (b.general || 0) - (a.general || 0))[0];
+
+  // Si aucun joueur de la même ligne, on prend le meilleur joueur de champ disponible
+  if (!candidate && depCat !== 'GK') {
+    candidate = bench
+      .filter(p => p.poste !== 'G')
+      .sort((a, b) => (b.general || 0) - (a.general || 0))[0];
+  } else if (!candidate && depCat === 'GK') {
+    candidate = bench
+      .filter(p => p.poste === 'G')
+      .sort((a, b) => (b.general || 0) - (a.general || 0))[0];
+  }
+
+  const newIds = [...lineIds];
+  const idx = newIds.indexOf(departingPlayer.id);
+
+  if (candidate && idx !== -1) {
+    newIds[idx] = candidate.id;
+  } else {
+    newIds.splice(idx, 1);
+  }
+
+  return newIds;
+}
+
 const FORMATIONS = {
   '4-3-3': { name: '4-3-3 (Classique)', def: 4, mid: 3, att: 3 },
   '4-4-2': { name: '4-4-2 (Équilibré)', def: 4, mid: 4, att: 2 },
@@ -500,7 +544,7 @@ export default function App() {
       });
   };
 
-  // Tous les joueurs sont toujours disponibles sans blocage
+  // Récupération stricte du 11 titulaire sans réorganisation automatique intempestive
   function getTeamStartersAndBench(team) {
     if (!team) return { starters: [], bench: [] };
     const all = getSortedTeamPlayers(team.id);
@@ -510,17 +554,18 @@ export default function App() {
       try { savedIds = JSON.parse(savedIds); } catch (e) { savedIds = []; }
     }
 
-    if (Array.isArray(savedIds) && savedIds.length >= 11) {
-      const map = new Map(all.map(p => [p.id, p]));
-      const starters = savedIds.map(id => map.get(id)).filter(Boolean);
-      const starterSet = new Set(starters.map(p => p.id));
-      const bench = all.filter(p => !starterSet.has(p.id));
+    if (Array.isArray(savedIds) && savedIds.length > 0) {
+      const map = new Map(all.map(p => [String(p.id), p]));
+      const starters = savedIds.map(id => map.get(String(id))).filter(Boolean);
+      const starterSet = new Set(starters.map(p => String(p.id)));
+      const bench = all.filter(p => !starterSet.has(String(p.id)));
 
       if (starters.length >= 11) {
         return { starters: starters.slice(0, 11), bench };
       }
     }
 
+    // Si aucune composition n'a jamais été enregistrée, on initialise une première fois
     return { starters: all.slice(0, 11), bench: all.slice(11) };
   }
 
@@ -607,15 +652,11 @@ export default function App() {
           };
         }
 
+        // Remplacement chirurgical dans l'équipe d'origine sans toucher aux autres
         const oldTeamIdx = updatedTeamsList.findIndex(t => String(t.id) === String(originTeamId));
-        if (oldTeamIdx !== -1 && updatedTeamsList[oldTeamIdx].lineup_ids) {
-          let lineIds = updatedTeamsList[oldTeamIdx].lineup_ids;
-          if (typeof lineIds === 'string') {
-            try { lineIds = JSON.parse(lineIds); } catch (e) { lineIds = []; }
-          }
-          if (Array.isArray(lineIds)) {
-            updatedTeamsList[oldTeamIdx].lineup_ids = lineIds.filter(id => id !== player.id);
-          }
+        if (oldTeamIdx !== -1) {
+          const patchedIds = patchLineupOnPlayerDeparture(updatedTeamsList[oldTeamIdx], player, updatedPlayers);
+          updatedTeamsList[oldTeamIdx] = { ...updatedTeamsList[oldTeamIdx], lineup_ids: patchedIds };
         }
 
         const newTr = {
@@ -662,7 +703,6 @@ export default function App() {
     }
   }
 
-  // --- ÉVOLUTION DES JOUEURS : PLAFONNEMENT STRICT DE +3 / -3 SUR LA SAISON ---
   async function evaluateAndApplyPlayerEvolutions(targetJournee, currentSeasonNum) {
     const startJournee = targetJournee - 3;
     const endJournee = targetJournee;
@@ -935,8 +975,8 @@ export default function App() {
   }
 
   function handleRollDice(matchId) {
-    const diceDom = Math.floor(Math.random() * 7); // 0 à 6
-    const diceExt = Math.floor(Math.random() * 7); // 0 à 6
+    const diceDom = Math.floor(Math.random() * 7);
+    const diceExt = Math.floor(Math.random() * 7);
 
     setScoresInput(prev => ({
       ...prev,
@@ -951,7 +991,6 @@ export default function App() {
 
     const matchEventsList = [];
 
-    // Remplacements Domicile Réalistes Poste pour Poste
     const domSubsCount = Math.min(domBench.length, Math.floor(Math.random() * 4) + 1);
     const domSubstitutions = [];
     const availableDomBench = [...domBench];
@@ -989,7 +1028,6 @@ export default function App() {
       });
     }
 
-    // Remplacements Extérieur Réalistes Poste pour Poste
     const extSubsCount = Math.min(extBench.length, Math.floor(Math.random() * 4) + 1);
     const extSubstitutions = [];
     const availableExtBench = [...extBench];
@@ -1381,6 +1419,7 @@ export default function App() {
     }
   }
 
+  // Transfert manuel avec ajustement propre du 11
   async function handleTransferPlayer(e) {
     e.preventDefault();
     if (!transferFromTeamId || !transferPlayerId || !transferToTeamId) {
@@ -1429,15 +1468,11 @@ export default function App() {
       return p;
     });
 
+    // Remplacement chirurgical dans l'ancien club
     const updatedTeamsList = teams.map(t => {
-      if (String(t.id) === String(transferFromTeamId) && t.lineup_ids) {
-        let lineIds = t.lineup_ids;
-        if (typeof lineIds === 'string') {
-          try { lineIds = JSON.parse(lineIds); } catch (e) { lineIds = []; }
-        }
-        if (Array.isArray(lineIds)) {
-          return { ...t, lineup_ids: lineIds.filter(id => id !== transferPlayerId) };
-        }
+      if (String(t.id) === String(transferFromTeamId)) {
+        const patchedIds = patchLineupOnPlayerDeparture(t, selectedPlayer, updatedPlayers);
+        return { ...t, lineup_ids: patchedIds };
       }
       return t;
     });
@@ -1490,6 +1525,7 @@ export default function App() {
     showNotif(`Le joueur "${playerNom}" a été supprimé.`);
   }
 
+  // Mise à jour de joueur sans toucher à l'ordonnancement de la compo
   async function handleUpdatePlayer(e) {
     e.preventDefault();
     if (!editingPlayer) return;
