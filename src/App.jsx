@@ -469,7 +469,6 @@ export default function App() {
       let currentPlayers = Array.isArray(localPlayers) ? localPlayers : [];
       let currentMatches = Array.isArray(localMatches) ? localMatches : [];
       let currentEvents = Array.isArray(localEvents) ? localEvents : [];
-      let currentTransfers = Array.isArray(localTransfers) ? localTransfers : [];
       let currentEvolutions = (localEvolutions && typeof localEvolutions === 'object') ? localEvolutions : {};
 
       if (currentTeams.length === 0 || currentPlayers.length === 0) {
@@ -502,7 +501,7 @@ export default function App() {
       setPlayers(currentPlayers);
       setMatches(currentMatches);
       setMatchEvents(currentEvents);
-      setTransfers(currentTransfers);
+      setTransfers(localTransfers && Array.isArray(localTransfers) ? localTransfers : []);
       setSeasonEvolutions(currentEvolutions);
 
       const maxS = currentMatches.length > 0 ? Math.max(...currentMatches.map(m => m.saison || 1), 1) : 1;
@@ -564,7 +563,6 @@ export default function App() {
     return { starters: all.slice(0, 11), bench: all.slice(11) };
   }
 
-  // --- MERCATO AVEC MISE À JOUR FONCTIONNELLE ---
   async function triggerAutomatedMercato(journeeNum, currentSeasonNum, maxTransfers = 4, isSummer = false) {
     if (!teams || teams.length < 2 || !players || players.length < 10) return;
 
@@ -658,7 +656,6 @@ export default function App() {
           fee: fee,
           type: isLoan ? 'Prêt (1 an)' : 'Achat',
           reason: reason,
-          // Extra data for functional updates
           playerObj: player,
           originTeamObj: originTeam,
           destTeamObj: destinationTeam,
@@ -722,7 +719,7 @@ export default function App() {
     }
   }
 
-  // --- ÉVOLUTIONS AVEC MISE À JOUR FONCTIONNELLE ---
+  // --- FORMULE RÉÉQUILIBRÉE DES ÉVOLUTIONS (PÉNALITÉS RÉALISTES POUR LES ATTAQUANTS) ---
   async function evaluateAndApplyPlayerEvolutions(targetJournee, currentSeasonNum, latestMatches, latestEvents) {
     const startJournee = targetJournee - 3;
     const endJournee = targetJournee;
@@ -761,7 +758,6 @@ export default function App() {
     });
 
     const candidates = [];
-    // Utilisation directe du state courant via seasonEvolutions pour le calcul de delta
     const currentSeasonMapForCalc = { ...(seasonEvolutions[currentSeasonNum] || {}) };
 
     for (const player of players) {
@@ -781,19 +777,30 @@ export default function App() {
       let perfScore = 0;
 
       if (['BU', 'AT', 'AD', 'AG', 'SA'].includes(pos)) {
-        perfScore += buts * 3.5;
-        perfScore += passes * 2.0;
-        perfScore += (tRec.wins * 0.8) - (tRec.losses * 0.8);
+        // Gain réajusté par contribution
+        perfScore += buts * 2.2;
+        perfScore += passes * 1.5;
+        // Malus si l'attaquant est muet / stérile sur les 4 matchs
+        if (buts === 0 && passes === 0) {
+          perfScore -= 2.2;
+        } else if (buts + passes === 1) {
+          perfScore -= 0.8;
+        }
+        // Impact des victoires / défaites collectives
+        perfScore += (tRec.wins * 0.7) - (tRec.losses * 1.0);
       } else if (['MOC', 'MC', 'MD', 'MG'].includes(pos)) {
-        perfScore += buts * 3.0;
-        perfScore += passes * 2.8;
-        perfScore += (tRec.wins * 1.0) - (tRec.losses * 0.8);
+        perfScore += buts * 2.8;
+        perfScore += passes * 2.5;
+        if (buts === 0 && passes === 0) {
+          perfScore -= 1.0;
+        }
+        perfScore += (tRec.wins * 0.9) - (tRec.losses * 0.9);
       } else if (['MDC', 'DC', 'DD', 'DG', 'DLD', 'DLG'].includes(pos)) {
-        perfScore += buts * 4.0;
+        perfScore += buts * 3.5;
         perfScore += passes * 2.0;
         perfScore += (tRec.cleanSheets * 2.0);
         perfScore += (tRec.wins * 0.8);
-        perfScore -= (tRec.goalsConceded * 0.5);
+        perfScore -= (tRec.goalsConceded * 0.6);
       } else if (pos === 'G') {
         perfScore += (tRec.cleanSheets * 3.0);
         perfScore += (tRec.wins * 1.0);
@@ -805,24 +812,24 @@ export default function App() {
       let delta = 0;
       if (currentGen >= 88) {
         if (perfScore >= 10.0) delta = +1;
-        else if (perfScore <= -3.0) delta = -2;
+        else if (perfScore <= -2.0) delta = -2;
         else if (perfScore <= 0.0) delta = -1;
       } else if (currentGen >= 82) {
-        if (perfScore >= 11.5) delta = +2;
-        else if (perfScore >= 7.0) delta = +1;
-        else if (perfScore <= -3.5) delta = -2;
+        if (perfScore >= 11.0) delta = +2;
+        else if (perfScore >= 6.5) delta = +1;
+        else if (perfScore <= -2.5) delta = -2;
         else if (perfScore <= 0.0) delta = -1;
       } else if (currentGen >= 74) {
-        if (perfScore >= 10.0) delta = +2;
-        else if (perfScore >= 5.0) delta = +1;
-        else if (perfScore <= -3.0) delta = -2;
+        if (perfScore >= 9.5) delta = +2;
+        else if (perfScore >= 4.5) delta = +1;
+        else if (perfScore <= -2.5) delta = -2;
         else if (perfScore <= -0.5) delta = -1;
       } else {
-        if (perfScore >= 9.5) delta = +3;
-        else if (perfScore >= 6.0) delta = +2;
-        else if (perfScore >= 3.0) delta = +1;
-        else if (perfScore <= -4.0) delta = -2;
-        else if (perfScore <= -1.5) delta = -1;
+        if (perfScore >= 9.0) delta = +3;
+        else if (perfScore >= 5.5) delta = +2;
+        else if (perfScore >= 2.5) delta = +1;
+        else if (perfScore <= -3.5) delta = -2;
+        else if (perfScore <= -1.0) delta = -1;
       }
 
       const currentCumulative = currentSeasonMapForCalc[player.id] || 0;
@@ -3164,7 +3171,6 @@ export default function App() {
               </button>
             </div>
 
-            {/* BANC DES REMPLAÇANTS */}
             <div className="mt-4 bg-slate-950 p-3 rounded-2xl border border-slate-800">
               <h4 className="text-[11px] font-extrabold uppercase tracking-wider text-slate-400 mb-2">🪑 Banc des Remplaçants ({teamBenchPlayers.length})</h4>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-40 overflow-y-auto pr-1">
