@@ -564,13 +564,21 @@ export default function App() {
     return { starters: all.slice(0, 11), bench: all.slice(11) };
   }
 
-  // Mercato automatisé : Minimum 18 joueurs pour vendre, Maximum 28 pour recruter
+  // Mercato automatisé : Min 18 pour vendre, Max 28 pour acheter, et JAMAIS de vente si dernier joueur au poste
   async function triggerAutomatedMercato(journeeNum, currentSeasonNum, maxTransfers = 4, isSummer = false) {
     if (!teams || teams.length < 2 || !players || players.length < 10) return;
 
     const teamCounts = {};
+    const teamPosCounts = {};
+
     teams.forEach(t => {
-      teamCounts[t.id] = players.filter(p => String(p.equipe_id) === String(t.id)).length;
+      const tPlayers = players.filter(p => String(p.equipe_id) === String(t.id));
+      teamCounts[t.id] = tPlayers.length;
+      teamPosCounts[t.id] = {};
+      tPlayers.forEach(p => {
+        const pos = p.poste || 'MC';
+        teamPosCounts[t.id][pos] = (teamPosCounts[t.id][pos] || 0) + 1;
+      });
     });
 
     const rankedTeams = [...classement];
@@ -592,17 +600,21 @@ export default function App() {
       const currentGen = player.general || 75;
       const age = player.age || 24;
       const originTeamId = player.equipe_id;
+      const playerPos = player.poste || 'MC';
       const originTeam = teams.find(t => String(t.id) === String(originTeamId));
       if (!originTeam) continue;
 
-      // Interdiction formelle de vendre si le club a 18 joueurs ou moins
+      // 1. Règle effectif global min 18
       if ((teamCounts[originTeamId] || 0) <= 18) continue;
+
+      // 2. Règle doublure obligatoire : interdiction de vendre s'il est le SEUL joueur à ce poste
+      if ((teamPosCounts[originTeamId]?.[playerPos] || 0) <= 1) continue;
 
       let destinationTeam = null;
       let reason = '';
       let isLoan = false;
 
-      // Interdiction formelle d'acheter si le club a 28 joueurs ou plus
+      // Règle effectif max 28 pour le club acheteur
       const canBuy = (club) => String(club.id) !== String(originTeamId) && (teamCounts[club.id] || 0) < 28;
 
       if (currentGen >= 83 || (age <= 22 && currentGen >= 78)) {
@@ -638,6 +650,8 @@ export default function App() {
 
         teamCounts[originTeamId]--;
         teamCounts[destinationTeam.id]++;
+        teamPosCounts[originTeamId][playerPos]--;
+        teamPosCounts[destinationTeam.id][playerPos] = (teamPosCounts[destinationTeam.id][playerPos] || 0) + 1;
 
         const pIdx = updatedPlayers.findIndex(p => p.id === player.id);
         if (pIdx !== -1) {
@@ -733,7 +747,7 @@ export default function App() {
         if (m.score_domicile === 0) teamRecords[m.equipe_exterieur_id].cleanSheets++;
         if (m.score_exterieur > m.score_domicile) teamRecords[m.equipe_exterieur_id].wins++;
         else if (m.score_exterieur < m.score_domicile) teamRecords[m.equipe_exterieur_id].losses++;
-        else teamRecords[m.equipe_exterieur_id].draws++;
+        else teamRecords[m.equipe_domlayer_id].draws++;
       }
     });
 
@@ -1188,7 +1202,6 @@ export default function App() {
     return { scoreDom, scoreExt, events };
   }
 
-  // Simulation automatique d'une journée avec gestion du mercato d'hiver (J19 à J23)
   async function handleSimulateJournee() {
     const currentJourneeMatches = seasonMatches.filter(m => m.journee === parseInt(journeeFilter, 10));
     if (currentJourneeMatches.length === 0) {
@@ -1239,12 +1252,10 @@ export default function App() {
 
       showNotif(`Journée ${journeeFilter} simulée avec succès !`);
 
-      // Mercato d'Hiver : 4 transferts par journée entre la 19e et la 23e journée
       if (currentJ >= 19 && currentJ <= 23) {
         await triggerAutomatedMercato(currentJ, currentS, 4, false);
       }
 
-      // Mercato Estival complet à la fin de la saison : 15 transferts
       if (currentJ === maxJourneesCount) {
         await triggerAutomatedMercato(currentJ, currentS, 15, true);
       }
@@ -1390,7 +1401,6 @@ export default function App() {
     .filter(j => j.passes_decisives > 0)
     .sort((a, b) => b.passes_decisives - a.passes_decisives);
 
-  // Vendeurs éligibles : Strictement plus de 18 joueurs
   const availableSellerTeams = teams.filter(t => {
     const count = players.filter(p => String(p.equipe_id) === String(t.id)).length;
     return count > 18;
@@ -1398,7 +1408,6 @@ export default function App() {
 
   const availablePlayersForTransfer = players.filter(p => String(p.equipe_id) === String(transferFromTeamId));
 
-  // Acheteurs éligibles : Strictement moins de 28 joueurs
   const availableDestinationTeams = teams.filter(t => {
     if (String(t.id) === String(transferFromTeamId)) return false;
     const count = players.filter(p => String(p.equipe_id) === String(t.id)).length;
@@ -1420,7 +1429,7 @@ export default function App() {
     }
   }
 
-  // Transfert manuel avec contrôle strict : Min 18 pour vendre, Max 28 pour acheter
+  // Transfert manuel avec vérification : Min 18 global et doublure obligatoire au poste
   async function handleTransferPlayer(e) {
     e.preventDefault();
     if (!transferFromTeamId || !transferPlayerId || !transferToTeamId) {
@@ -1435,7 +1444,21 @@ export default function App() {
 
     const sellerCount = players.filter(p => String(p.equipe_id) === String(transferFromTeamId)).length;
     if (sellerCount <= 18) {
-      showNotif("Ce club a 18 joueurs ou moins : il ne peut plus vendre de joueur !");
+      showNotif("Ce club a 18 joueurs ou moins : il ne peut plus céder de joueur !");
+      return;
+    }
+
+    const selectedPlayer = players.find(p => p.id === transferPlayerId);
+    if (!selectedPlayer) return;
+
+    // Règle doublure au poste
+    const playerPos = selectedPlayer.poste || 'MC';
+    const samePosCount = players.filter(
+      p => String(p.equipe_id) === String(transferFromTeamId) && (p.poste || 'MC') === playerPos
+    ).length;
+
+    if (samePosCount <= 1) {
+      showNotif(`Impossible de transférer ${selectedPlayer.nom} : c'est le seul joueur au poste de ${playerPos} dans ce club !`);
       return;
     }
 
@@ -1445,10 +1468,8 @@ export default function App() {
       return;
     }
 
-    const selectedPlayer = players.find(p => p.id === transferPlayerId);
     const destTeam = teams.find(t => String(t.id) === String(transferToTeamId));
     const origTeam = teams.find(t => String(t.id) === String(transferFromTeamId));
-    if (!selectedPlayer) return;
 
     setTransferLoading(true);
 
@@ -1639,11 +1660,9 @@ export default function App() {
       const allCompleted = otherMatchesInJ.every(m => m.statut === 'terminé');
 
       if (allCompleted) {
-        // Mercato d'Hiver : 4 transferts par journée entre la 19e et la 23e journée
         if (currentJ >= 19 && currentJ <= 23) {
           await triggerAutomatedMercato(currentJ, currentS, 4, false);
         }
-        // Mercato Estival complet à la fin de la saison : 15 transferts
         if (currentJ === maxJourneesCount) {
           await triggerAutomatedMercato(currentJ, currentS, 15, true);
         }
@@ -1656,7 +1675,6 @@ export default function App() {
     }
   }
 
-  // Création d'équipe avec quota maximum
   async function handleAddTeam(e) {
     e.preventDefault();
     if (!newTeamName) return;
@@ -1688,7 +1706,6 @@ export default function App() {
     setLogoFile(null);
   }
 
-  // Ajout de joueur avec vérification stricte du plafond de 28
   async function handleAddPlayer(e) {
     e.preventDefault();
     if (!newPlayer.nom || !newPlayer.equipe_id) return;
@@ -3089,28 +3106,24 @@ export default function App() {
               <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-28 h-28 border-2 border-white/25 rounded-full pointer-events-none"></div>
               <div className="absolute top-1/2 left-0 right-0 h-0.5 bg-white/25 pointer-events-none"></div>
 
-              {/* Ligne Attaque */}
               <div className="relative z-10 flex justify-around items-center pt-2">
                 {pitchATT.map((slot) => (
                   <PitchPlayerSlot key={slot.p?.id || slot.idx} player={slot.p} globalIndex={slot.idx} />
                 ))}
               </div>
 
-              {/* Ligne Milieu */}
               <div className="relative z-10 flex justify-around items-center py-2">
                 {pitchMID.map((slot) => (
                   <PitchPlayerSlot key={slot.p?.id || slot.idx} player={slot.p} globalIndex={slot.idx} />
                 ))}
               </div>
 
-              {/* Ligne Défense */}
               <div className="relative z-10 flex justify-around items-center py-2">
                 {pitchDEF.map((slot) => (
                   <PitchPlayerSlot key={slot.p?.id || slot.idx} player={slot.p} globalIndex={slot.idx} />
                 ))}
               </div>
 
-              {/* Gardien */}
               <div className="relative z-10 flex justify-center items-center pb-2">
                 {pitchGK.map((slot) => (
                   <PitchPlayerSlot key={slot.p?.id || slot.idx} player={slot.p} globalIndex={slot.idx} />
@@ -3129,7 +3142,6 @@ export default function App() {
               </button>
             </div>
 
-            {/* BANC DES REMPLAÇANTS */}
             <div className="mt-4 bg-slate-950 p-3 rounded-2xl border border-slate-800">
               <h4 className="text-[11px] font-extrabold uppercase tracking-wider text-slate-400 mb-2">🪑 Banc des Remplaçants ({teamBenchPlayers.length})</h4>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-40 overflow-y-auto pr-1">
