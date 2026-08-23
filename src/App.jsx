@@ -40,7 +40,6 @@ function getPositionRank(posteStr) {
   return POSITION_ORDER[code] ?? 99;
 }
 
-// Catégorie tactique stricte (Lignes cohérentes)
 function getPositionCategory(posteStr) {
   const p = (posteStr || '').trim().toUpperCase();
   if (p === 'G') return 'GK';
@@ -87,7 +86,6 @@ function generateInjuryDuration() {
   return { label: 'Fin de saison', matches: 38 };
 }
 
-// Calcul de l'état d'indisponibilité (Blessures + Cartons Rouges + 3 Cartons Jaunes)
 function getPlayerStatusAt(playerId, targetJournee, targetSeason, eventsList) {
   const currentJ = parseInt(targetJournee, 10) || 1;
   const currentS = parseInt(targetSeason, 10) || 1;
@@ -96,7 +94,6 @@ function getPlayerStatusAt(playerId, targetJournee, targetSeason, eventsList) {
     e => String(e.player_id) === String(playerId) && (parseInt(e.saison, 10) || 1) === currentS
   );
 
-  // 1. Blessures
   const injuries = playerEvents.filter(e => e.type === 'blessure');
   for (const inj of injuries) {
     const startJ = parseInt(inj.journee, 10) || 1;
@@ -113,7 +110,6 @@ function getPlayerStatusAt(playerId, targetJournee, targetSeason, eventsList) {
     }
   }
 
-  // 2. Carton Rouge
   const redCards = playerEvents.filter(e => e.type === 'carton_rouge');
   for (const red of redCards) {
     const redJ = parseInt(red.journee, 10) || 1;
@@ -128,7 +124,6 @@ function getPlayerStatusAt(playerId, targetJournee, targetSeason, eventsList) {
     }
   }
 
-  // 3. Accumulation de 3 Cartons Jaunes
   const yellowCards = playerEvents
     .filter(e => e.type === 'carton_jaune')
     .map(e => parseInt(e.journee, 10) || 1)
@@ -338,6 +333,15 @@ export default function App() {
     }
   }, [transfers, loading, currentUser]);
 
+  useEffect(() => {
+    if (!loading && currentUser) {
+      const uKey = currentUser.email;
+      try {
+        localStorage.setItem(`local_evolutions_${uKey}`, JSON.stringify(seasonEvolutions));
+      } catch (e) {}
+    }
+  }, [seasonEvolutions, loading, currentUser]);
+
   function showNotif(msg) {
     setNotification(msg);
     setTimeout(() => setNotification(''), 4500);
@@ -482,6 +486,7 @@ export default function App() {
       let localMatches = null;
       let localEvents = null;
       let localTransfers = null;
+      let localEvolutions = null;
 
       try {
         localTeams = JSON.parse(localStorage.getItem(`local_teams_${uKey}`));
@@ -489,6 +494,7 @@ export default function App() {
         localMatches = JSON.parse(localStorage.getItem(`local_matches_${uKey}`));
         localEvents = JSON.parse(localStorage.getItem(`local_events_${uKey}`));
         localTransfers = JSON.parse(localStorage.getItem(`local_transfers_${uKey}`));
+        localEvolutions = JSON.parse(localStorage.getItem(`local_evolutions_${uKey}`));
       } catch (e) {
         console.error("Cache local ignoré.");
       }
@@ -498,6 +504,7 @@ export default function App() {
       let currentMatches = Array.isArray(localMatches) ? localMatches : [];
       let currentEvents = Array.isArray(localEvents) ? localEvents : [];
       let currentTransfers = Array.isArray(localTransfers) ? localTransfers : [];
+      let currentEvolutions = (localEvolutions && typeof localEvolutions === 'object') ? localEvolutions : {};
 
       if (currentTeams.length === 0 || currentPlayers.length === 0) {
         const [resTeams, resPlayers] = await Promise.all([
@@ -530,6 +537,7 @@ export default function App() {
       setMatches(currentMatches);
       setMatchEvents(currentEvents);
       setTransfers(currentTransfers);
+      setSeasonEvolutions(currentEvolutions);
 
       const maxS = currentMatches.length > 0 ? Math.max(...currentMatches.map(m => m.saison || 1), 1) : 1;
       const savedSeason = localStorage.getItem(`local_season_${uKey}`);
@@ -733,6 +741,7 @@ export default function App() {
     }
   }
 
+  // --- ÉVOLUTION DES JOUEURS : PLAFONNEMENT STRICT DE +3 / -3 SUR LA SAISON ---
   async function evaluateAndApplyPlayerEvolutions(targetJournee, currentSeasonNum) {
     const startJournee = targetJournee - 3;
     const endJournee = targetJournee;
@@ -834,12 +843,15 @@ export default function App() {
         else if (perfScore <= -1.5) delta = -1;
       }
 
-      delta = Math.max(-3, Math.min(3, delta));
+      // Vérification et bridage cumulatif pour respecter strictement [-3, +3] sur toute la saison
       const currentCumulative = currentSeasonMap[player.id] || 0;
-      let allowedDelta = delta;
+      let allowedDelta = 0;
 
-      if (delta > 0) allowedDelta = Math.min(delta, 3 - currentCumulative);
-      else if (delta < 0) allowedDelta = Math.max(delta, -3 - currentCumulative);
+      if (delta > 0) {
+        allowedDelta = Math.min(delta, Math.max(0, 3 - currentCumulative));
+      } else if (delta < 0) {
+        allowedDelta = Math.max(delta, Math.min(0, -3 - currentCumulative));
+      }
 
       if (allowedDelta !== 0) {
         candidates.push({
@@ -1018,7 +1030,6 @@ export default function App() {
 
     const matchEventsList = [];
 
-    // Remplacements Domicile Réalistes Poste pour Poste
     const domSubsCount = Math.min(domBench.length, Math.floor(Math.random() * 4) + 1);
     const domSubstitutions = [];
     const availableDomBench = [...domBench];
@@ -1056,7 +1067,6 @@ export default function App() {
       });
     }
 
-    // Remplacements Extérieur Réalistes Poste pour Poste
     const extSubsCount = Math.min(extBench.length, Math.floor(Math.random() * 4) + 1);
     const extSubstitutions = [];
     const availableExtBench = [...extBench];
@@ -1316,6 +1326,7 @@ export default function App() {
         localStorage.removeItem(`local_transfers_${uKey}`);
         localStorage.removeItem(`local_season_${uKey}`);
         localStorage.removeItem(`local_journee_${uKey}`);
+        localStorage.removeItem(`local_evolutions_${uKey}`);
         await fetchUserData(uKey);
         return;
       }
@@ -1348,6 +1359,7 @@ export default function App() {
 
       localStorage.setItem(`local_season_${uKey}`, targetSeason);
       localStorage.setItem(`local_journee_${uKey}`, 1);
+      localStorage.setItem(`local_evolutions_${uKey}`, JSON.stringify({}));
     } catch (err) {
       alert(`Erreur génération : ${err.message}`);
     }
@@ -1893,7 +1905,6 @@ export default function App() {
     }
   }
 
-  // Permutation manuelle réaliste avec vérification stricte des lignes
   function handleSelectSlot(type, index) {
     if (!selectedSlot) {
       setSelectedSlot({ type, index });
@@ -1919,14 +1930,12 @@ export default function App() {
     const cat1 = getPositionCategory(p1.poste);
     const cat2 = getPositionCategory(p2.poste);
 
-    // Règle 1 : Les gardiens ne s'échangent qu'entre gardiens
     if ((cat1 === 'GK' || cat2 === 'GK') && cat1 !== cat2) {
       showNotif("⚠️ Un gardien (G) ne peut être échangé qu'avec un autre gardien !");
       setSelectedSlot(null);
       return;
     }
 
-    // Règle 2 : Empêcher les échanges illogiques (Défenseur avec un Attaquant)
     if ((cat1 === 'DEF' && cat2 === 'ATT') || (cat1 === 'ATT' && cat2 === 'DEF')) {
       showNotif("⚠️ Incohérence tactique : un défenseur ne peut pas occuper un poste d'attaquant direct.");
       setSelectedSlot(null);
@@ -2045,7 +2054,6 @@ export default function App() {
     );
   };
 
-  // Tri chronologique croissant des événements (de la première à la dernière minute)
   const homeEvents = selectedMatch 
     ? selectedMatchEvents
         .filter(ev => String(ev.player_equipe_id) === String(selectedMatch.equipe_domicile_id))
