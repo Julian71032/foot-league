@@ -1996,12 +1996,16 @@ export default function App() {
     );
   };
 
-  const homeEvents = selectedMatch 
-    ? selectedMatchEvents.filter(ev => String(ev.player_equipe_id) === String(selectedMatch.equipe_domicile_id)) 
+ const homeEvents = selectedMatch 
+    ? selectedMatchEvents
+        .filter(ev => String(ev.player_equipe_id) === String(selectedMatch.equipe_domicile_id))
+        .sort((a, b) => (parseInt(a.minute, 10) || 0) - (parseInt(b.minute, 10) || 0))
     : [];
 
   const awayEvents = selectedMatch 
-    ? selectedMatchEvents.filter(ev => String(ev.player_equipe_id) === String(selectedMatch.equipe_exterieur_id)) 
+    ? selectedMatchEvents
+        .filter(ev => String(ev.player_equipe_id) === String(selectedMatch.equipe_exterieur_id))
+        .sort((a, b) => (parseInt(a.minute, 10) || 0) - (parseInt(b.minute, 10) || 0))
     : [];
 
   if (!currentUser) {
