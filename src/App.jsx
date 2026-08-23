@@ -1699,20 +1699,22 @@ export default function App() {
     const gen = parseInt(newPlayer.general, 10) || 75;
     const age = parseInt(newPlayer.age, 10) || 22;
     const val = parseInt(newPlayer.valeur, 10) || calculateMarketValue(gen, age);
-    const assignedTeam = teams.find(t => String(t.id) === String(newPlayer.equipe_id));
+    const assignedTeam = teams.find(t => String(t.id) === String(c.player.equipe_id));
 
-    const createdPlayer = {
-      id: 'player_' + Date.now(),
-      nom: newPlayer.nom,
-      equipe_id: newPlayer.equipe_id,
-      numero: parseInt(newPlayer.numero, 10) || 10,
-      poste: newPlayer.poste,
-      general: gen,
-      general_base: gen,
-      valeur_marchande: val,
-      age: age,
-      teams: assignedTeam
-    };
+        changedPlayers.push({
+          id: c.player.id,
+          nom: c.player.nom,
+          teamName: assignedTeam?.nom || c.player.teams?.nom || 'Club',
+          poste: c.player.poste,
+          oldGen: c.currentGen,
+          newGen: newGen,
+          delta: c.delta,
+          seasonTotal: currentSeasonMap[c.player.id],
+          oldVal: c.currentVal,
+          newVal: newVal,
+          buts: c.buts,
+          passes: c.passes
+        });
 
     setPlayers(prev => [...prev, createdPlayer]);
     showNotif(`Joueur "${newPlayer.nom}" ajouté (${formatMoney(val)}) !`);
