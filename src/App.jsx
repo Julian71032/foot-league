@@ -564,7 +564,7 @@ export default function App() {
     return { starters: all.slice(0, 11), bench: all.slice(11) };
   }
 
-  // Mercato automatisé : Min 18 pour vendre, Max 28 pour acheter, et JAMAIS de vente si dernier joueur au poste
+  // --- MERCATO AVEC MISE À JOUR FONCTIONNELLE ---
   async function triggerAutomatedMercato(journeeNum, currentSeasonNum, maxTransfers = 4, isSummer = false) {
     if (!teams || teams.length < 2 || !players || players.length < 10) return;
 
@@ -589,9 +589,6 @@ export default function App() {
     const availablePool = [...players].sort(() => Math.random() - 0.5);
     const completedTransfers = [];
     const usedPlayerIds = new Set();
-    const updatedPlayers = [...players];
-    const newTransfersList = [...transfers];
-    const updatedTeamsList = [...teams];
 
     for (const player of availablePool) {
       if (completedTransfers.length >= maxTransfers) break;
@@ -604,17 +601,13 @@ export default function App() {
       const originTeam = teams.find(t => String(t.id) === String(originTeamId));
       if (!originTeam) continue;
 
-      // 1. Règle effectif global min 18
       if ((teamCounts[originTeamId] || 0) <= 18) continue;
-
-      // 2. Règle doublure obligatoire : interdiction de vendre s'il est le SEUL joueur à ce poste
       if ((teamPosCounts[originTeamId]?.[playerPos] || 0) <= 1) continue;
 
       let destinationTeam = null;
       let reason = '';
       let isLoan = false;
 
-      // Règle effectif max 28 pour le club acheteur
       const canBuy = (club) => String(club.id) !== String(originTeamId) && (teamCounts[club.id] || 0) < 28;
 
       if (currentGen >= 83 || (age <= 22 && currentGen >= 78)) {
@@ -653,40 +646,9 @@ export default function App() {
         teamPosCounts[originTeamId][playerPos]--;
         teamPosCounts[destinationTeam.id][playerPos] = (teamPosCounts[destinationTeam.id][playerPos] || 0) + 1;
 
-        const pIdx = updatedPlayers.findIndex(p => p.id === player.id);
-        if (pIdx !== -1) {
-          updatedPlayers[pIdx] = {
-            ...updatedPlayers[pIdx],
-            equipe_id: destinationTeam.id,
-            teams: destinationTeam,
-            is_loan: isLoan,
-            loan_parent_id: isLoan ? (player.loan_parent_id || originTeamId) : null
-          };
-        }
-
-        const oldTeamIdx = updatedTeamsList.findIndex(t => String(t.id) === String(originTeamId));
-        if (oldTeamIdx !== -1) {
-          const patchedIds = patchLineupOnPlayerDeparture(updatedTeamsList[oldTeamIdx], player, updatedPlayers);
-          updatedTeamsList[oldTeamIdx] = { ...updatedTeamsList[oldTeamIdx], lineup_ids: patchedIds };
-        }
-
-        const newTr = {
+        completedTransfers.push({
           id: Date.now() + Math.random(),
           player_id: player.id,
-          old_team_id: originTeam.id,
-          new_team_id: destinationTeam.id,
-          fee: fee,
-          type: isLoan ? 'pret' : 'achat',
-          user_id: currentUser?.email || 'local_user',
-          players: player,
-          old_team: originTeam,
-          new_team: destinationTeam
-        };
-
-        newTransfersList.unshift(newTr);
-
-        completedTransfers.push({
-          id: player.id,
           nom: player.nom,
           poste: player.poste,
           general: currentGen,
@@ -695,15 +657,61 @@ export default function App() {
           newTeam: destinationTeam.nom,
           fee: fee,
           type: isLoan ? 'Prêt (1 an)' : 'Achat',
-          reason: reason
+          reason: reason,
+          // Extra data for functional updates
+          playerObj: player,
+          originTeamObj: originTeam,
+          destTeamObj: destinationTeam,
+          isLoan: isLoan
         });
       }
     }
 
     if (completedTransfers.length > 0) {
-      setPlayers(updatedPlayers);
-      setTeams(updatedTeamsList);
-      setTransfers(newTransfersList);
+      setPlayers(prevPlayers => {
+        const nextPlayers = [...prevPlayers];
+        for (const ct of completedTransfers) {
+          const pIdx = nextPlayers.findIndex(p => p.id === ct.player_id);
+          if (pIdx !== -1) {
+            nextPlayers[pIdx] = {
+              ...nextPlayers[pIdx],
+              equipe_id: ct.destTeamObj.id,
+              teams: ct.destTeamObj,
+              is_loan: ct.isLoan,
+              loan_parent_id: ct.isLoan ? (ct.playerObj.loan_parent_id || ct.originTeamObj.id) : null
+            };
+          }
+        }
+        return nextPlayers;
+      });
+
+      setTeams(prevTeams => {
+        const nextTeams = [...prevTeams];
+        for (const ct of completedTransfers) {
+          const oldTeamIdx = nextTeams.findIndex(t => String(t.id) === String(ct.originTeamObj.id));
+          if (oldTeamIdx !== -1) {
+            const patchedIds = patchLineupOnPlayerDeparture(nextTeams[oldTeamIdx], ct.playerObj, players);
+            nextTeams[oldTeamIdx] = { ...nextTeams[oldTeamIdx], lineup_ids: patchedIds };
+          }
+        }
+        return nextTeams;
+      });
+
+      const newTrRecords = completedTransfers.map(ct => ({
+        id: ct.id,
+        player_id: ct.player_id,
+        old_team_id: ct.originTeamObj.id,
+        new_team_id: ct.destTeamObj.id,
+        fee: ct.fee,
+        type: ct.isLoan ? 'pret' : 'achat',
+        user_id: currentUser?.email || 'local_user',
+        players: ct.playerObj,
+        old_team: ct.originTeamObj,
+        new_team: ct.destTeamObj
+      }));
+
+      setTransfers(prev => [...newTrRecords, ...prev]);
+
       setMercatoReport({
         isSummer,
         title: isSummer ? "MERCATO ESTIVAL" : `MERCATO D'HIVER (J${journeeNum})`,
@@ -714,16 +722,17 @@ export default function App() {
     }
   }
 
-  async function evaluateAndApplyPlayerEvolutions(targetJournee, currentSeasonNum) {
+  // --- ÉVOLUTIONS AVEC MISE À JOUR FONCTIONNELLE ---
+  async function evaluateAndApplyPlayerEvolutions(targetJournee, currentSeasonNum, latestMatches, latestEvents) {
     const startJournee = targetJournee - 3;
     const endJournee = targetJournee;
 
-    const blockMatches = matches.filter(
+    const blockMatches = latestMatches.filter(
       m => (m.saison || 1) === currentSeasonNum && m.journee >= startJournee && m.journee <= endJournee && m.statut === 'terminé'
     );
     const blockMatchIds = new Set(blockMatches.map(m => m.id));
 
-    const blockEvents = matchEvents.filter(
+    const blockEvents = latestEvents.filter(
       e => (e.saison || 1) === currentSeasonNum && blockMatchIds.has(e.match_id)
     );
 
@@ -747,12 +756,13 @@ export default function App() {
         if (m.score_domicile === 0) teamRecords[m.equipe_exterieur_id].cleanSheets++;
         if (m.score_exterieur > m.score_domicile) teamRecords[m.equipe_exterieur_id].wins++;
         else if (m.score_exterieur < m.score_domicile) teamRecords[m.equipe_exterieur_id].losses++;
-        else teamRecords[m.equipe_domlayer_id].draws++;
+        else teamRecords[m.equipe_exterieur_id].draws++;
       }
     });
 
-    const currentSeasonMap = { ...(seasonEvolutions[currentSeasonNum] || {}) };
     const candidates = [];
+    // Utilisation directe du state courant via seasonEvolutions pour le calcul de delta
+    const currentSeasonMapForCalc = { ...(seasonEvolutions[currentSeasonNum] || {}) };
 
     for (const player of players) {
       const currentGen = player.general || 75;
@@ -815,7 +825,7 @@ export default function App() {
         else if (perfScore <= -1.5) delta = -1;
       }
 
-      const currentCumulative = currentSeasonMap[player.id] || 0;
+      const currentCumulative = currentSeasonMapForCalc[player.id] || 0;
       let allowedDelta = 0;
 
       if (delta > 0) {
@@ -844,8 +854,6 @@ export default function App() {
     const countByTeam = {};
     candidates.sort((a, b) => b.absImpact - a.absImpact);
 
-    const updatedPlayers = [...players];
-
     for (const c of candidates) {
       const tId = c.player.equipe_id;
       countByTeam[tId] = countByTeam[tId] || 0;
@@ -854,13 +862,6 @@ export default function App() {
         countByTeam[tId]++;
         const newGen = Math.max(45, Math.min(99, c.currentGen + c.delta));
         const newVal = calculateMarketValue(newGen, c.age);
-
-        currentSeasonMap[c.player.id] = c.currentCumulative + c.delta;
-
-        const pIdx = updatedPlayers.findIndex(p => p.id === c.player.id);
-        if (pIdx !== -1) {
-          updatedPlayers[pIdx] = { ...updatedPlayers[pIdx], general: newGen, valeur_marchande: newVal };
-        }
 
         const assignedTeam = teams.find(t => String(t.id) === String(c.player.equipe_id));
 
@@ -872,7 +873,7 @@ export default function App() {
           oldGen: c.currentGen,
           newGen: newGen,
           delta: c.delta,
-          seasonTotal: currentSeasonMap[c.player.id],
+          seasonTotal: c.currentCumulative + c.delta,
           oldVal: c.currentVal,
           newVal: newVal,
           buts: c.buts,
@@ -881,10 +882,28 @@ export default function App() {
       }
     }
 
-    setPlayers(updatedPlayers);
-    setSeasonEvolutions(prev => ({ ...prev, [currentSeasonNum]: currentSeasonMap }));
-
     if (changedPlayers.length > 0) {
+      setPlayers(prevPlayers => {
+        const nextPlayers = [...prevPlayers];
+        for (const cp of changedPlayers) {
+          const pIdx = nextPlayers.findIndex(p => p.id === cp.id);
+          if (pIdx !== -1) {
+            nextPlayers[pIdx] = { ...nextPlayers[pIdx], general: cp.newGen, valeur_marchande: cp.newVal };
+          }
+        }
+        return nextPlayers;
+      });
+
+      setSeasonEvolutions(prevEvo => {
+        const nextEvo = { ...prevEvo };
+        const map = { ...(nextEvo[currentSeasonNum] || {}) };
+        for (const cp of changedPlayers) {
+          map[cp.id] = cp.seasonTotal;
+        }
+        nextEvo[currentSeasonNum] = map;
+        return nextEvo;
+      });
+
       setEvolutionReport({
         journeesLabel: `Journées ${startJournee} à ${endJournee}`,
         seasonLabel: getSeasonLabel(currentSeasonNum),
@@ -1219,7 +1238,7 @@ export default function App() {
     setSimulating(true);
 
     try {
-      const newEvents = [];
+      const newEventsAll = [];
       const updatedMatches = [...matches];
       const uKey = currentUser?.email || 'local_user';
 
@@ -1238,11 +1257,14 @@ export default function App() {
           };
         }
 
-        newEvents.push(...simResult.events);
+        newEventsAll.push(...simResult.events);
       }
 
+      const cleanEvents = matchEvents.filter(e => !currentJourneeMatches.some(m => m.id === e.match_id));
+      const nextEvents = [...cleanEvents, ...newEventsAll];
+
       setMatches(updatedMatches);
-      setMatchEvents(prev => [...prev.filter(e => !currentJourneeMatches.some(m => m.id === e.match_id)), ...newEvents]);
+      setMatchEvents(nextEvents);
 
       const currentJ = parseInt(journeeFilter, 10);
       const currentS = parseInt(seasonFilter, 10);
@@ -1255,13 +1277,11 @@ export default function App() {
       if (currentJ >= 19 && currentJ <= 23) {
         await triggerAutomatedMercato(currentJ, currentS, 4, false);
       }
-
       if (currentJ === maxJourneesCount) {
         await triggerAutomatedMercato(currentJ, currentS, 15, true);
       }
-
       if (currentJ % 4 === 0) {
-        await evaluateAndApplyPlayerEvolutions(currentJ, currentS);
+        await evaluateAndApplyPlayerEvolutions(currentJ, currentS, updatedMatches, nextEvents);
       }
     } catch (err) {
       alert(`Erreur de simulation : ${err.message}`);
@@ -1429,7 +1449,6 @@ export default function App() {
     }
   }
 
-  // Transfert manuel avec vérification : Min 18 global et doublure obligatoire au poste
   async function handleTransferPlayer(e) {
     e.preventDefault();
     if (!transferFromTeamId || !transferPlayerId || !transferToTeamId) {
@@ -1451,7 +1470,6 @@ export default function App() {
     const selectedPlayer = players.find(p => p.id === transferPlayerId);
     if (!selectedPlayer) return;
 
-    // Règle doublure au poste
     const playerPos = selectedPlayer.poste || 'MC';
     const samePosCount = players.filter(
       p => String(p.equipe_id) === String(transferFromTeamId) && (p.poste || 'MC') === playerPos
@@ -1645,8 +1663,11 @@ export default function App() {
         match, domTeam, extTeam, scoreDom, scoreExt, match.saison || 1, uKey
       );
 
-      setMatches(prev => prev.map(m => m.id === match.id ? { ...m, score_domicile: scoreDom, score_exterieur: scoreExt, statut: 'terminé' } : m));
-      setMatchEvents(prev => [...prev.filter(e => e.match_id !== match.id), ...events]);
+      const nextMatches = matches.map(m => m.id === match.id ? { ...m, score_domicile: scoreDom, score_exterieur: scoreExt, statut: 'terminé' } : m);
+      const nextEvents = [...matchEvents.filter(e => e.match_id !== match.id), ...events];
+
+      setMatches(nextMatches);
+      setMatchEvents(nextEvents);
 
       const currentJ = match.journee;
       const currentS = match.saison || 1;
@@ -1656,8 +1677,9 @@ export default function App() {
 
       showNotif(`Score ${scoreDom} - ${scoreExt} et événements enregistrés !`);
 
-      const otherMatchesInJ = seasonMatches.filter(m => m.journee === currentJ && m.id !== match.id);
-      const allCompleted = otherMatchesInJ.every(m => m.statut === 'terminé');
+      const seasonMatchesNow = nextMatches.filter(m => (m.saison || 1) === currentS);
+      const matchesInJ = seasonMatchesNow.filter(m => m.journee === currentJ);
+      const allCompleted = matchesInJ.every(m => m.statut === 'terminé');
 
       if (allCompleted) {
         if (currentJ >= 19 && currentJ <= 23) {
@@ -1667,7 +1689,7 @@ export default function App() {
           await triggerAutomatedMercato(currentJ, currentS, 15, true);
         }
         if (currentJ % 4 === 0) {
-          await evaluateAndApplyPlayerEvolutions(currentJ, currentS);
+          await evaluateAndApplyPlayerEvolutions(currentJ, currentS, nextMatches, nextEvents);
         }
       }
     } catch (err) {
@@ -3142,6 +3164,7 @@ export default function App() {
               </button>
             </div>
 
+            {/* BANC DES REMPLAÇANTS */}
             <div className="mt-4 bg-slate-950 p-3 rounded-2xl border border-slate-800">
               <h4 className="text-[11px] font-extrabold uppercase tracking-wider text-slate-400 mb-2">🪑 Banc des Remplaçants ({teamBenchPlayers.length})</h4>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-40 overflow-y-auto pr-1">
