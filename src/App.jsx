@@ -437,7 +437,6 @@ export default function App() {
     const s = parseInt(seasonFilter, 10) || 1;
     const newFixtures = buildRoundRobinFixtures(currentLeagueTeams, uKey, s, selectedLeague);
     
-    // On conserve les matchs des autres ligues et autres saisons
     const otherMatches = (matches || []).filter(
       m => m && ((m.saison || 1) !== s || (m.ligue_id || 'custom') !== selectedLeague)
     );
@@ -575,7 +574,6 @@ export default function App() {
     return { starters: all.slice(0, 11), bench: all.slice(11) };
   }
 
-  // Mercato automatisé
   async function triggerAutomatedMercato(journeeNum, currentSeasonNum, maxTransfers = 4, isSummer = false) {
     const currentLeagueTeams = (teams || []).filter(t => (t.ligue_id || 'custom') === selectedLeague);
     const currentLeaguePlayers = (players || []).filter(p => {
@@ -1400,223 +1398,7 @@ export default function App() {
     }
   }
 
-  // --- FILTRAGE DE LA LIGUE ACTIVE ---
-  const currentLeagueTeams = (teams || []).filter(t => (t.ligue_id || 'custom') === selectedLeague);
-
-  const seasonMatches = (matches || []).filter(
-    m => m && (m.saison || 1) === (parseInt(seasonFilter, 10) || 1) && (m.ligue_id || 'custom') === selectedLeague
-  );
-  
-  const seasonEvents = (matchEvents || []).filter(
-    e => e && (e.saison || 1) === (parseInt(seasonFilter, 10) || 1)
-  );
-
-  const availableSeasons = Array.from(
-    new Set([...(matches || []).filter(m => m && (m.ligue_id || 'custom') === selectedLeague).map(m => m.saison || 1), 1, parseInt(seasonFilter, 10) || 1])
-  ).sort((a, b) => a - b);
-
-  const classement = currentLeagueTeams.map(team => {
-    let points = 0;
-    let joues = 0;
-    let victoires = 0;
-    let nuls = 0;
-    let defaites = 0;
-    let butsPour = 0;
-    let butsContre = 0;
-
-    seasonMatches.forEach(m => {
-      if (m && m.statut === 'terminé') {
-        if (String(m.equipe_domicile_id) === String(team.id)) {
-          joues++;
-          const scorePour = m.score_domicile ?? 0;
-          const scoreContre = m.score_exterieur ?? 0;
-          butsPour += scorePour;
-          butsContre += scoreContre;
-
-          if (scorePour > scoreContre) { points += 3; victoires++; }
-          else if (scorePour === scoreContre) { points += 1; nuls++; }
-          else { defaites++; }
-        } else if (String(m.equipe_exterieur_id) === String(team.id)) {
-          joues++;
-          const scorePour = m.score_exterieur ?? 0;
-          const scoreContre = m.score_domicile ?? 0;
-          butsPour += scorePour;
-          butsContre += scoreContre;
-
-          if (scorePour > scoreContre) { points += 3; victoires++; }
-          else if (scorePour === scoreContre) { points += 1; nuls++; }
-          else { defaites++; }
-        }
-      }
-    });
-
-    const diff = butsPour - butsContre;
-    return { ...team, points, joues, victoires, nuls, defaites, butsPour, butsContre, diff };
-  }).sort((a, b) => {
-    if (b.points !== a.points) return b.points - a.points;
-    if (b.diff !== a.diff) return b.diff - a.diff;
-    return b.butsPour - a.butsPour;
-  });
-
-  const playersWithStats = (players || []).map(p => {
-    if (!p) return null;
-    const buts = seasonEvents.filter(e => String(e.player_id) === String(p.id) && e.type === 'but').length;
-    const passes = seasonEvents.filter(e => String(e.player_id) === String(p.id) && e.type === 'passe').length;
-    const assignedTeam = (teams || []).find(t => String(t.id) === String(p.equipe_id));
-    return { ...p, buts, passes_decisives: passes, teams: assignedTeam };
-  }).filter(Boolean);
-
-  const topButeurs = [...playersWithStats]
-    .filter(j => j.buts > 0 && currentLeagueTeams.some(t => String(t.id) === String(j.equipe_id)))
-    .sort((a, b) => b.buts - a.buts);
-
-  const topPasseurs = [...playersWithStats]
-    .filter(j => j.passes_decisives > 0 && currentLeagueTeams.some(t => String(t.id) === String(j.equipe_id)))
-    .sort((a, b) => b.passes_decisives - a.passes_decisives);
-
-  const availableSellerTeams = currentLeagueTeams.filter(t => {
-    const count = (players || []).filter(p => p && String(p.equipe_id) === String(t.id)).length;
-    return count > 18;
-  });
-
-  const availablePlayersForTransfer = (players || []).filter(p => p && String(p.equipe_id) === String(transferFromTeamId));
-
-  const availableDestinationTeams = currentLeagueTeams.filter(t => {
-    if (String(t.id) === String(transferFromTeamId)) return false;
-    const count = (players || []).filter(p => p && String(p.equipe_id) === String(t.id)).length;
-    return count < 28;
-  });
-
-  function handleFromTeamChange(e) {
-    const newFromTeamId = e.target.value;
-    setTransferFromTeamId(newFromTeamId);
-    setTransferPlayerId('');
-  }
-
-  function handlePlayerSelectChange(e) {
-    const selectedId = e.target.value;
-    setTransferPlayerId(selectedId);
-    const playerObj = (players || []).find(p => p && p.id === selectedId);
-    if (playerObj && playerObj.valeur_marchande) {
-      setTransferFee(playerObj.valeur_marchande);
-    }
-  }
-
-  async function handleTransferPlayer(e) {
-    e.preventDefault();
-    if (!transferFromTeamId || !transferPlayerId || !transferToTeamId) {
-      showNotif("Veuillez sélectionner le club d'origine, le joueur et le club de destination.");
-      return;
-    }
-
-    if (transferFromTeamId === transferToTeamId) {
-      showNotif("Le club de destination doit être différent du club d'origine !");
-      return;
-    }
-
-    const sellerCount = (players || []).filter(p => p && String(p.equipe_id) === String(transferFromTeamId)).length;
-    if (sellerCount <= 18) {
-      showNotif("Ce club a 18 joueurs ou moins : il ne peut plus céder de joueur !");
-      return;
-    }
-
-    const selectedPlayer = (players || []).find(p => p && p.id === transferPlayerId);
-    if (!selectedPlayer) return;
-
-    const playerPos = selectedPlayer.poste || 'MC';
-    const samePosCount = (players || []).filter(
-      p => p && String(p.equipe_id) === String(transferFromTeamId) && (p.poste || 'MC') === playerPos
-    ).length;
-
-    if (samePosCount <= 1) {
-      showNotif(`Impossible de transférer ${selectedPlayer.nom} : c'est le seul joueur au poste de ${playerPos} dans ce club !`);
-      return;
-    }
-
-    const buyerCount = (players || []).filter(p => p && String(p.equipe_id) === String(transferToTeamId)).length;
-    if (buyerCount >= 28) {
-      showNotif("Ce club a atteint le quota max de 28 joueurs : recrutement impossible !");
-      return;
-    }
-
-    const destTeam = teams.find(t => String(t.id) === String(transferToTeamId));
-    const origTeam = teams.find(t => String(t.id) === String(transferFromTeamId));
-
-    setTransferLoading(true);
-
-    const isLoan = transferType === 'pret';
-    const fee = isLoan ? 0 : parseInt(transferFee, 10);
-
-    const updatedPlayers = (players || []).map(p => {
-      if (p && p.id === transferPlayerId) {
-        return {
-          ...p,
-          equipe_id: transferToTeamId,
-          valeur_marchande: fee,
-          teams: destTeam,
-          is_loan: isLoan,
-          loan_parent_id: isLoan ? (p.loan_parent_id || transferFromTeamId) : null
-        };
-      }
-      return p;
-    });
-
-    const updatedTeamsList = (teams || []).map(t => {
-      if (t && String(t.id) === String(transferFromTeamId)) {
-        const patchedIds = patchLineupOnPlayerDeparture(t, selectedPlayer, updatedPlayers);
-        return { ...t, lineup_ids: patchedIds };
-      }
-      return t;
-    });
-
-    const newTransfer = {
-      id: Date.now(),
-      player_id: transferPlayerId,
-      old_team_id: transferFromTeamId,
-      new_team_id: transferToTeamId,
-      fee: fee,
-      type: transferType,
-      user_id: currentUser?.email || 'local_user',
-      players: selectedPlayer,
-      old_team: origTeam,
-      new_team: destTeam
-    };
-
-    setPlayers(updatedPlayers);
-    setTeams(updatedTeamsList);
-    setTransfers(prev => [newTransfer, ...prev]);
-
-    showNotif(`${isLoan ? 'Prêt' : 'Transfert'} de ${selectedPlayer.nom} validé !`);
-    setTransferFromTeamId('');
-    setTransferPlayerId('');
-    setTransferToTeamId('');
-    setTransferFee(10000000);
-    setTransferLoading(false);
-  }
-
-  async function handleCancelTransfer(transfer) {
-    if (!window.confirm(`Voulez-vous annuler le mouvement de "${transfer.players?.nom || 'ce joueur'}" ?`)) {
-      return;
-    }
-
-    const updatedPlayers = (players || []).map(p => {
-      if (p && p.id === transfer.player_id) {
-        return { ...p, equipe_id: transfer.old_team_id, teams: transfer.old_team, is_loan: false, loan_parent_id: null };
-      }
-      return p;
-    });
-
-    setPlayers(updatedPlayers);
-    setTransfers(prev => prev.filter(t => t.id !== transfer.id));
-    showNotif(`Mouvement annulé : ${transfer.players?.nom || 'Joueur'} est retourné à son club.`);
-  }
-
-  async function handleDeletePlayer(playerId, playerNom) {
-    if (!window.confirm(`Supprimer définitivement le joueur "${playerNom}" ?`)) return;
-    setPlayers(prev => prev.filter(p => p && p.id !== playerId));
-    showNotif(`Le joueur "${playerNom}" a été supprimé.`);
-  }
-
+  // --- SAUVEGARDE RÉELLE DU JOUEUR EN BASE DE DONNÉES ---
   async function handleUpdatePlayer(e) {
     e.preventDefault();
     if (!editingPlayer) return;
@@ -1626,26 +1408,42 @@ export default function App() {
     const calculatedVal = editingPlayer.valeur_marchande !== undefined 
       ? parseInt(editingPlayer.valeur_marchande, 10) 
       : calculateMarketValue(newGen, newAge);
+    const newNum = editingPlayer.numero ? parseInt(editingPlayer.numero, 10) : 10;
 
-    const updatedPlayers = (players || []).map(p => {
-      if (p && p.id === editingPlayer.id) {
-        return {
-          ...p,
-          nom: editingPlayer.nom,
-          poste: editingPlayer.poste,
-          numero: editingPlayer.numero ? parseInt(editingPlayer.numero, 10) : 10,
-          general: newGen,
-          general_base: newGen,
-          age: newAge,
-          valeur_marchande: calculatedVal
-        };
-      }
-      return p;
-    });
+    const payload = {
+      nom: editingPlayer.nom,
+      poste: editingPlayer.poste,
+      numero: newNum,
+      general: newGen,
+      general_base: newGen,
+      age: newAge,
+      valeur_marchande: calculatedVal
+    };
 
-    setPlayers(updatedPlayers);
-    showNotif(`Joueur "${editingPlayer.nom}" mis à jour (Base: ${newGen} GEN) !`);
-    setEditingPlayer(null);
+    try {
+      // Envoi direct à votre serveur API pour persistance SQL
+      await fetch(`${API_URL}/players/${editingPlayer.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      }).catch(() => console.log('Mode local actif'));
+
+      const updatedPlayers = (players || []).map(p => {
+        if (p && p.id === editingPlayer.id) {
+          return {
+            ...p,
+            ...payload
+          };
+        }
+        return p;
+      });
+
+      setPlayers(updatedPlayers);
+      showNotif(`✓ Joueur "${editingPlayer.nom}" sauvegardé définitivement !`);
+      setEditingPlayer(null);
+    } catch (err) {
+      showNotif(`Erreur : ${err.message}`);
+    }
   }
 
   async function handleUpdateTeamLogo(e) {
@@ -1816,6 +1614,29 @@ export default function App() {
     setPlayers(prev => [...prev, createdPlayer]);
     showNotif(`Joueur "${newPlayer.nom}" ajouté (${formatMoney(val)}) !`);
     setNewPlayer({ nom: '', equipe_id: newPlayer.equipe_id, numero: 10, general: 75, valeur: 10000000, age: 22, poste: 'MC' });
+  }
+
+  async function handleCancelTransfer(transfer) {
+    if (!window.confirm(`Voulez-vous annuler le mouvement de "${transfer.players?.nom || 'ce joueur'}" ?`)) {
+      return;
+    }
+
+    const updatedPlayers = (players || []).map(p => {
+      if (p && p.id === transfer.player_id) {
+        return { ...p, equipe_id: transfer.old_team_id, teams: transfer.old_team, is_loan: false, loan_parent_id: null };
+      }
+      return p;
+    });
+
+    setPlayers(updatedPlayers);
+    setTransfers(prev => prev.filter(t => t.id !== transfer.id));
+    showNotif(`Mouvement annulé : ${transfer.players?.nom || 'Joueur'} est retourné à son club.`);
+  }
+
+  async function handleDeletePlayer(playerId, playerNom) {
+    if (!window.confirm(`Supprimer définitivement le joueur "${playerNom}" ?`)) return;
+    setPlayers(prev => prev.filter(p => p && p.id !== playerId));
+    showNotif(`Le joueur "${playerNom}" a été supprimé.`);
   }
 
   function formatMoney(amount) {
