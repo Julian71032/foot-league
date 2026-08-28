@@ -181,7 +181,7 @@ export default function App() {
   const [authPassword, setAuthPassword] = useState('');
   const [authError, setAuthError] = useState('');
 
-  // MULTI-LIGUES
+  // MULTI-LIGUES : 'custom' ou 'ligue1'
   const [selectedLeague, setSelectedLeague] = useState('custom');
 
   const [tab, setTab] = useState('classement');
@@ -233,8 +233,8 @@ export default function App() {
 
   const isAdmin = currentUser?.email?.trim().toLowerCase() === ADMIN_EMAIL.toLowerCase();
 
-  // --- DÉCLARATION DES VARIABLES CALCULÉES EN PREMIER ---
-  const currentLeagueTeams = (teams || []).filter(t => (t.ligue_id || 'custom') === selectedLeague);
+  // --- VARIABLES CALCULÉES DÉCLARÉES AVANT TOUTES LES FONCTIONS ---
+  const currentLeagueTeams = (teams || []).filter(t => t && (t.ligue_id || 'custom') === selectedLeague);
 
   const seasonMatches = (matches || []).filter(
     m => m && (m.saison || 1) === (parseInt(seasonFilter, 10) || 1) && (m.ligue_id || 'custom') === selectedLeague
@@ -295,16 +295,16 @@ export default function App() {
     if (!p) return null;
     const buts = seasonEvents.filter(e => String(e.player_id) === String(p.id) && e.type === 'but').length;
     const passes = seasonEvents.filter(e => String(e.player_id) === String(p.id) && e.type === 'passe').length;
-    const assignedTeam = (teams || []).find(t => String(t.id) === String(p.equipe_id));
+    const assignedTeam = (teams || []).find(t => t && String(t.id) === String(p.equipe_id));
     return { ...p, buts, passes_decisives: passes, teams: assignedTeam };
   }).filter(Boolean);
 
   const topButeurs = [...playersWithStats]
-    .filter(j => j.buts > 0 && currentLeagueTeams.some(t => String(t.id) === String(j.equipe_id)))
+    .filter(j => j && j.buts > 0 && currentLeagueTeams.some(t => String(t.id) === String(j.equipe_id)))
     .sort((a, b) => b.buts - a.buts);
 
   const topPasseurs = [...playersWithStats]
-    .filter(j => j.passes_decisives > 0 && currentLeagueTeams.some(t => String(t.id) === String(j.equipe_id)))
+    .filter(j => j && j.passes_decisives > 0 && currentLeagueTeams.some(t => String(t.id) === String(j.equipe_id)))
     .sort((a, b) => b.passes_decisives - a.passes_decisives);
 
   const availableSellerTeams = currentLeagueTeams.filter(t => {
@@ -522,7 +522,7 @@ export default function App() {
   }
 
   function handleGenerateCurrentSchedule() {
-    const currentLeagueTeamsList = (teams || []).filter(t => (t.ligue_id || 'custom') === selectedLeague);
+    const currentLeagueTeamsList = (teams || []).filter(t => t && (t.ligue_id || 'custom') === selectedLeague);
     if (currentLeagueTeamsList.length < 2) {
       alert("Il vous faut au moins 2 équipes dans cette ligue pour générer un calendrier.");
       return;
@@ -582,8 +582,8 @@ export default function App() {
         currentPlayers = Array.isArray(resPlayers) && resPlayers.length > 0 ? resPlayers : currentPlayers;
 
         if (currentMatches.length === 0 && currentTeams.length >= 2) {
-          const customTeams = currentTeams.filter(t => (t.ligue_id || 'custom') === 'custom');
-          const ligue1Teams = currentTeams.filter(t => t.ligue_id === 'ligue1');
+          const customTeams = currentTeams.filter(t => t && (t.ligue_id || 'custom') === 'custom');
+          const ligue1Teams = currentTeams.filter(t => t && t.ligue_id === 'ligue1');
           
           const customMatches = buildRoundRobinFixtures(customTeams, uKey, 1, 'custom');
           const ligue1Matches = buildRoundRobinFixtures(ligue1Teams, uKey, 1, 'ligue1');
@@ -670,7 +670,7 @@ export default function App() {
 
   // Mercato automatisé
   async function triggerAutomatedMercato(journeeNum, currentSeasonNum, maxTransfers = 4, isSummer = false) {
-    const currentLeagueTeamsList = (teams || []).filter(t => (t.ligue_id || 'custom') === selectedLeague);
+    const currentLeagueTeamsList = (teams || []).filter(t => t && (t.ligue_id || 'custom') === selectedLeague);
     const currentLeaguePlayers = (players || []).filter(p => {
       const t = currentLeagueTeamsList.find(tm => String(tm.id) === String(p.equipe_id));
       return !!t;
@@ -845,7 +845,7 @@ export default function App() {
       e => e && (e.saison || 1) === currentSeasonNum && blockMatchIds.has(e.match_id)
     );
 
-    const currentLeagueTeamsList = (teams || []).filter(t => (t.ligue_id || 'custom') === selectedLeague);
+    const currentLeagueTeamsList = (teams || []).filter(t => t && (t.ligue_id || 'custom') === selectedLeague);
     const teamRecords = {};
     currentLeagueTeamsList.forEach(t => {
       teamRecords[t.id] = { wins: 0, losses: 0, draws: 0, goalsConceded: 0, cleanSheets: 0, matchCount: 0 };
@@ -982,7 +982,7 @@ export default function App() {
         const newGen = Math.max(45, Math.min(99, c.currentGen + c.delta));
         const newVal = calculateMarketValue(newGen, c.age);
 
-        const assignedTeam = teams.find(t => String(t.id) === String(c.player.equipe_id));
+        const assignedTeam = (teams || []).find(t => t && String(t.id) === String(c.player.equipe_id));
 
         changedPlayers.push({
           id: c.player.id,
@@ -1362,8 +1362,8 @@ export default function App() {
 
       for (const m of currentJourneeMatches) {
         if (!m) continue;
-        const domTeam = teams.find(t => String(t.id) === String(m.equipe_domicile_id)) || { id: m.equipe_domicile_id, nom: 'Club Dom' };
-        const extTeam = teams.find(t => String(t.id) === String(m.equipe_exterieur_id)) || { id: m.equipe_exterieur_id, nom: 'Club Ext' };
+        const domTeam = (teams || []).find(t => t && String(t.id) === String(m.equipe_domicile_id)) || { id: m.equipe_domicile_id, nom: 'Club Dom' };
+        const extTeam = (teams || []).find(t => t && String(t.id) === String(m.equipe_exterieur_id)) || { id: m.equipe_exterieur_id, nom: 'Club Ext' };
         const simResult = simulateSingleMatchWithSubs(m, domTeam, extTeam, m.saison || 1, uKey);
 
         const mIdx = updatedMatches.findIndex(matchItem => matchItem && matchItem.id === m.id);
@@ -1413,7 +1413,7 @@ export default function App() {
   }
 
   async function handleStartNewSeason(isNextSeason = false) {
-    const currentLeagueTeamsList = (teams || []).filter(t => (t.ligue_id || 'custom') === selectedLeague);
+    const currentLeagueTeamsList = (teams || []).filter(t => t && (t.ligue_id || 'custom') === selectedLeague);
     if (currentLeagueTeamsList.length < 2) {
       alert(`Erreur : Il vous faut au moins 2 équipes pour générer un calendrier.`);
       return;
@@ -1453,7 +1453,7 @@ export default function App() {
         const newVal = calculateMarketValue(currentGen, newAge);
 
         if (p.is_loan && p.loan_parent_id) {
-          const originalTeam = teams.find(t => String(t.id) === String(p.loan_parent_id));
+          const originalTeam = (teams || []).find(t => t && String(t.id) === String(p.loan_parent_id));
           return {
             ...p,
             age: newAge,
@@ -1566,8 +1566,8 @@ export default function App() {
 
   async function openMatchDetails(match) {
     if (!match) return;
-    const dom = teams.find(t => String(t.id) === String(match.equipe_domicile_id)) || { id: match.equipe_domicile_id, nom: 'Club Domicile', logo_url: '' };
-    const ext = teams.find(t => String(t.id) === String(match.equipe_exterieur_id)) || { id: match.equipe_exterieur_id, nom: 'Club Extérieur', logo_url: '' };
+    const dom = (teams || []).find(t => t && String(t.id) === String(match.equipe_domicile_id)) || { id: match.equipe_domicile_id, nom: 'Club Domicile', logo_url: '' };
+    const ext = (teams || []).find(t => t && String(t.id) === String(match.equipe_exterieur_id)) || { id: match.equipe_exterieur_id, nom: 'Club Extérieur', logo_url: '' };
 
     setSelectedMatch({ ...match, dom, ext });
 
@@ -1601,8 +1601,8 @@ export default function App() {
       return; 
     }
 
-    const domTeam = teams.find(t => String(t.id) === String(match.equipe_domicile_id)) || { id: match.equipe_domicile_id, nom: 'Club Dom' };
-    const extTeam = teams.find(t => String(t.id) === String(match.equipe_exterieur_id)) || { id: match.equipe_exterieur_id, nom: 'Club Ext' };
+    const domTeam = (teams || []).find(t => t && String(t.id) === String(match.equipe_domicile_id)) || { id: match.equipe_domicile_id, nom: 'Club Dom' };
+    const extTeam = (teams || []).find(t => t && String(t.id) === String(match.equipe_exterieur_id)) || { id: match.equipe_exterieur_id, nom: 'Club Ext' };
     const uKey = currentUser?.email || 'local_user';
 
     try {
@@ -1690,7 +1690,7 @@ export default function App() {
     const gen = parseInt(newPlayer.general, 10) || 75;
     const age = parseInt(newPlayer.age, 10) || 22;
     const val = parseInt(newPlayer.valeur, 10) || calculateMarketValue(gen, age);
-    const assignedTeam = (teams || []).find(t => String(t.id) === String(newPlayer.equipe_id));
+    const assignedTeam = (teams || []).find(t => t && String(t.id) === String(newPlayer.equipe_id));
 
     const createdPlayer = {
       id: 'player_' + Date.now(),
@@ -1784,7 +1784,7 @@ export default function App() {
   const teamRoster = selectedTeam ? getSortedTeamPlayers(selectedTeam.id) : [];
 
   function openTeamLineup(team) {
-    const fullTeam = (teams || []).find(t => String(t.id) === String(team.id)) || team;
+    const fullTeam = (teams || []).find(t => t && String(t.id) === String(team.id)) || team;
     setSelectedLineupTeam(fullTeam);
     setSelectedSlot(null);
 
@@ -1858,7 +1858,7 @@ export default function App() {
       }).catch(() => console.log('Mode local actif'));
 
       const updatedTeams = (teams || []).map(t =>
-        String(t.id) === String(selectedLineupTeam.id)
+        t && String(t.id) === String(selectedLineupTeam.id)
           ? { ...t, formation: currentFormation, lineup_ids: starterIds }
           : t
       );
@@ -2426,8 +2426,8 @@ export default function App() {
                   .filter((m) => m && m.journee === (parseInt(journeeFilter, 10) || 1))
                   .sort((a, b) => String(a?.id || '').localeCompare(String(b?.id || '')))
                   .map((m) => {
-                    const domTeam = (teams || []).find(t => String(t.id) === String(m.equipe_domicile_id)) || { id: m.equipe_domicile_id, nom: 'Équipe Domicile', logo_url: '' };
-                    const extTeam = (teams || []).find(t => String(t.id) === String(m.equipe_exterieur_id)) || { id: m.equipe_exterieur_id, nom: 'Équipe Extérieur', logo_url: '' };
+                    const domTeam = (teams || []).find(t => t && String(t.id) === String(m.equipe_domicile_id)) || { id: m.equipe_domicile_id, nom: 'Équipe Domicile', logo_url: '' };
+                    const extTeam = (teams || []).find(t => t && String(t.id) === String(m.equipe_exterieur_id)) || { id: m.equipe_exterieur_id, nom: 'Équipe Extérieur', logo_url: '' };
                     const currentDomInput = scoresInput?.[m.id]?.dom !== undefined ? scoresInput[m.id].dom : (m.score_domicile ?? '');
                     const currentExtInput = scoresInput?.[m.id]?.ext !== undefined ? scoresInput[m.id].ext : (m.score_exterieur ?? '');
 
@@ -2759,7 +2759,7 @@ export default function App() {
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-800/60 text-sm">
-                      {transfers.slice(0, 20).map((t) => (
+                      {transfers.filter(Boolean).slice(0, 20).map((t) => (
                         <tr key={t.id} className="hover:bg-slate-800/30">
                           <td className="py-3.5 px-4 font-bold text-white">{t.players?.nom || 'Joueur inconnu'}</td>
                           <td className="py-3.5 px-4">
