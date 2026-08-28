@@ -56,8 +56,8 @@ function getSeasonLabel(seasonNum) {
 }
 
 function calculateMarketValue(gen, age) {
-  const g = Math.max(45, Math.min(99, gen || 75));
-  const a = Math.max(15, Math.min(45, age || 24));
+  const g = Math.max(45, Math.min(99, parseInt(gen, 10) || 75));
+  const a = Math.max(15, Math.min(45, parseInt(age, 10) || 24));
 
   let baseValue = Math.pow(g / 45, 6.2) * 500000;
 
@@ -495,7 +495,7 @@ export default function App() {
     showNotif(`Calendrier généré pour ${selectedLeague === 'ligue1' ? 'la Ligue 1' : 'la Ligue Principale'} (Saison ${s}) !`);
   };
 
-  // --- CHARGEMENT ROBUSTE AVEC TIMEOUT ANTI-BLOCAGE ---
+  // --- CHARGEMENT ROBUSTE SANS BLOCAGE ---
   const fetchUserData = async (userEmail) => {
     setLoading(true);
     const uKey = userEmail;
@@ -520,9 +520,8 @@ export default function App() {
       let currentEvolutions = (localEvolutions && typeof localEvolutions === 'object') ? localEvolutions : {};
 
       if (currentTeams.length === 0 || currentPlayers.length === 0) {
-        // Timeout de sécurité : si l'API met plus de 4 secondes (serveur Render en veille), on débloque
         const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), 4000);
+        const timer = setTimeout(() => controller.abort(), 3500);
 
         try {
           const [resTeams, resPlayers] = await Promise.all([
@@ -550,7 +549,6 @@ export default function App() {
           localStorage.setItem(`local_transfers_${uKey}`, JSON.stringify([]));
         } catch (fetchErr) {
           clearTimeout(timer);
-          console.warn("Serveur distant en veille ou injoignable, mode local actif.");
         }
       }
 
@@ -580,9 +578,43 @@ export default function App() {
     } catch (err) {
       console.error('Erreur chargement:', err);
     } finally {
-      // Déblocage garanti de l'écran de chargement
       setLoading(false);
     }
+  };
+
+  const getSortedTeamPlayers = (teamId) => {
+    if (!teamId) return [];
+    return playersWithStats
+      .filter(p => p && String(p.equipe_id) === String(teamId))
+      .sort((a, b) => {
+        const rankA = getPositionRank(a.poste);
+        const rankB = getPositionRank(b.poste);
+        if (rankA !== rankB) return rankA - rankB;
+        return (b.general || 0) - (a.general || 0);
+      });
+  };
+
+  const getTeamStartersAndBench = (team) => {
+    if (!team) return { starters: [], bench: [] };
+    const all = getSortedTeamPlayers(team.id);
+
+    let savedIds = team.lineup_ids;
+    if (typeof savedIds === 'string') {
+      try { savedIds = JSON.parse(savedIds); } catch (e) { savedIds = []; }
+    }
+
+    if (Array.isArray(savedIds) && savedIds.length > 0) {
+      const map = new Map(all.map(p => [String(p.id), p]));
+      const starters = savedIds.map(id => map.get(String(id))).filter(Boolean);
+      const starterSet = new Set(starters.map(p => String(p.id)));
+      const bench = all.filter(p => !starterSet.has(String(p.id)));
+
+      if (starters.length >= 11) {
+        return { starters: starters.slice(0, 11), bench };
+      }
+    }
+
+    return { starters: all.slice(0, 11), bench: all.slice(11) };
   };
 
   const triggerAutomatedMercato = async (journeeNum, currentSeasonNum, maxTransfers = 4, isSummer = false) => {
@@ -780,9 +812,9 @@ export default function App() {
         teamRecords[m.equipe_exterieur_id].matchCount++;
         teamRecords[m.equipe_exterieur_id].goalsConceded += (m.score_domicile || 0);
         if (m.score_domicile === 0) teamRecords[m.equipe_exterieur_id].cleanSheets++;
-        if (m.score_exterieur > m.score_domicile) teamRecords[m.equipe_exterieur_id].wins++;
-        else if (m.score_exterieur < m.score_domicile) teamRecords[m.equipe_exterieur_id].losses++;
-        else teamRecords[m.equipe_exterieur_id].draws++;
+        if (m.score_exterieur > m.score_domicile) teamRecords[m.equipe_domicile_id].wins++;
+        else if (m.score_exterieur < m.score_domicile) teamRecords[m.equipe_domicile_id].losses++;
+        else teamRecords[m.equipe_domicile_id].draws++;
       }
     });
 
@@ -1409,20 +1441,23 @@ export default function App() {
     }
   };
 
+  // --- SAUVEGARDE RÉELLE DU JOUEUR (INSTANTANÉE ET ULTRA ROBUSTE) ---
   const handleUpdatePlayer = (e) => {
     if (e && e.preventDefault) e.preventDefault();
     if (!editingPlayer) return;
 
-    const newGen = editingPlayer.general ? parseInt(editingPlayer.general, 10) : 75;
-    const newAge = editingPlayer.age ? parseInt(editingPlayer.age, 10) : 22;
-    const calculatedVal = editingPlayer.valeur_marchande !== undefined 
+    const newGen = parseInt(editingPlayer.general, 10) || 75;
+    const newAge = parseInt(editingPlayer.age, 10) || 22;
+    const calculatedVal = editingPlayer.valeur_marchande !== undefined && editingPlayer.valeur_marchande !== ''
       ? parseInt(editingPlayer.valeur_marchande, 10) 
       : calculateMarketValue(newGen, newAge);
-    const newNum = editingPlayer.numero !== undefined ? parseInt(editingPlayer.numero, 10) : 10;
+    const newNum = editingPlayer.numero !== undefined && editingPlayer.numero !== '' 
+      ? parseInt(editingPlayer.numero, 10) 
+      : 10;
 
     const payload = {
-      nom: editingPlayer.nom,
-      poste: editingPlayer.poste,
+      nom: editingPlayer.nom || 'Joueur',
+      poste: editingPlayer.poste || 'MC',
       numero: newNum,
       general: newGen,
       general_base: newGen,
@@ -1430,6 +1465,7 @@ export default function App() {
       valeur_marchande: calculatedVal
     };
 
+    // 1. Mise à jour instantanée des joueurs en mémoire
     const updatedPlayers = (players || []).map(p => {
       if (p && String(p.id) === String(editingPlayer.id)) {
         return { ...p, ...payload };
@@ -1438,19 +1474,27 @@ export default function App() {
     });
 
     setPlayers(updatedPlayers);
+
+    // 2. Mise à jour instantanée de l'équipe sélectionnée si modal ouvert
+    if (selectedTeam) {
+      setSelectedTeam(prev => ({ ...prev }));
+    }
+
+    // 3. Persistance dans le LocalStorage
     if (currentUser) {
       try {
         localStorage.setItem(`local_players_${currentUser.email}`, JSON.stringify(updatedPlayers));
       } catch (err) {}
     }
 
+    // 4. Synchronisation distante asynchrone avec PostgreSQL
     fetch(`${API_URL}/players/${editingPlayer.id}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload)
-    }).catch(() => console.log('Mode local actif'));
+    }).catch(() => console.log('Mode local'));
 
-    showNotif(`✓ Joueur "${editingPlayer.nom}" enregistré (${newGen} GEN) !`);
+    showNotif(`✓ Joueur "${payload.nom}" enregistré (${newGen} GEN) !`);
     setEditingPlayer(null);
   };
 
@@ -2099,6 +2143,7 @@ export default function App() {
           </div>
 
           <div className="flex flex-wrap items-center gap-3">
+            {/* SÉLECTEUR DE LIGUE ACTIF */}
             <div className="flex items-center bg-slate-950 p-1 rounded-xl border border-slate-800">
               <button
                 onClick={() => {
@@ -3271,7 +3316,7 @@ export default function App() {
                     type="number"
                     min="1"
                     max="99"
-                    value={editingPlayer.numero ?? 10}
+                    value={editingPlayer.numero !== undefined && editingPlayer.numero !== null ? editingPlayer.numero : ''}
                     onChange={(e) => setEditingPlayer({ ...editingPlayer, numero: e.target.value })}
                     className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm text-white text-center font-bold"
                     required
@@ -3299,8 +3344,12 @@ export default function App() {
                     type="number"
                     min="40"
                     max="99"
-                    value={editingPlayer.general ?? 75}
-                    onChange={(e) => setEditingPlayer({ ...editingPlayer, general: e.target.value })}
+                    value={editingPlayer.general !== undefined && editingPlayer.general !== null ? editingPlayer.general : ''}
+                    onChange={(e) => {
+                      const g = parseInt(e.target.value, 10) || 0;
+                      const autoVal = calculateMarketValue(g, editingPlayer.age || 22);
+                      setEditingPlayer({ ...editingPlayer, general: e.target.value, valeur_marchande: autoVal });
+                    }}
                     className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm text-white"
                   />
                 </div>
@@ -3310,8 +3359,12 @@ export default function App() {
                     type="number"
                     min="15"
                     max="45"
-                    value={editingPlayer.age ?? 22}
-                    onChange={(e) => setEditingPlayer({ ...editingPlayer, age: e.target.value })}
+                    value={editingPlayer.age !== undefined && editingPlayer.age !== null ? editingPlayer.age : ''}
+                    onChange={(e) => {
+                      const a = parseInt(e.target.value, 10) || 0;
+                      const autoVal = calculateMarketValue(editingPlayer.general || 75, a);
+                      setEditingPlayer({ ...editingPlayer, age: e.target.value, valeur_marchande: autoVal });
+                    }}
                     className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm text-white"
                   />
                 </div>
@@ -3322,13 +3375,16 @@ export default function App() {
                 <input
                   type="number"
                   step="500000"
-                  value={editingPlayer.valeur_marchande || ''}
+                  value={editingPlayer.valeur_marchande !== undefined && editingPlayer.valeur_marchande !== null ? editingPlayer.valeur_marchande : ''}
                   onChange={(e) => setEditingPlayer({ ...editingPlayer, valeur_marchande: e.target.value })}
                   className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm text-emerald-400 font-mono font-bold"
                 />
               </div>
 
-              <button type="submit" className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-2.5 rounded-xl text-sm mt-2 cursor-pointer">
+              <button 
+                type="submit" 
+                className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-2.5 rounded-xl text-sm mt-2 cursor-pointer active:scale-95 transition-all shadow-lg"
+              >
                 Enregistrer
               </button>
             </form>
