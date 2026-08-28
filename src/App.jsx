@@ -123,6 +123,48 @@ function compressImage(file, maxSize = 128) {
   });
 }
 
+function patchLineupOnPlayerDeparture(team, departingPlayer, allPlayersList) {
+  if (!team || !departingPlayer) return [];
+  let lineIds = team.lineup_ids;
+  if (typeof lineIds === 'string') {
+    try { lineIds = JSON.parse(lineIds); } catch (e) { lineIds = []; }
+  }
+  if (!Array.isArray(lineIds) || !lineIds.includes(departingPlayer.id)) {
+    return lineIds || [];
+  }
+
+  const teamRoster = (allPlayersList || []).filter(p => p && String(p.equipe_id) === String(team.id) && String(p.id) !== String(departingPlayer.id));
+  const startersSet = new Set(lineIds);
+  const bench = teamRoster.filter(p => !startersSet.has(p.id));
+
+  const depCat = getPositionCategory(departingPlayer.poste);
+
+  let candidate = bench
+    .filter(p => getPositionCategory(p.poste) === depCat)
+    .sort((a, b) => (b.general || 0) - (a.general || 0))[0];
+
+  if (!candidate && depCat !== 'GK') {
+    candidate = bench
+      .filter(p => p.poste !== 'G')
+      .sort((a, b) => (b.general || 0) - (a.general || 0))[0];
+  } else if (!candidate && depCat === 'GK') {
+    candidate = bench
+      .filter(p => p.poste === 'G')
+      .sort((a, b) => (b.general || 0) - (a.general || 0))[0];
+  }
+
+  const newIds = [...lineIds];
+  const idx = newIds.indexOf(departingPlayer.id);
+
+  if (candidate && idx !== -1) {
+    newIds[idx] = candidate.id;
+  } else if (idx !== -1) {
+    newIds.splice(idx, 1);
+  }
+
+  return newIds;
+}
+
 const FORMATIONS = {
   '4-3-3': { name: '4-3-3 (Classique)', def: 4, mid: 3, att: 3 },
   '4-4-2': { name: '4-4-2 (Équilibré)', def: 4, mid: 4, att: 2 },
@@ -133,7 +175,6 @@ const FORMATIONS = {
 };
 
 export default function App() {
-  // 1. ÉTATS (UseStates)
   const [currentUser, setCurrentUser] = useState(null);
   const [authMode, setAuthMode] = useState('login');
   const [authEmail, setAuthEmail] = useState('');
@@ -189,7 +230,6 @@ export default function App() {
   const [transferType, setTransferType] = useState('achat');
   const [transferLoading, setTransferLoading] = useState(false);
 
-  // 2. VARIABLES DÉRIVÉES (Calculées à chaque rendu)
   const isAdmin = currentUser?.email?.trim().toLowerCase() === ADMIN_EMAIL.toLowerCase();
 
   const currentLeagueTeams = (teams || []).filter(t => t && (t.ligue_id || 'custom') === selectedLeague);
@@ -276,7 +316,7 @@ export default function App() {
     return count < 28;
   });
 
-  // 3. FONCTIONS (Maintenant en const fléchées pour garantir le bon ordre d'exécution)
+  // --- ACTIONS ---
   const showNotif = (msg) => {
     setNotification(msg);
     setTimeout(() => setNotification(''), 4500);
@@ -455,10 +495,12 @@ export default function App() {
     showNotif(`Calendrier généré pour ${selectedLeague === 'ligue1' ? 'la Ligue 1' : 'la Ligue Principale'} (Saison ${s}) !`);
   };
 
+  // --- CHARGEMENT ROBUSTE AVEC TIMEOUT ANTI-BLOCAGE ---
   const fetchUserData = async (userEmail) => {
     setLoading(true);
+    const uKey = userEmail;
+
     try {
-      const uKey = userEmail;
       let localTeams = null; let localPlayers = null; let localMatches = null; let localEvents = null; let localTransfers = null; let localEvolutions = null;
 
       try {
@@ -478,30 +520,38 @@ export default function App() {
       let currentEvolutions = (localEvolutions && typeof localEvolutions === 'object') ? localEvolutions : {};
 
       if (currentTeams.length === 0 || currentPlayers.length === 0) {
-        const [resTeams, resPlayers] = await Promise.all([
-          fetch(`${API_URL}/teams`).then(r => r.json()).catch(() => []),
-          fetch(`${API_URL}/players`).then(r => r.json()).catch(() => [])
-        ]);
-
-        currentTeams = Array.isArray(resTeams) && resTeams.length > 0 ? resTeams : currentTeams;
-        currentPlayers = Array.isArray(resPlayers) && resPlayers.length > 0 ? resPlayers : currentPlayers;
-
-        if (currentMatches.length === 0 && currentTeams.length >= 2) {
-          const customTeams = currentTeams.filter(t => t && (t.ligue_id || 'custom') === 'custom');
-          const ligue1Teams = currentTeams.filter(t => t && t.ligue_id === 'ligue1');
-          
-          const customMatches = buildRoundRobinFixtures(customTeams, uKey, 1, 'custom');
-          const ligue1Matches = buildRoundRobinFixtures(ligue1Teams, uKey, 1, 'ligue1');
-          currentMatches = [...customMatches, ...ligue1Matches];
-        }
+        // Timeout de sécurité : si l'API met plus de 4 secondes (serveur Render en veille), on débloque
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 4000);
 
         try {
+          const [resTeams, resPlayers] = await Promise.all([
+            fetch(`${API_URL}/teams`, { signal: controller.signal }).then(r => r.json()).catch(() => []),
+            fetch(`${API_URL}/players`, { signal: controller.signal }).then(r => r.json()).catch(() => [])
+          ]);
+          clearTimeout(timer);
+
+          currentTeams = Array.isArray(resTeams) && resTeams.length > 0 ? resTeams : currentTeams;
+          currentPlayers = Array.isArray(resPlayers) && resPlayers.length > 0 ? resPlayers : currentPlayers;
+
+          if (currentMatches.length === 0 && currentTeams.length >= 2) {
+            const customTeams = currentTeams.filter(t => t && (t.ligue_id || 'custom') === 'custom');
+            const ligue1Teams = currentTeams.filter(t => t && t.ligue_id === 'ligue1');
+            
+            const customMatches = buildRoundRobinFixtures(customTeams, uKey, 1, 'custom');
+            const ligue1Matches = buildRoundRobinFixtures(ligue1Teams, uKey, 1, 'ligue1');
+            currentMatches = [...customMatches, ...ligue1Matches];
+          }
+
           localStorage.setItem(`local_teams_${uKey}`, JSON.stringify(currentTeams));
           localStorage.setItem(`local_players_${uKey}`, JSON.stringify(currentPlayers));
           localStorage.setItem(`local_matches_${uKey}`, JSON.stringify(currentMatches));
           localStorage.setItem(`local_events_${uKey}`, JSON.stringify([]));
           localStorage.setItem(`local_transfers_${uKey}`, JSON.stringify([]));
-        } catch(e) {}
+        } catch (fetchErr) {
+          clearTimeout(timer);
+          console.warn("Serveur distant en veille ou injoignable, mode local actif.");
+        }
       }
 
       setTeams(currentTeams);
@@ -525,52 +575,14 @@ export default function App() {
         const firstUnfinished = validMatches.find(
           m => m && m.statut !== 'terminé' && (m.saison || 1) === activeSeason && (m.ligue_id || 'custom') === selectedLeague
         );
-        if (firstUnfinished) {
-          setJourneeFilter(firstUnfinished.journee || 1);
-        } else {
-          setJourneeFilter(1);
-        }
+        setJourneeFilter(firstUnfinished ? (firstUnfinished.journee || 1) : 1);
       }
     } catch (err) {
       console.error('Erreur chargement:', err);
     } finally {
+      // Déblocage garanti de l'écran de chargement
       setLoading(false);
     }
-  };
-
-  const getSortedTeamPlayers = (teamId) => {
-    if (!teamId) return [];
-    return playersWithStats
-      .filter(p => p && String(p.equipe_id) === String(teamId))
-      .sort((a, b) => {
-        const rankA = getPositionRank(a.poste);
-        const rankB = getPositionRank(b.poste);
-        if (rankA !== rankB) return rankA - rankB;
-        return (b.general || 0) - (a.general || 0);
-      });
-  };
-
-  const getTeamStartersAndBench = (team) => {
-    if (!team) return { starters: [], bench: [] };
-    const all = getSortedTeamPlayers(team.id);
-
-    let savedIds = team.lineup_ids;
-    if (typeof savedIds === 'string') {
-      try { savedIds = JSON.parse(savedIds); } catch (e) { savedIds = []; }
-    }
-
-    if (Array.isArray(savedIds) && savedIds.length > 0) {
-      const map = new Map(all.map(p => [String(p.id), p]));
-      const starters = savedIds.map(id => map.get(String(id))).filter(Boolean);
-      const starterSet = new Set(starters.map(p => String(p.id)));
-      const bench = all.filter(p => !starterSet.has(String(p.id)));
-
-      if (starters.length >= 11) {
-        return { starters: starters.slice(0, 11), bench };
-      }
-    }
-
-    return { starters: all.slice(0, 11), bench: all.slice(11) };
   };
 
   const triggerAutomatedMercato = async (journeeNum, currentSeasonNum, maxTransfers = 4, isSummer = false) => {
@@ -1420,10 +1432,7 @@ export default function App() {
 
     const updatedPlayers = (players || []).map(p => {
       if (p && String(p.id) === String(editingPlayer.id)) {
-        return {
-          ...p,
-          ...payload
-        };
+        return { ...p, ...payload };
       }
       return p;
     });
@@ -1903,7 +1912,7 @@ export default function App() {
     }
   };
 
-  // --- VARIABLES UI ---
+  // --- UI RENDER ---
   const teamRoster = selectedTeam ? getSortedTeamPlayers(selectedTeam.id) : [];
 
   const formationConfig = FORMATIONS[currentFormation] || FORMATIONS['4-3-3'];
@@ -2090,7 +2099,6 @@ export default function App() {
           </div>
 
           <div className="flex flex-wrap items-center gap-3">
-            {/* SÉLECTEUR DE LIGUE ACTIF */}
             <div className="flex items-center bg-slate-950 p-1 rounded-xl border border-slate-800">
               <button
                 onClick={() => {
