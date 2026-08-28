@@ -174,8 +174,23 @@ const FORMATIONS = {
   '3-4-3': { name: '3-4-3 (Ultra-Offensif)', def: 3, mid: 4, att: 3 }
 };
 
+// Clubs Ligue 1 par défaut avec AS Saint-Etienne
+const DEFAULT_L1_CLUBS = [
+  'Paris Saint-Germain', 'Olympique de Marseille', 'AS Monaco', 'Olympique Lyonnais',
+  'LOSC Lille', 'RC Lens', 'RC Strasbourg', 'FC Nantes', 'Paris FC', 'OGC Nice',
+  'Stade Rennais', 'Toulouse FC', 'Stade Brestois', 'AJ Auxerre', 'Angers SCO',
+  'Le Havre AC', 'FC Lorient', 'AS Saint-Etienne'
+];
+
 export default function App() {
-  const [currentUser, setCurrentUser] = useState(null);
+  // 1. Initialisation directe depuis LocalStorage (Zéro délai au démarrage)
+  const [currentUser, setCurrentUser] = useState(() => {
+    try {
+      const u = localStorage.getItem('session_user');
+      return u ? JSON.parse(u) : null;
+    } catch(e) { return null; }
+  });
+
   const [authMode, setAuthMode] = useState('login');
   const [authEmail, setAuthEmail] = useState('');
   const [authPassword, setAuthPassword] = useState('');
@@ -194,7 +209,7 @@ export default function App() {
   const [notification, setNotification] = useState('');
   const [simulating, setSimulating] = useState(false);
   const [savingProgress, setSavingProgress] = useState(false);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
 
   const [seasonEvolutions, setSeasonEvolutions] = useState({});
 
@@ -232,6 +247,7 @@ export default function App() {
 
   const isAdmin = currentUser?.email?.trim().toLowerCase() === ADMIN_EMAIL.toLowerCase();
 
+  // 2. Variables dérivées
   const currentLeagueTeams = (teams || []).filter(t => t && (t.ligue_id || 'custom') === selectedLeague);
 
   const seasonMatches = (matches || []).filter(
@@ -316,7 +332,7 @@ export default function App() {
     return count < 28;
   });
 
-  // --- ACTIONS ---
+  // 3. Actions
   const showNotif = (msg) => {
     setNotification(msg);
     setTimeout(() => setNotification(''), 4500);
@@ -495,126 +511,104 @@ export default function App() {
     showNotif(`Calendrier généré pour ${selectedLeague === 'ligue1' ? 'la Ligue 1' : 'la Ligue Principale'} (Saison ${s}) !`);
   };
 
-  // --- CHARGEMENT ROBUSTE SANS BLOCAGE ---
-  const fetchUserData = async (userEmail) => {
-    setLoading(true);
+  // --- CHARGEMENT INSTANTANÉ SANS BLOCAGE ---
+  const fetchUserData = (userEmail) => {
     const uKey = userEmail;
 
+    let localTeams = null; let localPlayers = null; let localMatches = null; let localEvents = null; let localTransfers = null; let localEvolutions = null;
+
     try {
-      let localTeams = null; let localPlayers = null; let localMatches = null; let localEvents = null; let localTransfers = null; let localEvolutions = null;
+      localTeams = JSON.parse(localStorage.getItem(`local_teams_${uKey}`));
+      localPlayers = JSON.parse(localStorage.getItem(`local_players_${uKey}`));
+      localMatches = JSON.parse(localStorage.getItem(`local_matches_${uKey}`));
+      localEvents = JSON.parse(localStorage.getItem(`local_events_${uKey}`));
+      localTransfers = JSON.parse(localStorage.getItem(`local_transfers_${uKey}`));
+      localEvolutions = JSON.parse(localStorage.getItem(`local_evolutions_${uKey}`));
+    } catch (e) {}
 
-      try {
-        localTeams = JSON.parse(localStorage.getItem(`local_teams_${uKey}`));
-        localPlayers = JSON.parse(localStorage.getItem(`local_players_${uKey}`));
-        localMatches = JSON.parse(localStorage.getItem(`local_matches_${uKey}`));
-        localEvents = JSON.parse(localStorage.getItem(`local_events_${uKey}`));
-        localTransfers = JSON.parse(localStorage.getItem(`local_transfers_${uKey}`));
-        localEvolutions = JSON.parse(localStorage.getItem(`local_evolutions_${uKey}`));
-      } catch (e) {}
+    let currentTeams = Array.isArray(localTeams) ? localTeams : [];
+    let currentPlayers = Array.isArray(localPlayers) ? localPlayers : [];
+    let currentMatches = Array.isArray(localMatches) ? localMatches : [];
+    let currentEvents = Array.isArray(localEvents) ? localEvents : [];
+    let currentTransfers = Array.isArray(localTransfers) ? localTransfers : [];
+    let currentEvolutions = (localEvolutions && typeof localEvolutions === 'object') ? localEvolutions : {};
 
-      let currentTeams = Array.isArray(localTeams) ? localTeams : [];
-      let currentPlayers = Array.isArray(localPlayers) ? localPlayers : [];
-      let currentMatches = Array.isArray(localMatches) ? localMatches : [];
-      let currentEvents = Array.isArray(localEvents) ? localEvents : [];
-      let currentTransfers = Array.isArray(localTransfers) ? localTransfers : [];
-      let currentEvolutions = (localEvolutions && typeof localEvolutions === 'object') ? localEvolutions : {};
+    // Si aucune équipe en local, on génère les équipes par défaut immédiatement
+    if (currentTeams.length === 0) {
+      const generatedTeams = [];
+      const generatedPlayers = [];
 
-      if (currentTeams.length === 0 || currentPlayers.length === 0) {
-        const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), 3500);
-
-        try {
-          const [resTeams, resPlayers] = await Promise.all([
-            fetch(`${API_URL}/teams`, { signal: controller.signal }).then(r => r.json()).catch(() => []),
-            fetch(`${API_URL}/players`, { signal: controller.signal }).then(r => r.json()).catch(() => [])
-          ]);
-          clearTimeout(timer);
-
-          currentTeams = Array.isArray(resTeams) && resTeams.length > 0 ? resTeams : currentTeams;
-          currentPlayers = Array.isArray(resPlayers) && resPlayers.length > 0 ? resPlayers : currentPlayers;
-
-          if (currentMatches.length === 0 && currentTeams.length >= 2) {
-            const customTeams = currentTeams.filter(t => t && (t.ligue_id || 'custom') === 'custom');
-            const ligue1Teams = currentTeams.filter(t => t && t.ligue_id === 'ligue1');
-            
-            const customMatches = buildRoundRobinFixtures(customTeams, uKey, 1, 'custom');
-            const ligue1Matches = buildRoundRobinFixtures(ligue1Teams, uKey, 1, 'ligue1');
-            currentMatches = [...customMatches, ...ligue1Matches];
-          }
-
-          localStorage.setItem(`local_teams_${uKey}`, JSON.stringify(currentTeams));
-          localStorage.setItem(`local_players_${uKey}`, JSON.stringify(currentPlayers));
-          localStorage.setItem(`local_matches_${uKey}`, JSON.stringify(currentMatches));
-          localStorage.setItem(`local_events_${uKey}`, JSON.stringify([]));
-          localStorage.setItem(`local_transfers_${uKey}`, JSON.stringify([]));
-        } catch (fetchErr) {
-          clearTimeout(timer);
-        }
-      }
-
-      setTeams(currentTeams);
-      setPlayers(currentPlayers);
-      setMatches(currentMatches);
-      setMatchEvents(currentEvents);
-      setTransfers(currentTransfers);
-      setSeasonEvolutions(currentEvolutions);
-
-      const validMatches = (currentMatches || []).filter(Boolean);
-      const maxS = validMatches.length > 0 ? Math.max(...validMatches.map(m => m.saison || 1), 1) : 1;
-      const savedSeason = localStorage.getItem(`local_season_${uKey}`);
-      const savedJournee = localStorage.getItem(`local_journee_${uKey}_${selectedLeague}`);
-
-      const activeSeason = savedSeason ? parseInt(savedSeason, 10) : maxS;
-      setSeasonFilter(activeSeason);
-
-      if (savedJournee) {
-        setJourneeFilter(parseInt(savedJournee, 10) || 1);
-      } else {
-        const firstUnfinished = validMatches.find(
-          m => m && m.statut !== 'terminé' && (m.saison || 1) === activeSeason && (m.ligue_id || 'custom') === selectedLeague
-        );
-        setJourneeFilter(firstUnfinished ? (firstUnfinished.journee || 1) : 1);
-      }
-    } catch (err) {
-      console.error('Erreur chargement:', err);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const getSortedTeamPlayers = (teamId) => {
-    if (!teamId) return [];
-    return playersWithStats
-      .filter(p => p && String(p.equipe_id) === String(teamId))
-      .sort((a, b) => {
-        const rankA = getPositionRank(a.poste);
-        const rankB = getPositionRank(b.poste);
-        if (rankA !== rankB) return rankA - rankB;
-        return (b.general || 0) - (a.general || 0);
+      // Ligue 1
+      DEFAULT_L1_CLUBS.forEach((nom, idx) => {
+        const teamId = `t_l1_${idx}`;
+        generatedTeams.push({ id: teamId, nom, logo_url: '', formation: '4-3-3', points: 0, ligue_id: 'ligue1' });
+        
+        ['G', 'DC', 'DC', 'DD', 'DG', 'MDC', 'MC', 'MOC', 'BU', 'AD', 'AG', 'MC', 'BU', 'DC', 'MD', 'MG', 'SA', 'DD', 'DG'].forEach((poste, pIdx) => {
+          const gen = 76 + Math.floor(Math.random() * 8);
+          const age = 20 + Math.floor(Math.random() * 12);
+          generatedPlayers.push({
+            id: `p_${teamId}_${pIdx}`,
+            nom: `${poste} ${nom}`,
+            equipe_id: teamId,
+            numero: pIdx === 0 ? 1 : (pIdx + 1),
+            poste,
+            general: gen,
+            general_base: gen,
+            age,
+            valeur_marchande: calculateMarketValue(gen, age)
+          });
+        });
       });
-  };
 
-  const getTeamStartersAndBench = (team) => {
-    if (!team) return { starters: [], bench: [] };
-    const all = getSortedTeamPlayers(team.id);
+      currentTeams = generatedTeams;
+      currentPlayers = generatedPlayers;
 
-    let savedIds = team.lineup_ids;
-    if (typeof savedIds === 'string') {
-      try { savedIds = JSON.parse(savedIds); } catch (e) { savedIds = []; }
+      const ligue1Matches = buildRoundRobinFixtures(currentTeams.filter(t => t.ligue_id === 'ligue1'), uKey, 1, 'ligue1');
+      currentMatches = ligue1Matches;
+
+      localStorage.setItem(`local_teams_${uKey}`, JSON.stringify(currentTeams));
+      localStorage.setItem(`local_players_${uKey}`, JSON.stringify(currentPlayers));
+      localStorage.setItem(`local_matches_${uKey}`, JSON.stringify(currentMatches));
     }
 
-    if (Array.isArray(savedIds) && savedIds.length > 0) {
-      const map = new Map(all.map(p => [String(p.id), p]));
-      const starters = savedIds.map(id => map.get(String(id))).filter(Boolean);
-      const starterSet = new Set(starters.map(p => String(p.id)));
-      const bench = all.filter(p => !starterSet.has(String(p.id)));
+    setTeams(currentTeams);
+    setPlayers(currentPlayers);
+    setMatches(currentMatches);
+    setMatchEvents(currentEvents);
+    setTransfers(currentTransfers);
+    setSeasonEvolutions(currentEvolutions);
 
-      if (starters.length >= 11) {
-        return { starters: starters.slice(0, 11), bench };
+    const validMatches = (currentMatches || []).filter(Boolean);
+    const maxS = validMatches.length > 0 ? Math.max(...validMatches.map(m => m.saison || 1), 1) : 1;
+    const savedSeason = localStorage.getItem(`local_season_${uKey}`);
+    const savedJournee = localStorage.getItem(`local_journee_${uKey}_${selectedLeague}`);
+
+    const activeSeason = savedSeason ? parseInt(savedSeason, 10) : maxS;
+    setSeasonFilter(activeSeason);
+
+    if (savedJournee) {
+      setJourneeFilter(parseInt(savedJournee, 10) || 1);
+    } else {
+      const firstUnfinished = validMatches.find(
+        m => m && m.statut !== 'terminé' && (m.saison || 1) === activeSeason && (m.ligue_id || 'custom') === selectedLeague
+      );
+      setJourneeFilter(firstUnfinished ? (firstUnfinished.journee || 1) : 1);
+    }
+
+    // Requête API asynchrone non-bloquante pour récupérer les dernières données serveur si disponibles
+    fetch(`${API_URL}/teams`).then(r => r.json()).then(serverTeams => {
+      if (Array.isArray(serverTeams) && serverTeams.length > 0) {
+        setTeams(serverTeams);
+        localStorage.setItem(`local_teams_${uKey}`, JSON.stringify(serverTeams));
       }
-    }
+    }).catch(() => {});
 
-    return { starters: all.slice(0, 11), bench: all.slice(11) };
+    fetch(`${API_URL}/players`).then(r => r.json()).then(serverPlayers => {
+      if (Array.isArray(serverPlayers) && serverPlayers.length > 0) {
+        setPlayers(serverPlayers);
+        localStorage.setItem(`local_players_${uKey}`, JSON.stringify(serverPlayers));
+      }
+    }).catch(() => {});
   };
 
   const triggerAutomatedMercato = async (journeeNum, currentSeasonNum, maxTransfers = 4, isSummer = false) => {
@@ -811,7 +805,7 @@ export default function App() {
       if (m.equipe_exterieur_id && teamRecords[m.equipe_exterieur_id]) {
         teamRecords[m.equipe_exterieur_id].matchCount++;
         teamRecords[m.equipe_exterieur_id].goalsConceded += (m.score_domicile || 0);
-        if (m.score_domicile === 0) teamRecords[m.equipe_exterieur_id].cleanSheets++;
+        if (m.score_domicile === 0) teamRecords[m.equipe_domicile_id].cleanSheets++;
         if (m.score_exterieur > m.score_domicile) teamRecords[m.equipe_domicile_id].wins++;
         else if (m.score_exterieur < m.score_domicile) teamRecords[m.equipe_domicile_id].losses++;
         else teamRecords[m.equipe_domicile_id].draws++;
@@ -1391,7 +1385,7 @@ export default function App() {
         localStorage.removeItem(`local_journee_${uKey}_custom`);
         localStorage.removeItem(`local_journee_${uKey}_ligue1`);
         localStorage.removeItem(`local_evolutions_${uKey}`);
-        await fetchUserData(uKey);
+        fetchUserData(uKey);
         return;
       }
 
@@ -1441,7 +1435,7 @@ export default function App() {
     }
   };
 
-  // --- SAUVEGARDE RÉELLE DU JOUEUR (INSTANTANÉE ET ULTRA ROBUSTE) ---
+  // --- SAUVEGARDE RÉELLE DU JOUEUR ---
   const handleUpdatePlayer = (e) => {
     if (e && e.preventDefault) e.preventDefault();
     if (!editingPlayer) return;
@@ -1465,7 +1459,6 @@ export default function App() {
       valeur_marchande: calculatedVal
     };
 
-    // 1. Mise à jour instantanée des joueurs en mémoire
     const updatedPlayers = (players || []).map(p => {
       if (p && String(p.id) === String(editingPlayer.id)) {
         return { ...p, ...payload };
@@ -1475,24 +1468,21 @@ export default function App() {
 
     setPlayers(updatedPlayers);
 
-    // 2. Mise à jour instantanée de l'équipe sélectionnée si modal ouvert
     if (selectedTeam) {
       setSelectedTeam(prev => ({ ...prev }));
     }
 
-    // 3. Persistance dans le LocalStorage
     if (currentUser) {
       try {
         localStorage.setItem(`local_players_${currentUser.email}`, JSON.stringify(updatedPlayers));
       } catch (err) {}
     }
 
-    // 4. Synchronisation distante asynchrone avec PostgreSQL
     fetch(`${API_URL}/players/${editingPlayer.id}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload)
-    }).catch(() => console.log('Mode local'));
+    }).catch(() => {});
 
     showNotif(`✓ Joueur "${payload.nom}" enregistré (${newGen} GEN) !`);
     setEditingPlayer(null);
@@ -1510,7 +1500,7 @@ export default function App() {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ logo_url: logoUrl })
-      }).catch(() => console.log('Mode local'));
+      }).catch(() => {});
 
       setTeams(prev => prev.map(t => String(t.id) === String(editingTeamLogo.id) ? { ...t, logo_url: logoUrl } : t));
       showNotif(`✓ Logo de "${editingTeamLogo.nom}" sauvegardé pour tous les joueurs !`);
@@ -1855,7 +1845,7 @@ export default function App() {
           formation: currentFormation,
           lineup_ids: starterIds
         })
-      }).catch(() => console.log('Mode local actif'));
+      }).catch(() => {});
 
       const updatedTeams = (teams || []).map(t =>
         t && String(t.id) === String(selectedLineupTeam.id)
@@ -1939,23 +1929,6 @@ export default function App() {
     setSelectedSlot(null);
   };
 
-  const formatMoney = (amount) => {
-    if (!amount) return '0 €';
-    return new Intl.NumberFormat('fr-FR', { style: 'currency', currency: 'EUR', maximumFractionDigits: 0 }).format(amount);
-  };
-
-  const renderEventBadge = (ev) => {
-    switch (ev.type) {
-      case 'but': return <span className="flex items-center gap-1 font-extrabold text-white text-xs bg-emerald-500/20 border border-emerald-500/30 px-2 py-0.5 rounded-lg">⚽ But</span>;
-      case 'passe': return <span className="flex items-center gap-1 font-bold text-indigo-300 text-xs bg-indigo-500/20 border border-indigo-500/30 px-2 py-0.5 rounded-lg">🎯 Passe D.</span>;
-      case 'carton_jaune': return <span className="flex items-center gap-1 font-bold text-amber-300 text-xs bg-amber-500/20 border border-amber-500/30 px-2 py-0.5 rounded-lg">🟨 Jaune</span>;
-      case 'carton_rouge': return <span className="flex items-center gap-1 font-bold text-rose-300 text-xs bg-rose-500/20 border border-rose-500/30 px-2 py-0.5 rounded-lg">🟥 Rouge</span>;
-      case 'blessure': return <span className="flex items-center gap-1 font-black text-rose-400 text-xs bg-rose-600/20 border border-rose-500/40 px-2 py-0.5 rounded-lg shadow-sm">🚑 Blessure</span>;
-      case 'remplacement': return <span className="flex items-center gap-1 font-semibold text-slate-300 text-xs bg-slate-800 border border-slate-700 px-2 py-0.5 rounded-lg">🔄 Entrée</span>;
-      default: return <span className="text-xs text-slate-400 font-bold">{ev.type}</span>;
-    }
-  };
-
   // --- UI RENDER ---
   const teamRoster = selectedTeam ? getSortedTeamPlayers(selectedTeam.id) : [];
 
@@ -2031,6 +2004,7 @@ export default function App() {
         .sort((a, b) => (parseInt(a.minute, 10) || 0) - (parseInt(b.minute, 10) || 0))
     : [];
 
+  // 4. Si l'utilisateur n'est pas connecté
   if (!currentUser) {
     return (
       <div className="min-h-screen bg-slate-950 text-white flex items-center justify-center p-4 font-sans">
@@ -2108,15 +2082,6 @@ export default function App() {
     );
   }
 
-  if (loading) {
-    return (
-      <div className="min-h-screen bg-slate-950 text-white flex flex-col items-center justify-center">
-        <div className="text-3xl mb-4 animate-spin">⚽</div>
-        <p className="text-slate-400 font-bold">Chargement de votre saison...</p>
-      </div>
-    );
-  }
-
   const navTabs = [
     { id: 'classement', label: '🏆 Classement' },
     { id: 'matchs', label: '📅 Matchs' },
@@ -2143,7 +2108,6 @@ export default function App() {
           </div>
 
           <div className="flex flex-wrap items-center gap-3">
-            {/* SÉLECTEUR DE LIGUE ACTIF */}
             <div className="flex items-center bg-slate-950 p-1 rounded-xl border border-slate-800">
               <button
                 onClick={() => {
@@ -3316,7 +3280,7 @@ export default function App() {
                     type="number"
                     min="1"
                     max="99"
-                    value={editingPlayer.numero !== undefined && editingPlayer.numero !== null ? editingPlayer.numero : ''}
+                    value={editingPlayer.numero ?? 10}
                     onChange={(e) => setEditingPlayer({ ...editingPlayer, numero: e.target.value })}
                     className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm text-white text-center font-bold"
                     required
@@ -3344,11 +3308,11 @@ export default function App() {
                     type="number"
                     min="40"
                     max="99"
-                    value={editingPlayer.general !== undefined && editingPlayer.general !== null ? editingPlayer.general : ''}
+                    value={editingPlayer.general ?? 75}
                     onChange={(e) => {
-                      const g = parseInt(e.target.value, 10) || 0;
-                      const autoVal = calculateMarketValue(g, editingPlayer.age || 22);
-                      setEditingPlayer({ ...editingPlayer, general: e.target.value, valeur_marchande: autoVal });
+                      const g = parseInt(e.target.value, 10) || 75;
+                      const a = parseInt(editingPlayer.age, 10) || 22;
+                      setEditingPlayer({ ...editingPlayer, general: g, valeur_marchande: calculateMarketValue(g, a) });
                     }}
                     className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm text-white"
                   />
@@ -3359,11 +3323,11 @@ export default function App() {
                     type="number"
                     min="15"
                     max="45"
-                    value={editingPlayer.age !== undefined && editingPlayer.age !== null ? editingPlayer.age : ''}
+                    value={editingPlayer.age ?? 22}
                     onChange={(e) => {
-                      const a = parseInt(e.target.value, 10) || 0;
-                      const autoVal = calculateMarketValue(editingPlayer.general || 75, a);
-                      setEditingPlayer({ ...editingPlayer, age: e.target.value, valeur_marchande: autoVal });
+                      const a = parseInt(e.target.value, 10) || 22;
+                      const g = parseInt(editingPlayer.general, 10) || 75;
+                      setEditingPlayer({ ...editingPlayer, age: a, valeur_marchande: calculateMarketValue(g, a) });
                     }}
                     className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm text-white"
                   />
@@ -3375,16 +3339,13 @@ export default function App() {
                 <input
                   type="number"
                   step="500000"
-                  value={editingPlayer.valeur_marchande !== undefined && editingPlayer.valeur_marchande !== null ? editingPlayer.valeur_marchande : ''}
+                  value={editingPlayer.valeur_marchande || ''}
                   onChange={(e) => setEditingPlayer({ ...editingPlayer, valeur_marchande: e.target.value })}
                   className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm text-emerald-400 font-mono font-bold"
                 />
               </div>
 
-              <button 
-                type="submit" 
-                className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-2.5 rounded-xl text-sm mt-2 cursor-pointer active:scale-95 transition-all shadow-lg"
-              >
+              <button type="submit" className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-2.5 rounded-xl text-sm mt-2 cursor-pointer">
                 Enregistrer
               </button>
             </form>
