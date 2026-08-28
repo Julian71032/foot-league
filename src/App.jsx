@@ -181,7 +181,7 @@ export default function App() {
   const [authPassword, setAuthPassword] = useState('');
   const [authError, setAuthError] = useState('');
 
-  // MULTI-LIGUES : 'custom' ou 'ligue1'
+  // MULTI-LIGUES
   const [selectedLeague, setSelectedLeague] = useState('custom');
 
   const [tab, setTab] = useState('classement');
@@ -232,6 +232,100 @@ export default function App() {
   const [transferLoading, setTransferLoading] = useState(false);
 
   const isAdmin = currentUser?.email?.trim().toLowerCase() === ADMIN_EMAIL.toLowerCase();
+
+  // --- DÉCLARATION DES VARIABLES CALCULÉES EN PREMIER ---
+  const currentLeagueTeams = (teams || []).filter(t => (t.ligue_id || 'custom') === selectedLeague);
+
+  const seasonMatches = (matches || []).filter(
+    m => m && (m.saison || 1) === (parseInt(seasonFilter, 10) || 1) && (m.ligue_id || 'custom') === selectedLeague
+  );
+  
+  const seasonEvents = (matchEvents || []).filter(
+    e => e && (e.saison || 1) === (parseInt(seasonFilter, 10) || 1)
+  );
+
+  const availableSeasons = Array.from(
+    new Set([...(matches || []).filter(m => m && (m.ligue_id || 'custom') === selectedLeague).map(m => m.saison || 1), 1, parseInt(seasonFilter, 10) || 1])
+  ).sort((a, b) => a - b);
+
+  const classement = currentLeagueTeams.map(team => {
+    let points = 0;
+    let joues = 0;
+    let victoires = 0;
+    let nuls = 0;
+    let defaites = 0;
+    let butsPour = 0;
+    let butsContre = 0;
+
+    seasonMatches.forEach(m => {
+      if (m && m.statut === 'terminé') {
+        if (String(m.equipe_domicile_id) === String(team.id)) {
+          joues++;
+          const scorePour = m.score_domicile ?? 0;
+          const scoreContre = m.score_exterieur ?? 0;
+          butsPour += scorePour;
+          butsContre += scoreContre;
+
+          if (scorePour > scoreContre) { points += 3; victoires++; }
+          else if (scorePour === scoreContre) { points += 1; nuls++; }
+          else { defaites++; }
+        } else if (String(m.equipe_exterieur_id) === String(team.id)) {
+          joues++;
+          const scorePour = m.score_exterieur ?? 0;
+          const scoreContre = m.score_domicile ?? 0;
+          butsPour += scorePour;
+          butsContre += scoreContre;
+
+          if (scorePour > scoreContre) { points += 3; victoires++; }
+          else if (scorePour === scoreContre) { points += 1; nuls++; }
+          else { defaites++; }
+        }
+      }
+    });
+
+    const diff = butsPour - butsContre;
+    return { ...team, points, joues, victoires, nuls, defaites, butsPour, butsContre, diff };
+  }).sort((a, b) => {
+    if (b.points !== a.points) return b.points - a.points;
+    if (b.diff !== a.diff) return b.diff - a.diff;
+    return b.butsPour - a.butsPour;
+  });
+
+  const playersWithStats = (players || []).map(p => {
+    if (!p) return null;
+    const buts = seasonEvents.filter(e => String(e.player_id) === String(p.id) && e.type === 'but').length;
+    const passes = seasonEvents.filter(e => String(e.player_id) === String(p.id) && e.type === 'passe').length;
+    const assignedTeam = (teams || []).find(t => String(t.id) === String(p.equipe_id));
+    return { ...p, buts, passes_decisives: passes, teams: assignedTeam };
+  }).filter(Boolean);
+
+  const topButeurs = [...playersWithStats]
+    .filter(j => j.buts > 0 && currentLeagueTeams.some(t => String(t.id) === String(j.equipe_id)))
+    .sort((a, b) => b.buts - a.buts);
+
+  const topPasseurs = [...playersWithStats]
+    .filter(j => j.passes_decisives > 0 && currentLeagueTeams.some(t => String(t.id) === String(j.equipe_id)))
+    .sort((a, b) => b.passes_decisives - a.passes_decisives);
+
+  const availableSellerTeams = currentLeagueTeams.filter(t => {
+    const count = (players || []).filter(p => p && String(p.equipe_id) === String(t.id)).length;
+    return count > 18;
+  });
+
+  const availablePlayersForTransfer = (players || []).filter(p => p && String(p.equipe_id) === String(transferFromTeamId));
+
+  const availableDestinationTeams = currentLeagueTeams.filter(t => {
+    if (String(t.id) === String(transferFromTeamId)) return false;
+    const count = (players || []).filter(p => p && String(p.equipe_id) === String(t.id)).length;
+    return count < 28;
+  });
+
+  const maxJourneesCount = seasonMatches.length > 0
+    ? Math.max(...seasonMatches.map(m => m.journee || 1))
+    : (currentLeagueTeams.length >= 2 ? (currentLeagueTeams.length % 2 === 0 ? currentLeagueTeams.length - 1 : currentLeagueTeams.length) * 2 : 38);
+
+  const currentMatchesList = seasonMatches.filter(m => m && m.journee === (parseInt(journeeFilter, 10) || 1));
+  const isCurrentJourneeCompleted = currentMatchesList.length > 0 && currentMatchesList.every(m => m && m.statut === 'terminé');
 
   useEffect(() => {
     if (!document.getElementById('tailwind-cdn')) {
@@ -428,14 +522,14 @@ export default function App() {
   }
 
   function handleGenerateCurrentSchedule() {
-    const currentLeagueTeams = (teams || []).filter(t => (t.ligue_id || 'custom') === selectedLeague);
-    if (currentLeagueTeams.length < 2) {
+    const currentLeagueTeamsList = (teams || []).filter(t => (t.ligue_id || 'custom') === selectedLeague);
+    if (currentLeagueTeamsList.length < 2) {
       alert("Il vous faut au moins 2 équipes dans cette ligue pour générer un calendrier.");
       return;
     }
     const uKey = currentUser?.email || 'local_user';
     const s = parseInt(seasonFilter, 10) || 1;
-    const newFixtures = buildRoundRobinFixtures(currentLeagueTeams, uKey, s, selectedLeague);
+    const newFixtures = buildRoundRobinFixtures(currentLeagueTeamsList, uKey, s, selectedLeague);
     
     const otherMatches = (matches || []).filter(
       m => m && ((m.saison || 1) !== s || (m.ligue_id || 'custom') !== selectedLeague)
@@ -574,19 +668,20 @@ export default function App() {
     return { starters: all.slice(0, 11), bench: all.slice(11) };
   }
 
+  // Mercato automatisé
   async function triggerAutomatedMercato(journeeNum, currentSeasonNum, maxTransfers = 4, isSummer = false) {
-    const currentLeagueTeams = (teams || []).filter(t => (t.ligue_id || 'custom') === selectedLeague);
+    const currentLeagueTeamsList = (teams || []).filter(t => (t.ligue_id || 'custom') === selectedLeague);
     const currentLeaguePlayers = (players || []).filter(p => {
-      const t = currentLeagueTeams.find(tm => String(tm.id) === String(p.equipe_id));
+      const t = currentLeagueTeamsList.find(tm => String(tm.id) === String(p.equipe_id));
       return !!t;
     });
 
-    if (currentLeagueTeams.length < 2 || currentLeaguePlayers.length < 10) return;
+    if (currentLeagueTeamsList.length < 2 || currentLeaguePlayers.length < 10) return;
 
     const teamCounts = {};
     const teamPosCounts = {};
 
-    currentLeagueTeams.forEach(t => {
+    currentLeagueTeamsList.forEach(t => {
       const tPlayers = currentLeaguePlayers.filter(p => p && String(p.equipe_id) === String(t.id));
       teamCounts[t.id] = tPlayers.length;
       teamPosCounts[t.id] = {};
@@ -614,7 +709,7 @@ export default function App() {
       const age = player.age || 24;
       const originTeamId = player.equipe_id;
       const playerPos = player.poste || 'MC';
-      const originTeam = currentLeagueTeams.find(t => String(t.id) === String(originTeamId));
+      const originTeam = currentLeagueTeamsList.find(t => String(t.id) === String(originTeamId));
       if (!originTeam) continue;
 
       if ((teamCounts[originTeamId] || 0) <= minSellerQuota) continue;
@@ -750,9 +845,9 @@ export default function App() {
       e => e && (e.saison || 1) === currentSeasonNum && blockMatchIds.has(e.match_id)
     );
 
-    const currentLeagueTeams = (teams || []).filter(t => (t.ligue_id || 'custom') === selectedLeague);
+    const currentLeagueTeamsList = (teams || []).filter(t => (t.ligue_id || 'custom') === selectedLeague);
     const teamRecords = {};
-    currentLeagueTeams.forEach(t => {
+    currentLeagueTeamsList.forEach(t => {
       teamRecords[t.id] = { wins: 0, losses: 0, draws: 0, goalsConceded: 0, cleanSheets: 0, matchCount: 0 };
     });
 
@@ -777,7 +872,7 @@ export default function App() {
 
     const candidates = [];
     const currentSeasonMapForCalc = { ...(seasonEvolutions[currentSeasonNum] || {}) };
-    const currentLeaguePlayers = (players || []).filter(p => currentLeagueTeams.some(t => String(t.id) === String(p.equipe_id)));
+    const currentLeaguePlayers = (players || []).filter(p => currentLeagueTeamsList.some(t => String(t.id) === String(p.equipe_id)));
 
     for (const player of currentLeaguePlayers) {
       if (!player) continue;
@@ -1318,8 +1413,8 @@ export default function App() {
   }
 
   async function handleStartNewSeason(isNextSeason = false) {
-    const currentLeagueTeams = (teams || []).filter(t => (t.ligue_id || 'custom') === selectedLeague);
-    if (currentLeagueTeams.length < 2) {
+    const currentLeagueTeamsList = (teams || []).filter(t => (t.ligue_id || 'custom') === selectedLeague);
+    if (currentLeagueTeamsList.length < 2) {
       alert(`Erreur : Il vous faut au moins 2 équipes pour générer un calendrier.`);
       return;
     }
@@ -1328,7 +1423,7 @@ export default function App() {
     const currentMaxSeason = leagueMatches.length > 0 ? Math.max(...leagueMatches.map(m => m.saison || 1), 1) : 1;
     const targetSeason = isNextSeason ? currentMaxSeason + 1 : 1;
     const seasonLabel = getSeasonLabel(targetSeason);
-    const totalJournees = (currentLeagueTeams.length % 2 === 0 ? currentLeagueTeams.length - 1 : currentLeagueTeams.length) * 2;
+    const totalJournees = (currentLeagueTeamsList.length % 2 === 0 ? currentLeagueTeamsList.length - 1 : currentLeagueTeamsList.length) * 2;
     const uKey = currentUser?.email || 'local_user';
 
     const confirmMsg = isNextSeason
@@ -1378,7 +1473,7 @@ export default function App() {
 
       setPlayers(cleanedPlayers);
 
-      const fixtures = buildRoundRobinFixtures(currentLeagueTeams, uKey, targetSeason, selectedLeague);
+      const fixtures = buildRoundRobinFixtures(currentLeagueTeamsList, uKey, targetSeason, selectedLeague);
       const remainingMatches = (matches || []).filter(
         m => m && ((m.saison || 1) !== targetSeason || (m.ligue_id || 'custom') !== selectedLeague)
       );
@@ -1421,7 +1516,6 @@ export default function App() {
     };
 
     try {
-      // Envoi direct à votre serveur API pour persistance SQL
       await fetch(`${API_URL}/players/${editingPlayer.id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
@@ -1855,35 +1949,6 @@ export default function App() {
   const pitchAvgGen = teamLineupPlayers.length > 0
     ? Math.round(teamLineupPlayers.reduce((acc, p) => acc + (p?.general || 75), 0) / teamLineupPlayers.length)
     : 0;
-
-  const maxJourneesCount = seasonMatches.length > 0
-    ? Math.max(...seasonMatches.map(m => m.journee || 1))
-    : (currentLeagueTeams.length >= 2 ? (currentLeagueTeams.length % 2 === 0 ? currentLeagueTeams.length - 1 : currentLeagueTeams.length) * 2 : 38);
-
-  const currentMatchesList = seasonMatches.filter(m => m && m.journee === (parseInt(journeeFilter, 10) || 1));
-  const isCurrentJourneeCompleted = currentMatchesList.length > 0 && currentMatchesList.every(m => m && m.statut === 'terminé');
-
-  function handleNextJournee() {
-    if (!isCurrentJourneeCompleted) {
-      showNotif("Jouez ou simulez d'abord tous les matchs de la journée avant d'avancer !");
-      return;
-    }
-    if (journeeFilter < maxJourneesCount) {
-      const nextJ = journeeFilter + 1;
-      setJourneeFilter(nextJ);
-      localStorage.setItem(`local_journee_${currentUser.email}_${selectedLeague}`, nextJ);
-    } else {
-      showNotif("Vous êtes sur la dernière journée de cette saison !");
-    }
-  }
-
-  function handlePrevJournee() {
-    if (journeeFilter > 1) {
-      const prevJ = journeeFilter - 1;
-      setJourneeFilter(prevJ);
-      localStorage.setItem(`local_journee_${currentUser.email}_${selectedLeague}`, prevJ);
-    }
-  }
 
   const PitchPlayerSlot = ({ player, globalIndex }) => {
     const isSelected = selectedSlot?.type === 'pitch' && selectedSlot?.index === globalIndex;
