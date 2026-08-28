@@ -181,7 +181,6 @@ export default function App() {
   const [authPassword, setAuthPassword] = useState('');
   const [authError, setAuthError] = useState('');
 
-  // MULTI-LIGUES
   const [selectedLeague, setSelectedLeague] = useState('custom');
 
   const [tab, setTab] = useState('classement');
@@ -233,7 +232,7 @@ export default function App() {
 
   const isAdmin = currentUser?.email?.trim().toLowerCase() === ADMIN_EMAIL.toLowerCase();
 
-  // --- VARIABLES DÉCLARÉES AU DÉBUT ---
+  // --- VARIABLES DÉRIVÉES ---
   const currentLeagueTeams = (teams || []).filter(t => t && (t.ligue_id || 'custom') === selectedLeague);
 
   const seasonMatches = (matches || []).filter(
@@ -254,29 +253,6 @@ export default function App() {
 
   const currentMatchesList = seasonMatches.filter(m => m && m.journee === (parseInt(journeeFilter, 10) || 1));
   const isCurrentJourneeCompleted = currentMatchesList.length > 0 && currentMatchesList.every(m => m && m.statut === 'terminé');
-
-  // --- FONCTIONS DE NAVIGATION DE JOURNÉE ---
-  function handleNextJournee() {
-    if (!isCurrentJourneeCompleted) {
-      showNotif("Jouez ou simulez d'abord tous les matchs de la journée avant d'avancer !");
-      return;
-    }
-    if (journeeFilter < maxJourneesCount) {
-      const nextJ = journeeFilter + 1;
-      setJourneeFilter(nextJ);
-      localStorage.setItem(`local_journee_${currentUser.email}_${selectedLeague}`, nextJ);
-    } else {
-      showNotif("Vous êtes sur la dernière journée de cette saison !");
-    }
-  }
-
-  function handlePrevJournee() {
-    if (journeeFilter > 1) {
-      const prevJ = journeeFilter - 1;
-      setJourneeFilter(prevJ);
-      localStorage.setItem(`local_journee_${currentUser.email}_${selectedLeague}`, prevJ);
-    }
-  }
 
   const classement = currentLeagueTeams.map(team => {
     let points = 0;
@@ -350,6 +326,7 @@ export default function App() {
     return count < 28;
   });
 
+  // --- EFFETS ---
   useEffect(() => {
     if (!document.getElementById('tailwind-cdn')) {
       const script = document.createElement('script');
@@ -424,9 +401,32 @@ export default function App() {
     }
   }, [seasonEvolutions, loading, currentUser]);
 
+  // --- ACTIONS & FONCTIONS LOGIQUES ---
   function showNotif(msg) {
     setNotification(msg);
     setTimeout(() => setNotification(''), 4500);
+  }
+
+  function handlePrevJournee() {
+    if (journeeFilter > 1) {
+      const prevJ = journeeFilter - 1;
+      setJourneeFilter(prevJ);
+      if (currentUser) localStorage.setItem(`local_journee_${currentUser.email}_${selectedLeague}`, prevJ);
+    }
+  }
+
+  function handleNextJournee() {
+    if (!isCurrentJourneeCompleted) {
+      showNotif("Jouez ou simulez d'abord tous les matchs de la journée avant d'avancer !");
+      return;
+    }
+    if (journeeFilter < maxJourneesCount) {
+      const nextJ = journeeFilter + 1;
+      setJourneeFilter(nextJ);
+      if (currentUser) localStorage.setItem(`local_journee_${currentUser.email}_${selectedLeague}`, nextJ);
+    } else {
+      showNotif("Vous êtes sur la dernière journée de cette saison !");
+    }
   }
 
   function handleAuthSubmit(e) {
@@ -583,9 +583,7 @@ export default function App() {
         localEvents = JSON.parse(localStorage.getItem(`local_events_${uKey}`));
         localTransfers = JSON.parse(localStorage.getItem(`local_transfers_${uKey}`));
         localEvolutions = JSON.parse(localStorage.getItem(`local_evolutions_${uKey}`));
-      } catch (e) {
-        console.error("Cache local ignoré.");
-      }
+      } catch (e) {}
 
       let currentTeams = Array.isArray(localTeams) ? localTeams : [];
       let currentPlayers = Array.isArray(localPlayers) ? localPlayers : [];
@@ -655,7 +653,7 @@ export default function App() {
     }
   }
 
-  const getSortedTeamPlayers = (teamId) => {
+  function getSortedTeamPlayers(teamId) {
     if (!teamId) return [];
     return playersWithStats
       .filter(p => p && String(p.equipe_id) === String(teamId))
@@ -665,7 +663,7 @@ export default function App() {
         if (rankA !== rankB) return rankA - rankB;
         return (b.general || 0) - (a.general || 0);
       });
-  };
+  }
 
   function getTeamStartersAndBench(team) {
     if (!team) return { starters: [], bench: [] };
@@ -1052,7 +1050,468 @@ export default function App() {
     }
   }
 
-  // --- SAUVEGARDE RÉELLE DU JOUEUR EN BASE DE DONNÉES ---
+  function simulateGoals(lambda) {
+    let L = Math.exp(-lambda);
+    let k = 0;
+    let p = 1;
+    do {
+      k++;
+      p *= Math.random();
+    } while (p > L);
+    return Math.max(0, k - 1);
+  }
+
+  function pickGoalScorer(activePlayers) {
+    if (!activePlayers || activePlayers.length === 0) return null;
+    const outfieldPlayers = activePlayers.filter(p => p && (p.poste || '').trim().toUpperCase() !== 'G');
+    if (outfieldPlayers.length === 0) return null;
+
+    const weighted = outfieldPlayers.map(p => {
+      let w = 1;
+      const pos = p.poste || 'MC';
+      if (['BU', 'AT'].includes(pos)) w = 14;
+      else if (['AD', 'AG', 'SA'].includes(pos)) w = 10;
+      else if (['MOC', 'MD', 'MG'].includes(pos)) w = 5;
+      else if (['MC', 'MDC'].includes(pos)) w = 2.5;
+      else if (['DD', 'DG', 'DLD', 'DLG', 'DC'].includes(pos)) w = 1;
+
+      w *= Math.pow((p.general || 75) / 75, 1.5);
+      return { player: p, weight: w };
+    });
+
+    const totalWeight = weighted.reduce((acc, item) => acc + item.weight, 0);
+    let randomVal = Math.random() * totalWeight;
+    for (const item of weighted) {
+      if (randomVal < item.weight) return item.player;
+      randomVal -= item.weight;
+    }
+    return outfieldPlayers[0];
+  }
+
+  function pickAssister(activePlayers, scorer) {
+    if (!activePlayers || activePlayers.length < 2) return null;
+    const candidates = activePlayers.filter(p => p && p.id !== scorer?.id && (p.poste || '').trim().toUpperCase() !== 'G');
+    if (candidates.length === 0) return null;
+
+    const weighted = candidates.map(p => {
+      let w = 1;
+      const pos = p.poste || 'MC';
+      if (['MOC', 'MC', 'MD', 'MG'].includes(pos)) w = 12;
+      else if (['AD', 'AG', 'SA'].includes(pos)) w = 10;
+      else if (['DD', 'DG', 'DLD', 'DLG'].includes(pos)) w = 6;
+      else if (['BU', 'AT'].includes(pos)) w = 4;
+      else if (['MDC', 'DC'].includes(pos)) w = 2;
+
+      w *= (p.general || 75) / 75;
+      return { player: p, weight: w };
+    });
+
+    const totalWeight = weighted.reduce((acc, item) => acc + item.weight, 0);
+    let randomVal = Math.random() * totalWeight;
+    for (const item of weighted) {
+      if (randomVal < item.weight) return item.player;
+      randomVal -= item.weight;
+    }
+    return candidates[0];
+  }
+
+  function pickCardPlayer(activePlayers) {
+    if (!activePlayers || activePlayers.length === 0) return null;
+    const weighted = activePlayers.filter(Boolean).map(p => {
+      let w = 1;
+      const pos = p.poste || 'MC';
+      if (['MDC', 'DC'].includes(pos)) w = 8;
+      else if (['DD', 'DG', 'DLD', 'DLG', 'MC'].includes(pos)) w = 5;
+      else if (['MOC', 'MD', 'MG'].includes(pos)) w = 3;
+      else w = 1;
+      return { player: p, weight: w };
+    });
+    const totalWeight = weighted.reduce((acc, item) => acc + item.weight, 0);
+    let randomVal = Math.random() * totalWeight;
+    for (const item of weighted) {
+      if (randomVal < item.weight) return item.player;
+      randomVal -= item.weight;
+    }
+    return activePlayers[0];
+  }
+
+  function pickInjuredPlayer(activePlayers) {
+    if (!activePlayers || activePlayers.length === 0) return null;
+    return activePlayers[Math.floor(Math.random() * activePlayers.length)];
+  }
+
+  function handleRollDice(matchId) {
+    const diceDom = Math.floor(Math.random() * 7);
+    const diceExt = Math.floor(Math.random() * 7);
+
+    setScoresInput(prev => ({
+      ...prev,
+      [matchId]: { dom: diceDom, ext: diceExt }
+    }));
+    showNotif(`🎲 Lancer de dé : ${diceDom} - ${diceExt}`);
+  }
+
+  function generateMatchEventsForCustomScore(m, domTeam, extTeam, scoreDom, scoreExt, seasonNum, userId) {
+    const { starters: domStarters, bench: domBench } = getTeamStartersAndBench(domTeam);
+    const { starters: extStarters, bench: extBench } = getTeamStartersAndBench(extTeam);
+
+    const matchEventsList = [];
+
+    const domSubsCount = Math.min(domBench.length, Math.floor(Math.random() * 4) + 1);
+    const domSubstitutions = [];
+    const availableDomBench = [...domBench];
+    const currentDomActive = [...domStarters];
+
+    for (let s = 0; s < domSubsCount; s++) {
+      if (availableDomBench.length === 0) break;
+      const subMinute = Math.floor(Math.random() * 40) + 46;
+      
+      const outCandidates = currentDomActive.filter(p => p && p.poste !== 'G');
+      if (outCandidates.length === 0) break;
+      const playerOut = outCandidates[Math.floor(Math.random() * outCandidates.length)];
+      const outCat = getPositionCategory(playerOut.poste);
+
+      let inIdx = availableDomBench.findIndex(p => p && getPositionCategory(p.poste) === outCat);
+      if (inIdx === -1) {
+        inIdx = availableDomBench.findIndex(p => p && p.poste !== 'G');
+      }
+      if (inIdx === -1) break;
+
+      const playerIn = availableDomBench.splice(inIdx, 1)[0];
+      const outIdx = currentDomActive.findIndex(p => p && p.id === playerOut.id);
+      if (outIdx !== -1) currentDomActive[outIdx] = playerIn;
+
+      domSubstitutions.push({ minute: subMinute, playerIn, playerOut });
+      matchEventsList.push({
+        match_id: m.id,
+        player_id: playerIn.id,
+        type: 'remplacement',
+        detail: `entre pour ${playerOut.nom}`,
+        minute: subMinute,
+        journee: m.journee,
+        saison: seasonNum,
+        user_id: userId
+      });
+    }
+
+    const extSubsCount = Math.min(extBench.length, Math.floor(Math.random() * 4) + 1);
+    const extSubstitutions = [];
+    const availableExtBench = [...extBench];
+    const currentExtActive = [...extStarters];
+
+    for (let s = 0; s < extSubsCount; s++) {
+      if (availableExtBench.length === 0) break;
+      const subMinute = Math.floor(Math.random() * 40) + 46;
+      
+      const outCandidates = currentExtActive.filter(p => p && p.poste !== 'G');
+      if (outCandidates.length === 0) break;
+      const playerOut = outCandidates[Math.floor(Math.random() * outCandidates.length)];
+      const outCat = getPositionCategory(playerOut.poste);
+
+      let inIdx = availableExtBench.findIndex(p => p && getPositionCategory(p.poste) === outCat);
+      if (inIdx === -1) {
+        inIdx = availableExtBench.findIndex(p => p && p.poste !== 'G');
+      }
+      if (inIdx === -1) break;
+
+      const playerIn = availableExtBench.splice(inIdx, 1)[0];
+      const outIdx = currentExtActive.findIndex(p => p && p.id === playerOut.id);
+      if (outIdx !== -1) currentExtActive[outIdx] = playerIn;
+
+      extSubstitutions.push({ minute: subMinute, playerIn, playerOut });
+      matchEventsList.push({
+        match_id: m.id,
+        player_id: playerIn.id,
+        type: 'remplacement',
+        detail: `entre pour ${playerOut.nom}`,
+        minute: subMinute,
+        journee: m.journee,
+        saison: seasonNum,
+        user_id: userId
+      });
+    }
+
+    const getActivePlayersAtMinute = (starters, substitutions, minute) => {
+      let active = [...starters];
+      substitutions.forEach(sub => {
+        if (minute >= sub.minute) {
+          const idx = active.findIndex(p => p && p.id === sub.playerOut.id);
+          if (idx !== -1) active[idx] = sub.playerIn;
+        }
+      });
+      return active;
+    };
+
+    for (let i = 0; i < scoreDom; i++) {
+      const minute = Math.floor(Math.random() * 90) + 1;
+      const activeAtMin = getActivePlayersAtMinute(domStarters, domSubstitutions, minute);
+      const scorer = pickGoalScorer(activeAtMin);
+      if (scorer) {
+        matchEventsList.push({ match_id: m.id, player_id: scorer.id, type: 'but', minute, journee: m.journee, saison: seasonNum, user_id: userId });
+        if (Math.random() < 0.75) {
+          const assister = pickAssister(activeAtMin, scorer);
+          if (assister) matchEventsList.push({ match_id: m.id, player_id: assister.id, type: 'passe', minute, journee: m.journee, saison: seasonNum, user_id: userId });
+        }
+      }
+    }
+
+    for (let i = 0; i < scoreExt; i++) {
+      const minute = Math.floor(Math.random() * 90) + 1;
+      const activeAtMin = getActivePlayersAtMinute(extStarters, extSubstitutions, minute);
+      const scorer = pickGoalScorer(activeAtMin);
+      if (scorer) {
+        matchEventsList.push({ match_id: m.id, player_id: scorer.id, type: 'but', minute, journee: m.journee, saison: seasonNum, user_id: userId });
+        if (Math.random() < 0.75) {
+          const assister = pickAssister(extStarters, scorer);
+          if (assister) matchEventsList.push({ match_id: m.id, player_id: assister.id, type: 'passe', minute, journee: m.journee, saison: seasonNum, user_id: userId });
+        }
+      }
+    }
+
+    const numYellowDom = Math.random() < 0.65 ? Math.floor(Math.random() * 3) + 1 : 0;
+    for (let y = 0; y < numYellowDom; y++) {
+      const minute = Math.floor(Math.random() * 88) + 2;
+      const carded = pickCardPlayer(getActivePlayersAtMinute(domStarters, domSubstitutions, minute));
+      if (carded) matchEventsList.push({ match_id: m.id, player_id: carded.id, type: 'carton_jaune', minute, journee: m.journee, saison: seasonNum, user_id: userId });
+    }
+
+    const numYellowExt = Math.random() < 0.65 ? Math.floor(Math.random() * 3) + 1 : 0;
+    for (let y = 0; y < numYellowExt; y++) {
+      const minute = Math.floor(Math.random() * 88) + 2;
+      const carded = pickCardPlayer(getActivePlayersAtMinute(extStarters, extSubstitutions, minute));
+      if (carded) matchEventsList.push({ match_id: m.id, player_id: carded.id, type: 'carton_jaune', minute, journee: m.journee, saison: seasonNum, user_id: userId });
+    }
+
+    if (Math.random() < 0.035) {
+      const minute = Math.floor(Math.random() * 80) + 10;
+      const cardedRed = pickCardPlayer(getActivePlayersAtMinute(domStarters, domSubstitutions, minute));
+      if (cardedRed) {
+        matchEventsList.push({ match_id: m.id, player_id: cardedRed.id, type: 'carton_rouge', minute, journee: m.journee, saison: seasonNum, user_id: userId });
+      }
+    }
+
+    if (Math.random() < 0.035) {
+      const minute = Math.floor(Math.random() * 80) + 10;
+      const cardedRed = pickCardPlayer(getActivePlayersAtMinute(extStarters, extSubstitutions, minute));
+      if (cardedRed) {
+        matchEventsList.push({ match_id: m.id, player_id: cardedRed.id, type: 'carton_rouge', minute, journee: m.journee, saison: seasonNum, user_id: userId });
+      }
+    }
+
+    if (Math.random() < 0.08) {
+      const minute = Math.floor(Math.random() * 85) + 5;
+      const injured = pickInjuredPlayer(getActivePlayersAtMinute(domStarters, domSubstitutions, minute));
+      if (injured) {
+        const duration = generateInjuryDuration();
+        matchEventsList.push({
+          match_id: m.id,
+          player_id: injured.id,
+          type: 'blessure',
+          detail: duration.label,
+          duration_matches: duration.matches,
+          minute,
+          journee: m.journee,
+          saison: seasonNum,
+          user_id: userId
+        });
+      }
+    }
+
+    if (Math.random() < 0.08) {
+      const minute = Math.floor(Math.random() * 85) + 5;
+      const injured = pickInjuredPlayer(getActivePlayersAtMinute(extStarters, extSubstitutions, minute));
+      if (injured) {
+        const duration = generateInjuryDuration();
+        matchEventsList.push({
+          match_id: m.id,
+          player_id: injured.id,
+          type: 'blessure',
+          detail: duration.label,
+          duration_matches: duration.matches,
+          minute,
+          journee: m.journee,
+          saison: seasonNum,
+          user_id: userId
+        });
+      }
+    }
+
+    return matchEventsList;
+  }
+
+  function simulateSingleMatchWithSubs(m, domTeam, extTeam, seasonNum, userId) {
+    const { starters: domStarters } = getTeamStartersAndBench(domTeam);
+    const { starters: extStarters } = getTeamStartersAndBench(extTeam);
+
+    const domGen = domStarters.length > 0 ? domStarters.reduce((acc, p) => acc + (p?.general || 75), 0) / domStarters.length : 75;
+    const extGen = extStarters.length > 0 ? extStarters.reduce((acc, p) => acc + (p?.general || 75), 0) / extStarters.length : 75;
+
+    const diff = (domGen + 1.5) - extGen;
+    const domLambda = Math.max(0.3, Math.min(4.5, 1.45 + (diff * 0.12)));
+    const extLambda = Math.max(0.2, Math.min(4.0, 1.10 - (diff * 0.10)));
+
+    const scoreDom = simulateGoals(domLambda);
+    const scoreExt = simulateGoals(extLambda);
+
+    const events = generateMatchEventsForCustomScore(m, domTeam, extTeam, scoreDom, scoreExt, seasonNum, userId);
+
+    return { scoreDom, scoreExt, events };
+  }
+
+  async function handleSimulateJournee() {
+    const currentJourneeMatches = seasonMatches.filter(m => m && m.journee === parseInt(journeeFilter, 10));
+    if (currentJourneeMatches.length === 0) {
+      alert("Aucun match à simuler pour cette journée.");
+      return;
+    }
+
+    const unplayedCount = currentJourneeMatches.filter(m => m.statut !== 'terminé').length;
+    const confirmText = unplayedCount === 0
+      ? `Tous les matchs de la Journée ${journeeFilter} sont déjà joués. Voulez-vous re-simuler cette journée ?`
+      : `Voulez-vous simuler automatiquement les ${currentJourneeMatches.length} matchs de la Journée ${journeeFilter} ?`;
+
+    if (!window.confirm(confirmText)) return;
+
+    setSimulating(true);
+
+    try {
+      const newEventsAll = [];
+      const updatedMatches = [...matches];
+      const uKey = currentUser?.email || 'local_user';
+
+      for (const m of currentJourneeMatches) {
+        if (!m) continue;
+        const domTeam = (teams || []).find(t => t && String(t.id) === String(m.equipe_domicile_id)) || { id: m.equipe_domicile_id, nom: 'Club Dom' };
+        const extTeam = (teams || []).find(t => t && String(t.id) === String(m.equipe_exterieur_id)) || { id: m.equipe_exterieur_id, nom: 'Club Ext' };
+        const simResult = simulateSingleMatchWithSubs(m, domTeam, extTeam, m.saison || 1, uKey);
+
+        const mIdx = updatedMatches.findIndex(matchItem => matchItem && matchItem.id === m.id);
+        if (mIdx !== -1) {
+          updatedMatches[mIdx] = {
+            ...updatedMatches[mIdx],
+            score_domicile: simResult.scoreDom,
+            score_exterieur: simResult.scoreExt,
+            statut: 'terminé'
+          };
+        }
+
+        newEventsAll.push(...simResult.events);
+      }
+
+      const cleanEvents = (matchEvents || []).filter(e => !currentJourneeMatches.some(m => m && m.id === e.match_id));
+      const nextEvents = [...cleanEvents, ...newEventsAll];
+
+      setMatches(updatedMatches);
+      setMatchEvents(nextEvents);
+
+      const currentJ = parseInt(journeeFilter, 10);
+      const currentS = parseInt(seasonFilter, 10);
+
+      localStorage.setItem(`local_season_${uKey}`, currentS);
+      localStorage.setItem(`local_journee_${uKey}_${selectedLeague}`, currentJ);
+
+      showNotif(`Journée ${journeeFilter} simulée avec succès !`);
+
+      if (currentJ >= 19 && currentJ <= 23) {
+        await triggerAutomatedMercato(currentJ, currentS, 4, false);
+      }
+      
+      const totalJ = seasonMatches.length > 0 ? Math.max(...seasonMatches.map(m => m.journee || 1)) : 38;
+      if (currentJ >= totalJ) {
+        await triggerAutomatedMercato(currentJ, currentS, 12, true);
+      }
+
+      if (currentJ % 4 === 0) {
+        await evaluateAndApplyPlayerEvolutions(currentJ, currentS, updatedMatches, nextEvents);
+      }
+    } catch (err) {
+      alert(`Erreur de simulation : ${err.message}`);
+    }
+
+    setSimulating(false);
+  }
+
+  async function handleStartNewSeason(isNextSeason = false) {
+    const currentLeagueTeamsList = (teams || []).filter(t => t && (t.ligue_id || 'custom') === selectedLeague);
+    if (currentLeagueTeamsList.length < 2) {
+      alert(`Erreur : Il vous faut au moins 2 équipes pour générer un calendrier.`);
+      return;
+    }
+
+    const leagueMatches = (matches || []).filter(m => m && (m.ligue_id || 'custom') === selectedLeague);
+    const currentMaxSeason = leagueMatches.length > 0 ? Math.max(...leagueMatches.map(m => m.saison || 1), 1) : 1;
+    const targetSeason = isNextSeason ? currentMaxSeason + 1 : 1;
+    const seasonLabel = getSeasonLabel(targetSeason);
+    const totalJournees = (currentLeagueTeamsList.length % 2 === 0 ? currentLeagueTeamsList.length - 1 : currentLeagueTeamsList.length) * 2;
+    const uKey = currentUser?.email || 'local_user';
+
+    const confirmMsg = isNextSeason
+      ? `Voulez-vous lancer la ${seasonLabel} (${selectedLeague === 'ligue1' ? 'Ligue 1' : 'Ligue Principale'}) ?\n\n- Vous conservez vos transferts et évolutions actuels.\n- Tous les joueurs prennent +1 an d'âge.\n- Les joueurs prêtés retournent dans leur club d'origine.\n- ${totalJournees} Journées programmées.`
+      : `Voulez-vous RÉINITIALISER complètement votre tournoi (Saison 1) ?\n\n- Tous les joueurs retrouveront leur GÉNÉRAL DE DÉPART et leur club initial.`;
+
+    if (!window.confirm(confirmMsg)) return;
+
+    try {
+      if (!isNextSeason) {
+        localStorage.removeItem(`local_teams_${uKey}`);
+        localStorage.removeItem(`local_players_${uKey}`);
+        localStorage.removeItem(`local_matches_${uKey}`);
+        localStorage.removeItem(`local_events_${uKey}`);
+        localStorage.removeItem(`local_transfers_${uKey}`);
+        localStorage.removeItem(`local_season_${uKey}`);
+        localStorage.removeItem(`local_journee_${uKey}_custom`);
+        localStorage.removeItem(`local_journee_${uKey}_ligue1`);
+        localStorage.removeItem(`local_evolutions_${uKey}`);
+        await fetchUserData(uKey);
+        return;
+      }
+
+      const cleanedPlayers = (players || []).map(p => {
+        const newAge = (p.age || 24) + 1;
+        const currentGen = p.general || 75;
+        const newVal = calculateMarketValue(currentGen, newAge);
+
+        if (p.is_loan && p.loan_parent_id) {
+          const originalTeam = (teams || []).find(t => t && String(t.id) === String(p.loan_parent_id));
+          return {
+            ...p,
+            age: newAge,
+            valeur_marchande: newVal,
+            equipe_id: p.loan_parent_id,
+            teams: originalTeam,
+            is_loan: false,
+            loan_parent_id: null
+          };
+        }
+        return {
+          ...p,
+          age: newAge,
+          valeur_marchande: newVal
+        };
+      });
+
+      setPlayers(cleanedPlayers);
+
+      const fixtures = buildRoundRobinFixtures(currentLeagueTeamsList, uKey, targetSeason, selectedLeague);
+      const remainingMatches = (matches || []).filter(
+        m => m && ((m.saison || 1) !== targetSeason || (m.ligue_id || 'custom') !== selectedLeague)
+      );
+      setMatches([...remainingMatches, ...fixtures]);
+
+      showNotif(`${seasonLabel} lancée ! +1 an pour tous les joueurs & retour des prêts.`);
+
+      setSeasonFilter(targetSeason);
+      setJourneeFilter(1);
+      setSeasonEvolutions({});
+
+      localStorage.setItem(`local_season_${uKey}`, targetSeason);
+      localStorage.setItem(`local_journee_${uKey}_${selectedLeague}`, 1);
+      localStorage.setItem(`local_evolutions_${uKey}`, JSON.stringify({}));
+    } catch (err) {
+      alert(`Erreur génération : ${err.message}`);
+    }
+  }
+
   async function handleUpdatePlayer(e) {
     e.preventDefault();
     if (!editingPlayer) return;
@@ -1590,6 +2049,17 @@ export default function App() {
     setSelectedSlot(null);
   }
 
+  const formationConfig = FORMATIONS[currentFormation] || FORMATIONS['4-3-3'];
+
+  const pitchGK = [{ p: teamLineupPlayers[0], idx: 0 }];
+  const pitchDEF = teamLineupPlayers.slice(1, 1 + formationConfig.def).map((p, i) => ({ p, idx: 1 + i }));
+  const pitchMID = teamLineupPlayers.slice(1 + formationConfig.def, 1 + formationConfig.def + formationConfig.mid).map((p, i) => ({ p, idx: 1 + formationConfig.def + i }));
+  const pitchATT = teamLineupPlayers.slice(1 + formationConfig.def + formationConfig.mid, 11).map((p, i) => ({ p, idx: 1 + formationConfig.def + formationConfig.mid + i }));
+
+  const pitchAvgGen = teamLineupPlayers.length > 0
+    ? Math.round(teamLineupPlayers.reduce((acc, p) => acc + (p?.general || 75), 0) / teamLineupPlayers.length)
+    : 0;
+
   const PitchPlayerSlot = ({ player, globalIndex }) => {
     const isSelected = selectedSlot?.type === 'pitch' && selectedSlot?.index === globalIndex;
 
@@ -1639,17 +2109,6 @@ export default function App() {
       </div>
     );
   };
-
-  const formationConfig = FORMATIONS[currentFormation] || FORMATIONS['4-3-3'];
-
-  const pitchGK = [{ p: teamLineupPlayers[0], idx: 0 }];
-  const pitchDEF = teamLineupPlayers.slice(1, 1 + formationConfig.def).map((p, i) => ({ p, idx: 1 + i }));
-  const pitchMID = teamLineupPlayers.slice(1 + formationConfig.def, 1 + formationConfig.def + formationConfig.mid).map((p, i) => ({ p, idx: 1 + formationConfig.def + i }));
-  const pitchATT = teamLineupPlayers.slice(1 + formationConfig.def + formationConfig.mid, 11).map((p, i) => ({ p, idx: 1 + formationConfig.def + formationConfig.mid + i }));
-
-  const pitchAvgGen = teamLineupPlayers.length > 0
-    ? Math.round(teamLineupPlayers.reduce((acc, p) => acc + (p?.general || 75), 0) / teamLineupPlayers.length)
-    : 0;
 
   const homeEvents = selectedMatch 
     ? (selectedMatchEvents || [])
@@ -1775,7 +2234,6 @@ export default function App() {
           </div>
 
           <div className="flex flex-wrap items-center gap-3">
-            {/* SÉLECTEUR DE LIGUE ACTIF */}
             <div className="flex items-center bg-slate-950 p-1 rounded-xl border border-slate-800">
               <button
                 onClick={() => {
@@ -1862,8 +2320,10 @@ export default function App() {
                     const s = parseInt(e.target.value, 10) || 1;
                     setSeasonFilter(s);
                     setJourneeFilter(1);
-                    localStorage.setItem(`local_season_${currentUser.email}`, s);
-                    localStorage.setItem(`local_journee_${currentUser.email}_${selectedLeague}`, 1);
+                    if (currentUser) {
+                      localStorage.setItem(`local_season_${currentUser.email}`, s);
+                      localStorage.setItem(`local_journee_${currentUser.email}_${selectedLeague}`, 1);
+                    }
                   }}
                   className="bg-slate-900 border border-slate-700 text-indigo-400 font-bold text-xs rounded-lg px-3 py-1.5 focus:outline-none focus:border-indigo-500 cursor-pointer"
                 >
@@ -1982,8 +2442,10 @@ export default function App() {
                       const s = parseInt(e.target.value, 10) || 1;
                       setSeasonFilter(s);
                       setJourneeFilter(1);
-                      localStorage.setItem(`local_season_${currentUser.email}`, s);
-                      localStorage.setItem(`local_journee_${currentUser.email}_${selectedLeague}`, 1);
+                      if (currentUser) {
+                        localStorage.setItem(`local_season_${currentUser.email}`, s);
+                        localStorage.setItem(`local_journee_${currentUser.email}_${selectedLeague}`, 1);
+                      }
                     }}
                     className="bg-slate-900 border border-slate-700 text-indigo-400 font-bold text-xs rounded-lg px-2.5 py-1 focus:outline-none focus:border-indigo-500 cursor-pointer"
                   >
@@ -1998,7 +2460,7 @@ export default function App() {
                     type="button"
                     onClick={handlePrevJournee}
                     disabled={journeeFilter <= 1}
-                    className="bg-slate-900 hover:bg-slate-800 disabled:opacity-30 text-white text-xs font-bold w-8 h-8 rounded-lg transition-all flex items-center justify-center"
+                    className="bg-slate-900 hover:bg-slate-800 disabled:opacity-30 text-white text-xs font-bold w-8 h-8 rounded-lg transition-all flex items-center justify-center cursor-pointer"
                   >
                     ◀
                   </button>
@@ -2182,7 +2644,7 @@ export default function App() {
                   onChange={(e) => {
                     const s = parseInt(e.target.value, 10) || 1;
                     setSeasonFilter(s);
-                    localStorage.setItem(`local_season_${currentUser.email}`, s);
+                    if (currentUser) localStorage.setItem(`local_season_${currentUser.email}`, s);
                   }}
                   className="bg-slate-900 border border-slate-700 text-indigo-400 font-bold text-xs rounded-lg px-3 py-1.5 focus:outline-none focus:border-indigo-500 cursor-pointer"
                 >
