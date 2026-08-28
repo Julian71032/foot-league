@@ -181,7 +181,7 @@ export default function App() {
   const [authPassword, setAuthPassword] = useState('');
   const [authError, setAuthError] = useState('');
 
-  // MULTI-LIGUES : 'custom' ou 'ligue1'
+  // MULTI-LIGUES
   const [selectedLeague, setSelectedLeague] = useState('custom');
 
   const [tab, setTab] = useState('classement');
@@ -233,7 +233,7 @@ export default function App() {
 
   const isAdmin = currentUser?.email?.trim().toLowerCase() === ADMIN_EMAIL.toLowerCase();
 
-  // --- VARIABLES CALCULÉES DÉCLARÉES AVANT TOUTES LES FONCTIONS ---
+  // --- VARIABLES DÉCLARÉES AU DÉBUT ---
   const currentLeagueTeams = (teams || []).filter(t => t && (t.ligue_id || 'custom') === selectedLeague);
 
   const seasonMatches = (matches || []).filter(
@@ -247,6 +247,36 @@ export default function App() {
   const availableSeasons = Array.from(
     new Set([...(matches || []).filter(m => m && (m.ligue_id || 'custom') === selectedLeague).map(m => m.saison || 1), 1, parseInt(seasonFilter, 10) || 1])
   ).sort((a, b) => a - b);
+
+  const maxJourneesCount = seasonMatches.length > 0
+    ? Math.max(...seasonMatches.map(m => m.journee || 1))
+    : (currentLeagueTeams.length >= 2 ? (currentLeagueTeams.length % 2 === 0 ? currentLeagueTeams.length - 1 : currentLeagueTeams.length) * 2 : 38);
+
+  const currentMatchesList = seasonMatches.filter(m => m && m.journee === (parseInt(journeeFilter, 10) || 1));
+  const isCurrentJourneeCompleted = currentMatchesList.length > 0 && currentMatchesList.every(m => m && m.statut === 'terminé');
+
+  // --- FONCTIONS DE NAVIGATION DE JOURNÉE ---
+  function handleNextJournee() {
+    if (!isCurrentJourneeCompleted) {
+      showNotif("Jouez ou simulez d'abord tous les matchs de la journée avant d'avancer !");
+      return;
+    }
+    if (journeeFilter < maxJourneesCount) {
+      const nextJ = journeeFilter + 1;
+      setJourneeFilter(nextJ);
+      localStorage.setItem(`local_journee_${currentUser.email}_${selectedLeague}`, nextJ);
+    } else {
+      showNotif("Vous êtes sur la dernière journée de cette saison !");
+    }
+  }
+
+  function handlePrevJournee() {
+    if (journeeFilter > 1) {
+      const prevJ = journeeFilter - 1;
+      setJourneeFilter(prevJ);
+      localStorage.setItem(`local_journee_${currentUser.email}_${selectedLeague}`, prevJ);
+    }
+  }
 
   const classement = currentLeagueTeams.map(team => {
     let points = 0;
@@ -320,13 +350,6 @@ export default function App() {
     return count < 28;
   });
 
-  const maxJourneesCount = seasonMatches.length > 0
-    ? Math.max(...seasonMatches.map(m => m.journee || 1))
-    : (currentLeagueTeams.length >= 2 ? (currentLeagueTeams.length % 2 === 0 ? currentLeagueTeams.length - 1 : currentLeagueTeams.length) * 2 : 38);
-
-  const currentMatchesList = seasonMatches.filter(m => m && m.journee === (parseInt(journeeFilter, 10) || 1));
-  const isCurrentJourneeCompleted = currentMatchesList.length > 0 && currentMatchesList.every(m => m && m.statut === 'terminé');
-
   useEffect(() => {
     if (!document.getElementById('tailwind-cdn')) {
       const script = document.createElement('script');
@@ -353,7 +376,6 @@ export default function App() {
     }
   }, [currentUser]);
 
-  // Persistance continue
   useEffect(() => {
     if (!loading && currentUser && teams.length > 0) {
       try {
@@ -668,7 +690,6 @@ export default function App() {
     return { starters: all.slice(0, 11), bench: all.slice(11) };
   }
 
-  // Mercato automatisé
   async function triggerAutomatedMercato(journeeNum, currentSeasonNum, maxTransfers = 4, isSummer = false) {
     const currentLeagueTeamsList = (teams || []).filter(t => t && (t.ligue_id || 'custom') === selectedLeague);
     const currentLeaguePlayers = (players || []).filter(p => {
@@ -1031,468 +1052,6 @@ export default function App() {
     }
   }
 
-  function simulateGoals(lambda) {
-    let L = Math.exp(-lambda);
-    let k = 0;
-    let p = 1;
-    do {
-      k++;
-      p *= Math.random();
-    } while (p > L);
-    return Math.max(0, k - 1);
-  }
-
-  function pickGoalScorer(activePlayers) {
-    if (!activePlayers || activePlayers.length === 0) return null;
-    const outfieldPlayers = activePlayers.filter(p => p && (p.poste || '').trim().toUpperCase() !== 'G');
-    if (outfieldPlayers.length === 0) return null;
-
-    const weighted = outfieldPlayers.map(p => {
-      let w = 1;
-      const pos = p.poste || 'MC';
-      if (['BU', 'AT'].includes(pos)) w = 14;
-      else if (['AD', 'AG', 'SA'].includes(pos)) w = 10;
-      else if (['MOC', 'MD', 'MG'].includes(pos)) w = 5;
-      else if (['MC', 'MDC'].includes(pos)) w = 2.5;
-      else if (['DD', 'DG', 'DLD', 'DLG', 'DC'].includes(pos)) w = 1;
-
-      w *= Math.pow((p.general || 75) / 75, 1.5);
-      return { player: p, weight: w };
-    });
-
-    const totalWeight = weighted.reduce((acc, item) => acc + item.weight, 0);
-    let randomVal = Math.random() * totalWeight;
-    for (const item of weighted) {
-      if (randomVal < item.weight) return item.player;
-      randomVal -= item.weight;
-    }
-    return outfieldPlayers[0];
-  }
-
-  function pickAssister(activePlayers, scorer) {
-    if (!activePlayers || activePlayers.length < 2) return null;
-    const candidates = activePlayers.filter(p => p && p.id !== scorer?.id && (p.poste || '').trim().toUpperCase() !== 'G');
-    if (candidates.length === 0) return null;
-
-    const weighted = candidates.map(p => {
-      let w = 1;
-      const pos = p.poste || 'MC';
-      if (['MOC', 'MC', 'MD', 'MG'].includes(pos)) w = 12;
-      else if (['AD', 'AG', 'SA'].includes(pos)) w = 10;
-      else if (['DD', 'DG', 'DLD', 'DLG'].includes(pos)) w = 6;
-      else if (['BU', 'AT'].includes(pos)) w = 4;
-      else if (['MDC', 'DC'].includes(pos)) w = 2;
-
-      w *= (p.general || 75) / 75;
-      return { player: p, weight: w };
-    });
-
-    const totalWeight = weighted.reduce((acc, item) => acc + item.weight, 0);
-    let randomVal = Math.random() * totalWeight;
-    for (const item of weighted) {
-      if (randomVal < item.weight) return item.player;
-      randomVal -= item.weight;
-    }
-    return candidates[0];
-  }
-
-  function pickCardPlayer(activePlayers) {
-    if (!activePlayers || activePlayers.length === 0) return null;
-    const weighted = activePlayers.filter(Boolean).map(p => {
-      let w = 1;
-      const pos = p.poste || 'MC';
-      if (['MDC', 'DC'].includes(pos)) w = 8;
-      else if (['DD', 'DG', 'DLD', 'DLG', 'MC'].includes(pos)) w = 5;
-      else if (['MOC', 'MD', 'MG'].includes(pos)) w = 3;
-      else w = 1;
-      return { player: p, weight: w };
-    });
-    const totalWeight = weighted.reduce((acc, item) => acc + item.weight, 0);
-    let randomVal = Math.random() * totalWeight;
-    for (const item of weighted) {
-      if (randomVal < item.weight) return item.player;
-      randomVal -= item.weight;
-    }
-    return activePlayers[0];
-  }
-
-  function pickInjuredPlayer(activePlayers) {
-    if (!activePlayers || activePlayers.length === 0) return null;
-    return activePlayers[Math.floor(Math.random() * activePlayers.length)];
-  }
-
-  function handleRollDice(matchId) {
-    const diceDom = Math.floor(Math.random() * 7);
-    const diceExt = Math.floor(Math.random() * 7);
-
-    setScoresInput(prev => ({
-      ...prev,
-      [matchId]: { dom: diceDom, ext: diceExt }
-    }));
-    showNotif(`🎲 Lancer de dé : ${diceDom} - ${diceExt}`);
-  }
-
-  function generateMatchEventsForCustomScore(m, domTeam, extTeam, scoreDom, scoreExt, seasonNum, userId) {
-    const { starters: domStarters, bench: domBench } = getTeamStartersAndBench(domTeam);
-    const { starters: extStarters, bench: extBench } = getTeamStartersAndBench(extTeam);
-
-    const matchEventsList = [];
-
-    const domSubsCount = Math.min(domBench.length, Math.floor(Math.random() * 4) + 1);
-    const domSubstitutions = [];
-    const availableDomBench = [...domBench];
-    const currentDomActive = [...domStarters];
-
-    for (let s = 0; s < domSubsCount; s++) {
-      if (availableDomBench.length === 0) break;
-      const subMinute = Math.floor(Math.random() * 40) + 46;
-      
-      const outCandidates = currentDomActive.filter(p => p && p.poste !== 'G');
-      if (outCandidates.length === 0) break;
-      const playerOut = outCandidates[Math.floor(Math.random() * outCandidates.length)];
-      const outCat = getPositionCategory(playerOut.poste);
-
-      let inIdx = availableDomBench.findIndex(p => p && getPositionCategory(p.poste) === outCat);
-      if (inIdx === -1) {
-        inIdx = availableDomBench.findIndex(p => p && p.poste !== 'G');
-      }
-      if (inIdx === -1) break;
-
-      const playerIn = availableDomBench.splice(inIdx, 1)[0];
-      const outIdx = currentDomActive.findIndex(p => p && p.id === playerOut.id);
-      if (outIdx !== -1) currentDomActive[outIdx] = playerIn;
-
-      domSubstitutions.push({ minute: subMinute, playerIn, playerOut });
-      matchEventsList.push({
-        match_id: m.id,
-        player_id: playerIn.id,
-        type: 'remplacement',
-        detail: `entre pour ${playerOut.nom}`,
-        minute: subMinute,
-        journee: m.journee,
-        saison: seasonNum,
-        user_id: userId
-      });
-    }
-
-    const extSubsCount = Math.min(extBench.length, Math.floor(Math.random() * 4) + 1);
-    const extSubstitutions = [];
-    const availableExtBench = [...extBench];
-    const currentExtActive = [...extStarters];
-
-    for (let s = 0; s < extSubsCount; s++) {
-      if (availableExtBench.length === 0) break;
-      const subMinute = Math.floor(Math.random() * 40) + 46;
-      
-      const outCandidates = currentExtActive.filter(p => p && p.poste !== 'G');
-      if (outCandidates.length === 0) break;
-      const playerOut = outCandidates[Math.floor(Math.random() * outCandidates.length)];
-      const outCat = getPositionCategory(playerOut.poste);
-
-      let inIdx = availableExtBench.findIndex(p => p && getPositionCategory(p.poste) === outCat);
-      if (inIdx === -1) {
-        inIdx = availableExtBench.findIndex(p => p && p.poste !== 'G');
-      }
-      if (inIdx === -1) break;
-
-      const playerIn = availableExtBench.splice(inIdx, 1)[0];
-      const outIdx = currentExtActive.findIndex(p => p && p.id === playerOut.id);
-      if (outIdx !== -1) currentExtActive[outIdx] = playerIn;
-
-      extSubstitutions.push({ minute: subMinute, playerIn, playerOut });
-      matchEventsList.push({
-        match_id: m.id,
-        player_id: playerIn.id,
-        type: 'remplacement',
-        detail: `entre pour ${playerOut.nom}`,
-        minute: subMinute,
-        journee: m.journee,
-        saison: seasonNum,
-        user_id: userId
-      });
-    }
-
-    const getActivePlayersAtMinute = (starters, substitutions, minute) => {
-      let active = [...starters];
-      substitutions.forEach(sub => {
-        if (minute >= sub.minute) {
-          const idx = active.findIndex(p => p && p.id === sub.playerOut.id);
-          if (idx !== -1) active[idx] = sub.playerIn;
-        }
-      });
-      return active;
-    };
-
-    for (let i = 0; i < scoreDom; i++) {
-      const minute = Math.floor(Math.random() * 90) + 1;
-      const activeAtMin = getActivePlayersAtMinute(domStarters, domSubstitutions, minute);
-      const scorer = pickGoalScorer(activeAtMin);
-      if (scorer) {
-        matchEventsList.push({ match_id: m.id, player_id: scorer.id, type: 'but', minute, journee: m.journee, saison: seasonNum, user_id: userId });
-        if (Math.random() < 0.75) {
-          const assister = pickAssister(activeAtMin, scorer);
-          if (assister) matchEventsList.push({ match_id: m.id, player_id: assister.id, type: 'passe', minute, journee: m.journee, saison: seasonNum, user_id: userId });
-        }
-      }
-    }
-
-    for (let i = 0; i < scoreExt; i++) {
-      const minute = Math.floor(Math.random() * 90) + 1;
-      const activeAtMin = getActivePlayersAtMinute(extStarters, extSubstitutions, minute);
-      const scorer = pickGoalScorer(activeAtMin);
-      if (scorer) {
-        matchEventsList.push({ match_id: m.id, player_id: scorer.id, type: 'but', minute, journee: m.journee, saison: seasonNum, user_id: userId });
-        if (Math.random() < 0.75) {
-          const assister = pickAssister(extStarters, scorer);
-          if (assister) matchEventsList.push({ match_id: m.id, player_id: assister.id, type: 'passe', minute, journee: m.journee, saison: seasonNum, user_id: userId });
-        }
-      }
-    }
-
-    const numYellowDom = Math.random() < 0.65 ? Math.floor(Math.random() * 3) + 1 : 0;
-    for (let y = 0; y < numYellowDom; y++) {
-      const minute = Math.floor(Math.random() * 88) + 2;
-      const carded = pickCardPlayer(getActivePlayersAtMinute(domStarters, domSubstitutions, minute));
-      if (carded) matchEventsList.push({ match_id: m.id, player_id: carded.id, type: 'carton_jaune', minute, journee: m.journee, saison: seasonNum, user_id: userId });
-    }
-
-    const numYellowExt = Math.random() < 0.65 ? Math.floor(Math.random() * 3) + 1 : 0;
-    for (let y = 0; y < numYellowExt; y++) {
-      const minute = Math.floor(Math.random() * 88) + 2;
-      const carded = pickCardPlayer(getActivePlayersAtMinute(extStarters, extSubstitutions, minute));
-      if (carded) matchEventsList.push({ match_id: m.id, player_id: carded.id, type: 'carton_jaune', minute, journee: m.journee, saison: seasonNum, user_id: userId });
-    }
-
-    if (Math.random() < 0.035) {
-      const minute = Math.floor(Math.random() * 80) + 10;
-      const cardedRed = pickCardPlayer(getActivePlayersAtMinute(domStarters, domSubstitutions, minute));
-      if (cardedRed) {
-        matchEventsList.push({ match_id: m.id, player_id: cardedRed.id, type: 'carton_rouge', minute, journee: m.journee, saison: seasonNum, user_id: userId });
-      }
-    }
-
-    if (Math.random() < 0.035) {
-      const minute = Math.floor(Math.random() * 80) + 10;
-      const cardedRed = pickCardPlayer(getActivePlayersAtMinute(extStarters, extSubstitutions, minute));
-      if (cardedRed) {
-        matchEventsList.push({ match_id: m.id, player_id: cardedRed.id, type: 'carton_rouge', minute, journee: m.journee, saison: seasonNum, user_id: userId });
-      }
-    }
-
-    if (Math.random() < 0.08) {
-      const minute = Math.floor(Math.random() * 85) + 5;
-      const injured = pickInjuredPlayer(getActivePlayersAtMinute(domStarters, domSubstitutions, minute));
-      if (injured) {
-        const duration = generateInjuryDuration();
-        matchEventsList.push({
-          match_id: m.id,
-          player_id: injured.id,
-          type: 'blessure',
-          detail: duration.label,
-          duration_matches: duration.matches,
-          minute,
-          journee: m.journee,
-          saison: seasonNum,
-          user_id: userId
-        });
-      }
-    }
-
-    if (Math.random() < 0.08) {
-      const minute = Math.floor(Math.random() * 85) + 5;
-      const injured = pickInjuredPlayer(getActivePlayersAtMinute(extStarters, extSubstitutions, minute));
-      if (injured) {
-        const duration = generateInjuryDuration();
-        matchEventsList.push({
-          match_id: m.id,
-          player_id: injured.id,
-          type: 'blessure',
-          detail: duration.label,
-          duration_matches: duration.matches,
-          minute,
-          journee: m.journee,
-          saison: seasonNum,
-          user_id: userId
-        });
-      }
-    }
-
-    return matchEventsList;
-  }
-
-  function simulateSingleMatchWithSubs(m, domTeam, extTeam, seasonNum, userId) {
-    const { starters: domStarters } = getTeamStartersAndBench(domTeam);
-    const { starters: extStarters } = getTeamStartersAndBench(extTeam);
-
-    const domGen = domStarters.length > 0 ? domStarters.reduce((acc, p) => acc + (p?.general || 75), 0) / domStarters.length : 75;
-    const extGen = extStarters.length > 0 ? extStarters.reduce((acc, p) => acc + (p?.general || 75), 0) / extStarters.length : 75;
-
-    const diff = (domGen + 1.5) - extGen;
-    const domLambda = Math.max(0.3, Math.min(4.5, 1.45 + (diff * 0.12)));
-    const extLambda = Math.max(0.2, Math.min(4.0, 1.10 - (diff * 0.10)));
-
-    const scoreDom = simulateGoals(domLambda);
-    const scoreExt = simulateGoals(extLambda);
-
-    const events = generateMatchEventsForCustomScore(m, domTeam, extTeam, scoreDom, scoreExt, seasonNum, userId);
-
-    return { scoreDom, scoreExt, events };
-  }
-
-  async function handleSimulateJournee() {
-    const currentJourneeMatches = seasonMatches.filter(m => m && m.journee === parseInt(journeeFilter, 10));
-    if (currentJourneeMatches.length === 0) {
-      alert("Aucun match à simuler pour cette journée.");
-      return;
-    }
-
-    const unplayedCount = currentJourneeMatches.filter(m => m.statut !== 'terminé').length;
-    const confirmText = unplayedCount === 0
-      ? `Tous les matchs de la Journée ${journeeFilter} sont déjà joués. Voulez-vous re-simuler cette journée ?`
-      : `Voulez-vous simuler automatiquement les ${currentJourneeMatches.length} matchs de la Journée ${journeeFilter} ?`;
-
-    if (!window.confirm(confirmText)) return;
-
-    setSimulating(true);
-
-    try {
-      const newEventsAll = [];
-      const updatedMatches = [...matches];
-      const uKey = currentUser?.email || 'local_user';
-
-      for (const m of currentJourneeMatches) {
-        if (!m) continue;
-        const domTeam = (teams || []).find(t => t && String(t.id) === String(m.equipe_domicile_id)) || { id: m.equipe_domicile_id, nom: 'Club Dom' };
-        const extTeam = (teams || []).find(t => t && String(t.id) === String(m.equipe_exterieur_id)) || { id: m.equipe_exterieur_id, nom: 'Club Ext' };
-        const simResult = simulateSingleMatchWithSubs(m, domTeam, extTeam, m.saison || 1, uKey);
-
-        const mIdx = updatedMatches.findIndex(matchItem => matchItem && matchItem.id === m.id);
-        if (mIdx !== -1) {
-          updatedMatches[mIdx] = {
-            ...updatedMatches[mIdx],
-            score_domicile: simResult.scoreDom,
-            score_exterieur: simResult.scoreExt,
-            statut: 'terminé'
-          };
-        }
-
-        newEventsAll.push(...simResult.events);
-      }
-
-      const cleanEvents = (matchEvents || []).filter(e => !currentJourneeMatches.some(m => m && m.id === e.match_id));
-      const nextEvents = [...cleanEvents, ...newEventsAll];
-
-      setMatches(updatedMatches);
-      setMatchEvents(nextEvents);
-
-      const currentJ = parseInt(journeeFilter, 10);
-      const currentS = parseInt(seasonFilter, 10);
-
-      localStorage.setItem(`local_season_${uKey}`, currentS);
-      localStorage.setItem(`local_journee_${uKey}_${selectedLeague}`, currentJ);
-
-      showNotif(`Journée ${journeeFilter} simulée avec succès !`);
-
-      if (currentJ >= 19 && currentJ <= 23) {
-        await triggerAutomatedMercato(currentJ, currentS, 4, false);
-      }
-      
-      const totalJ = seasonMatches.length > 0 ? Math.max(...seasonMatches.map(m => m.journee || 1)) : 38;
-      if (currentJ >= totalJ) {
-        await triggerAutomatedMercato(currentJ, currentS, 12, true);
-      }
-
-      if (currentJ % 4 === 0) {
-        await evaluateAndApplyPlayerEvolutions(currentJ, currentS, updatedMatches, nextEvents);
-      }
-    } catch (err) {
-      alert(`Erreur de simulation : ${err.message}`);
-    }
-
-    setSimulating(false);
-  }
-
-  async function handleStartNewSeason(isNextSeason = false) {
-    const currentLeagueTeamsList = (teams || []).filter(t => t && (t.ligue_id || 'custom') === selectedLeague);
-    if (currentLeagueTeamsList.length < 2) {
-      alert(`Erreur : Il vous faut au moins 2 équipes pour générer un calendrier.`);
-      return;
-    }
-
-    const leagueMatches = (matches || []).filter(m => m && (m.ligue_id || 'custom') === selectedLeague);
-    const currentMaxSeason = leagueMatches.length > 0 ? Math.max(...leagueMatches.map(m => m.saison || 1), 1) : 1;
-    const targetSeason = isNextSeason ? currentMaxSeason + 1 : 1;
-    const seasonLabel = getSeasonLabel(targetSeason);
-    const totalJournees = (currentLeagueTeamsList.length % 2 === 0 ? currentLeagueTeamsList.length - 1 : currentLeagueTeamsList.length) * 2;
-    const uKey = currentUser?.email || 'local_user';
-
-    const confirmMsg = isNextSeason
-      ? `Voulez-vous lancer la ${seasonLabel} (${selectedLeague === 'ligue1' ? 'Ligue 1' : 'Ligue Principale'}) ?\n\n- Vous conservez vos transferts et évolutions actuels.\n- Tous les joueurs prennent +1 an d'âge.\n- Les joueurs prêtés retournent dans leur club d'origine.\n- ${totalJournees} Journées programmées.`
-      : `Voulez-vous RÉINITIALISER complètement votre tournoi (Saison 1) ?\n\n- Tous les joueurs retrouveront leur GÉNÉRAL DE DÉPART et leur club initial.`;
-
-    if (!window.confirm(confirmMsg)) return;
-
-    try {
-      if (!isNextSeason) {
-        localStorage.removeItem(`local_teams_${uKey}`);
-        localStorage.removeItem(`local_players_${uKey}`);
-        localStorage.removeItem(`local_matches_${uKey}`);
-        localStorage.removeItem(`local_events_${uKey}`);
-        localStorage.removeItem(`local_transfers_${uKey}`);
-        localStorage.removeItem(`local_season_${uKey}`);
-        localStorage.removeItem(`local_journee_${uKey}_custom`);
-        localStorage.removeItem(`local_journee_${uKey}_ligue1`);
-        localStorage.removeItem(`local_evolutions_${uKey}`);
-        await fetchUserData(uKey);
-        return;
-      }
-
-      const cleanedPlayers = (players || []).map(p => {
-        const newAge = (p.age || 24) + 1;
-        const currentGen = p.general || 75;
-        const newVal = calculateMarketValue(currentGen, newAge);
-
-        if (p.is_loan && p.loan_parent_id) {
-          const originalTeam = (teams || []).find(t => t && String(t.id) === String(p.loan_parent_id));
-          return {
-            ...p,
-            age: newAge,
-            valeur_marchande: newVal,
-            equipe_id: p.loan_parent_id,
-            teams: originalTeam,
-            is_loan: false,
-            loan_parent_id: null
-          };
-        }
-        return {
-          ...p,
-          age: newAge,
-          valeur_marchande: newVal
-        };
-      });
-
-      setPlayers(cleanedPlayers);
-
-      const fixtures = buildRoundRobinFixtures(currentLeagueTeamsList, uKey, targetSeason, selectedLeague);
-      const remainingMatches = (matches || []).filter(
-        m => m && ((m.saison || 1) !== targetSeason || (m.ligue_id || 'custom') !== selectedLeague)
-      );
-      setMatches([...remainingMatches, ...fixtures]);
-
-      showNotif(`${seasonLabel} lancée ! +1 an pour tous les joueurs & retour des prêts.`);
-
-      setSeasonFilter(targetSeason);
-      setJourneeFilter(1);
-      setSeasonEvolutions({});
-
-      localStorage.setItem(`local_season_${uKey}`, targetSeason);
-      localStorage.setItem(`local_journee_${uKey}_${selectedLeague}`, 1);
-      localStorage.setItem(`local_evolutions_${uKey}`, JSON.stringify({}));
-    } catch (err) {
-      alert(`Erreur génération : ${err.message}`);
-    }
-  }
-
   // --- SAUVEGARDE RÉELLE DU JOUEUR EN BASE DE DONNÉES ---
   async function handleUpdatePlayer(e) {
     e.preventDefault();
@@ -1708,6 +1267,98 @@ export default function App() {
     setPlayers(prev => [...prev, createdPlayer]);
     showNotif(`Joueur "${newPlayer.nom}" ajouté (${formatMoney(val)}) !`);
     setNewPlayer({ nom: '', equipe_id: newPlayer.equipe_id, numero: 10, general: 75, valeur: 10000000, age: 22, poste: 'MC' });
+  }
+
+  async function handleTransferPlayer(e) {
+    e.preventDefault();
+    if (!transferFromTeamId || !transferPlayerId || !transferToTeamId) {
+      showNotif("Veuillez sélectionner le club d'origine, le joueur et le club de destination.");
+      return;
+    }
+
+    if (transferFromTeamId === transferToTeamId) {
+      showNotif("Le club de destination doit être différent du club d'origine !");
+      return;
+    }
+
+    const sellerCount = (players || []).filter(p => p && String(p.equipe_id) === String(transferFromTeamId)).length;
+    if (sellerCount <= 18) {
+      showNotif("Ce club a 18 joueurs ou moins : il ne peut plus céder de joueur !");
+      return;
+    }
+
+    const selectedPlayer = (players || []).find(p => p && p.id === transferPlayerId);
+    if (!selectedPlayer) return;
+
+    const playerPos = selectedPlayer.poste || 'MC';
+    const samePosCount = (players || []).filter(
+      p => p && String(p.equipe_id) === String(transferFromTeamId) && (p.poste || 'MC') === playerPos
+    ).length;
+
+    if (samePosCount <= 1) {
+      showNotif(`Impossible de transférer ${selectedPlayer.nom} : c'est le seul joueur au poste de ${playerPos} dans ce club !`);
+      return;
+    }
+
+    const buyerCount = (players || []).filter(p => p && String(p.equipe_id) === String(transferToTeamId)).length;
+    if (buyerCount >= 28) {
+      showNotif("Ce club a atteint le quota max de 28 joueurs : recrutement impossible !");
+      return;
+    }
+
+    const destTeam = (teams || []).find(t => t && String(t.id) === String(transferToTeamId));
+    const origTeam = (teams || []).find(t => t && String(t.id) === String(transferFromTeamId));
+
+    setTransferLoading(true);
+
+    const isLoan = transferType === 'pret';
+    const fee = isLoan ? 0 : parseInt(transferFee, 10);
+
+    const updatedPlayers = (players || []).map(p => {
+      if (p && p.id === transferPlayerId) {
+        return {
+          ...p,
+          equipe_id: transferToTeamId,
+          valeur_marchande: fee,
+          teams: destTeam,
+          is_loan: isLoan,
+          loan_parent_id: isLoan ? (p.loan_parent_id || transferFromTeamId) : null
+        };
+      }
+      return p;
+    });
+
+    const updatedTeamsList = (teams || []).map(t => {
+      if (t && String(t.id) === String(transferFromTeamId)) {
+        const patchedIds = patchLineupOnPlayerDeparture(t, selectedPlayer, updatedPlayers);
+        return { ...t, lineup_ids: patchedIds };
+      }
+      return t;
+    });
+
+    const newTransfer = {
+      id: Date.now(),
+      player_id: transferPlayerId,
+      old_team_id: transferFromTeamId,
+      new_team_id: transferToTeamId,
+      fee: fee,
+      type: transferType,
+      user_id: currentUser?.email || 'local_user',
+      players: selectedPlayer,
+      old_team: origTeam,
+      new_team: destTeam
+    };
+
+    setPlayers(updatedPlayers);
+    setTeams(updatedTeamsList);
+    setTransfers(prev => [newTransfer, ...prev]);
+
+    showNotif(`${isLoan ? 'Prêt' : 'Transfert'} de ${selectedPlayer.nom} validé !`);
+    setTransferFromTeamId('');
+    setTransferPlayerId('');
+    setTransferToTeamId('');
+    setTransferFee(10000000);
+    setTransferLoading(false);
   }
 
   async function handleCancelTransfer(transfer) {
@@ -1939,17 +1590,6 @@ export default function App() {
     setSelectedSlot(null);
   }
 
-  const formationConfig = FORMATIONS[currentFormation] || FORMATIONS['4-3-3'];
-
-  const pitchGK = [{ p: teamLineupPlayers[0], idx: 0 }];
-  const pitchDEF = teamLineupPlayers.slice(1, 1 + formationConfig.def).map((p, i) => ({ p, idx: 1 + i }));
-  const pitchMID = teamLineupPlayers.slice(1 + formationConfig.def, 1 + formationConfig.def + formationConfig.mid).map((p, i) => ({ p, idx: 1 + formationConfig.def + i }));
-  const pitchATT = teamLineupPlayers.slice(1 + formationConfig.def + formationConfig.mid, 11).map((p, i) => ({ p, idx: 1 + formationConfig.def + formationConfig.mid + i }));
-
-  const pitchAvgGen = teamLineupPlayers.length > 0
-    ? Math.round(teamLineupPlayers.reduce((acc, p) => acc + (p?.general || 75), 0) / teamLineupPlayers.length)
-    : 0;
-
   const PitchPlayerSlot = ({ player, globalIndex }) => {
     const isSelected = selectedSlot?.type === 'pitch' && selectedSlot?.index === globalIndex;
 
@@ -1999,6 +1639,17 @@ export default function App() {
       </div>
     );
   };
+
+  const formationConfig = FORMATIONS[currentFormation] || FORMATIONS['4-3-3'];
+
+  const pitchGK = [{ p: teamLineupPlayers[0], idx: 0 }];
+  const pitchDEF = teamLineupPlayers.slice(1, 1 + formationConfig.def).map((p, i) => ({ p, idx: 1 + i }));
+  const pitchMID = teamLineupPlayers.slice(1 + formationConfig.def, 1 + formationConfig.def + formationConfig.mid).map((p, i) => ({ p, idx: 1 + formationConfig.def + i }));
+  const pitchATT = teamLineupPlayers.slice(1 + formationConfig.def + formationConfig.mid, 11).map((p, i) => ({ p, idx: 1 + formationConfig.def + formationConfig.mid + i }));
+
+  const pitchAvgGen = teamLineupPlayers.length > 0
+    ? Math.round(teamLineupPlayers.reduce((acc, p) => acc + (p?.general || 75), 0) / teamLineupPlayers.length)
+    : 0;
 
   const homeEvents = selectedMatch 
     ? (selectedMatchEvents || [])
