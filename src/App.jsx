@@ -181,6 +181,7 @@ export default function App() {
   const [authPassword, setAuthPassword] = useState('');
   const [authError, setAuthError] = useState('');
 
+  // MULTI-LIGUES
   const [selectedLeague, setSelectedLeague] = useState('custom');
 
   const [tab, setTab] = useState('classement');
@@ -232,7 +233,7 @@ export default function App() {
 
   const isAdmin = currentUser?.email?.trim().toLowerCase() === ADMIN_EMAIL.toLowerCase();
 
-  // --- VARIABLES DÉRIVÉES ---
+  // --- VARIABLES DÉRIVÉES ET FILTRAGE ---
   const currentLeagueTeams = (teams || []).filter(t => t && (t.ligue_id || 'custom') === selectedLeague);
 
   const seasonMatches = (matches || []).filter(
@@ -401,7 +402,7 @@ export default function App() {
     }
   }, [seasonEvolutions, loading, currentUser]);
 
-  // --- ACTIONS & FONCTIONS LOGIQUES ---
+  // --- GESTIONNAIRES DE FORMULAIRE ET FONCTIONS ---
   function showNotif(msg) {
     setNotification(msg);
     setTimeout(() => setNotification(''), 4500);
@@ -426,6 +427,21 @@ export default function App() {
       if (currentUser) localStorage.setItem(`local_journee_${currentUser.email}_${selectedLeague}`, nextJ);
     } else {
       showNotif("Vous êtes sur la dernière journée de cette saison !");
+    }
+  }
+
+  function handleFromTeamChange(e) {
+    const newFromTeamId = e.target.value;
+    setTransferFromTeamId(newFromTeamId);
+    setTransferPlayerId('');
+  }
+
+  function handlePlayerSelectChange(e) {
+    const selectedId = e.target.value;
+    setTransferPlayerId(selectedId);
+    const playerObj = (players || []).find(p => p && p.id === selectedId);
+    if (playerObj && playerObj.valeur_marchande) {
+      setTransferFee(playerObj.valeur_marchande);
     }
   }
 
@@ -882,10 +898,10 @@ export default function App() {
       if (m.equipe_exterieur_id && teamRecords[m.equipe_exterieur_id]) {
         teamRecords[m.equipe_exterieur_id].matchCount++;
         teamRecords[m.equipe_exterieur_id].goalsConceded += (m.score_domicile || 0);
-        if (m.score_domicile === 0) teamRecords[m.equipe_exterieur_id].cleanSheets++;
-        if (m.score_exterieur > m.score_domicile) teamRecords[m.equipe_exterieur_id].wins++;
-        else if (m.score_exterieur < m.score_domicile) teamRecords[m.equipe_exterieur_id].losses++;
-        else teamRecords[m.equipe_exterieur_id].draws++;
+        if (m.score_domicile === 0) teamRecords[m.equipe_domicile_id].cleanSheets++;
+        if (m.score_exterieur > m.score_domicile) teamRecords[m.equipe_domicile_id].wins++;
+        else if (m.score_exterieur < m.score_domicile) teamRecords[m.equipe_domicile_id].losses++;
+        else teamRecords[m.equipe_domicile_id].draws++;
       }
     });
 
@@ -2234,6 +2250,7 @@ export default function App() {
           </div>
 
           <div className="flex flex-wrap items-center gap-3">
+            {/* SÉLECTEUR DE LIGUE ACTIF */}
             <div className="flex items-center bg-slate-950 p-1 rounded-xl border border-slate-800">
               <button
                 onClick={() => {
@@ -2241,7 +2258,7 @@ export default function App() {
                   const savedJ = localStorage.getItem(`local_journee_${currentUser.email}_custom`);
                   setJourneeFilter(savedJ ? parseInt(savedJ, 10) : 1);
                 }}
-                className={`px-3 py-1.5 rounded-lg text-xs font-black transition-all ${
+                className={`px-3 py-1.5 rounded-lg text-xs font-black transition-all cursor-pointer ${
                   selectedLeague === 'custom' ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-400 hover:text-white'
                 }`}
               >
@@ -2253,7 +2270,7 @@ export default function App() {
                   const savedJ = localStorage.getItem(`local_journee_${currentUser.email}_ligue1`);
                   setJourneeFilter(savedJ ? parseInt(savedJ, 10) : 1);
                 }}
-                className={`px-3 py-1.5 rounded-lg text-xs font-black transition-all ${
+                className={`px-3 py-1.5 rounded-lg text-xs font-black transition-all cursor-pointer ${
                   selectedLeague === 'ligue1' ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-400 hover:text-white'
                 }`}
               >
@@ -2267,7 +2284,7 @@ export default function App() {
                   <button
                     key={item.id}
                     onClick={() => setTab(item.id)}
-                    className={`px-3 sm:px-4 py-2 rounded-lg text-xs sm:text-sm font-semibold transition-all duration-200 ${
+                    className={`px-3 sm:px-4 py-2 rounded-lg text-xs sm:text-sm font-semibold transition-all duration-200 cursor-pointer ${
                       tab === item.id
                         ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/30'
                         : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50'
@@ -2746,7 +2763,7 @@ export default function App() {
                   <button
                     type="button"
                     onClick={() => setTransferType('achat')}
-                    className={`py-2 text-xs font-extrabold rounded-lg transition-all ${
+                    className={`py-2 text-xs font-extrabold rounded-lg transition-all cursor-pointer ${
                       transferType === 'achat' ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-400 hover:text-white'
                     }`}
                   >
@@ -2755,7 +2772,7 @@ export default function App() {
                   <button
                     type="button"
                     onClick={() => setTransferType('pret')}
-                    className={`py-2 text-xs font-extrabold rounded-lg transition-all ${
+                    className={`py-2 text-xs font-extrabold rounded-lg transition-all cursor-pointer ${
                       transferType === 'pret' ? 'bg-emerald-600 text-white shadow-md' : 'text-slate-400 hover:text-white'
                     }`}
                   >
