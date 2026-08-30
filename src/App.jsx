@@ -34,6 +34,17 @@ const POSITION_ORDER = {
   'AD': 9, 'AG': 10, 'SA': 11, 'BU': 12, 'AT': 12
 };
 
+function formatMoney(amount) {
+  const num = parseInt(amount, 10) || 0;
+  if (num >= 1000000) {
+    return `${(num / 1000000).toFixed(1)} M€`;
+  }
+  if (num >= 1000) {
+    return `${(num / 1000).toFixed(0)} k€`;
+  }
+  return `${num} €`;
+}
+
 function getPositionRank(posteStr) {
   if (!posteStr) return 99;
   const code = String(posteStr).split(' - ')[0].trim().toUpperCase();
@@ -85,6 +96,26 @@ function generateInjuryDuration() {
   if (roll < 94) return { label: `${Math.floor(Math.random() * 3) + 4} matchs`, matches: Math.floor(Math.random() * 3) + 4 };
   if (roll < 99) return { label: `${Math.floor(Math.random() * 6) + 7} matchs`, matches: Math.floor(Math.random() * 6) + 7 };
   return { label: 'Fin de saison', matches: 38 };
+}
+
+function renderEventBadge(ev) {
+  if (!ev) return null;
+  switch (ev.type) {
+    case 'but':
+      return <span className="bg-amber-500/20 text-amber-300 font-bold px-2 py-0.5 rounded text-[10px] border border-amber-500/30">⚽ BUT</span>;
+    case 'passe':
+      return <span className="bg-indigo-500/20 text-indigo-300 font-bold px-2 py-0.5 rounded text-[10px] border border-indigo-500/30">🎯 PASSE</span>;
+    case 'carton_jaune':
+      return <span className="bg-yellow-500/20 text-yellow-300 font-bold px-2 py-0.5 rounded text-[10px] border border-yellow-500/30">🟨 JAUNE</span>;
+    case 'carton_rouge':
+      return <span className="bg-rose-500/20 text-rose-300 font-bold px-2 py-0.5 rounded text-[10px] border border-rose-500/30">🟥 ROUGE</span>;
+    case 'remplacement':
+      return <span className="bg-emerald-500/20 text-emerald-300 font-bold px-2 py-0.5 rounded text-[10px] border border-emerald-500/30">🔄 {ev.detail || 'Remplacement'}</span>;
+    case 'blessure':
+      return <span className="bg-red-500/20 text-red-300 font-bold px-2 py-0.5 rounded text-[10px] border border-red-500/30">🏥 {ev.detail || 'Blessure'}</span>;
+    default:
+      return null;
+  }
 }
 
 function compressImage(file, maxSize = 128) {
@@ -174,7 +205,6 @@ const FORMATIONS = {
   '3-4-3': { name: '3-4-3 (Ultra-Offensif)', def: 3, mid: 4, att: 3 }
 };
 
-// Clubs Ligue 1 par défaut avec AS Saint-Etienne
 const DEFAULT_L1_CLUBS = [
   'Paris Saint-Germain', 'Olympique de Marseille', 'AS Monaco', 'Olympique Lyonnais',
   'LOSC Lille', 'RC Lens', 'RC Strasbourg', 'FC Nantes', 'Paris FC', 'OGC Nice',
@@ -183,7 +213,6 @@ const DEFAULT_L1_CLUBS = [
 ];
 
 export default function App() {
-  // 1. Initialisation directe depuis LocalStorage (Zéro délai au démarrage)
   const [currentUser, setCurrentUser] = useState(() => {
     try {
       const u = localStorage.getItem('session_user');
@@ -209,7 +238,6 @@ export default function App() {
   const [notification, setNotification] = useState('');
   const [simulating, setSimulating] = useState(false);
   const [savingProgress, setSavingProgress] = useState(false);
-  const [loading, setLoading] = useState(false);
 
   const [seasonEvolutions, setSeasonEvolutions] = useState({});
 
@@ -247,7 +275,41 @@ export default function App() {
 
   const isAdmin = currentUser?.email?.trim().toLowerCase() === ADMIN_EMAIL.toLowerCase();
 
-  // 2. Variables dérivées
+  const getTeamStartersAndBench = (team) => {
+    if (!team) return { starters: [], bench: [] };
+    const roster = (players || []).filter(p => p && String(p.equipe_id) === String(team.id));
+    let lineIds = team.lineup_ids;
+    if (typeof lineIds === 'string') {
+      try { lineIds = JSON.parse(lineIds); } catch (e) { lineIds = []; }
+    }
+    if (Array.isArray(lineIds) && lineIds.length > 0) {
+      const starters = lineIds.map(id => roster.find(p => String(p.id) === String(id))).filter(Boolean);
+      const startersSet = new Set(starters.map(p => p.id));
+      const bench = roster.filter(p => !startersSet.has(p.id));
+      return { starters, bench };
+    }
+    const sorted = [...roster].sort((a, b) => (b.general || 0) - (a.general || 0));
+    return {
+      starters: sorted.slice(0, 11),
+      bench: sorted.slice(11)
+    };
+  };
+
+  const getSortedTeamPlayers = (teamId) => {
+    const roster = (players || []).filter(p => p && String(p.equipe_id) === String(teamId));
+    return roster.map(p => {
+      const buts = (matchEvents || []).filter(e => e && String(e.player_id) === String(p.id) && e.type === 'but' && (e.saison || 1) === (parseInt(seasonFilter, 10) || 1)).length;
+      const passes = (matchEvents || []).filter(e => e && String(e.player_id) === String(p.id) && e.type === 'passe' && (e.saison || 1) === (parseInt(seasonFilter, 10) || 1)).length;
+      return { ...p, buts, passes_decisives: passes };
+    }).sort((a, b) => getPositionRank(a.poste) - getPositionRank(b.poste) || (b.general || 0) - (a.general || 0));
+  };
+
+  useEffect(() => {
+    if (currentUser?.email) {
+      fetchUserData(currentUser.email);
+    }
+  }, [currentUser?.email]);
+
   const currentLeagueTeams = (teams || []).filter(t => t && (t.ligue_id || 'custom') === selectedLeague);
 
   const seasonMatches = (matches || []).filter(
@@ -332,7 +394,6 @@ export default function App() {
     return count < 28;
   });
 
-  // 3. Actions
   const showNotif = (msg) => {
     setNotification(msg);
     setTimeout(() => setNotification(''), 4500);
@@ -511,7 +572,6 @@ export default function App() {
     showNotif(`Calendrier généré pour ${selectedLeague === 'ligue1' ? 'la Ligue 1' : 'la Ligue Principale'} (Saison ${s}) !`);
   };
 
-  // --- CHARGEMENT INSTANTANÉ SANS BLOCAGE ---
   const fetchUserData = (userEmail) => {
     const uKey = userEmail;
 
@@ -533,12 +593,10 @@ export default function App() {
     let currentTransfers = Array.isArray(localTransfers) ? localTransfers : [];
     let currentEvolutions = (localEvolutions && typeof localEvolutions === 'object') ? localEvolutions : {};
 
-    // Si aucune équipe en local, on génère les équipes par défaut immédiatement
     if (currentTeams.length === 0) {
       const generatedTeams = [];
       const generatedPlayers = [];
 
-      // Ligue 1
       DEFAULT_L1_CLUBS.forEach((nom, idx) => {
         const teamId = `t_l1_${idx}`;
         generatedTeams.push({ id: teamId, nom, logo_url: '', formation: '4-3-3', points: 0, ligue_id: 'ligue1' });
@@ -595,7 +653,6 @@ export default function App() {
       setJourneeFilter(firstUnfinished ? (firstUnfinished.journee || 1) : 1);
     }
 
-    // Requête API asynchrone non-bloquante pour récupérer les dernières données serveur si disponibles
     fetch(`${API_URL}/teams`).then(r => r.json()).then(serverTeams => {
       if (Array.isArray(serverTeams) && serverTeams.length > 0) {
         setTeams(serverTeams);
@@ -1435,7 +1492,6 @@ export default function App() {
     }
   };
 
-  // --- SAUVEGARDE RÉELLE DU JOUEUR ---
   const handleUpdatePlayer = (e) => {
     if (e && e.preventDefault) e.preventDefault();
     if (!editingPlayer) return;
@@ -1929,7 +1985,6 @@ export default function App() {
     setSelectedSlot(null);
   };
 
-  // --- UI RENDER ---
   const teamRoster = selectedTeam ? getSortedTeamPlayers(selectedTeam.id) : [];
 
   const formationConfig = FORMATIONS[currentFormation] || FORMATIONS['4-3-3'];
@@ -2004,7 +2059,6 @@ export default function App() {
         .sort((a, b) => (parseInt(a.minute, 10) || 0) - (parseInt(b.minute, 10) || 0))
     : [];
 
-  // 4. Si l'utilisateur n'est pas connecté
   if (!currentUser) {
     return (
       <div className="min-h-screen bg-slate-950 text-white flex items-center justify-center p-4 font-sans">
@@ -3397,7 +3451,7 @@ export default function App() {
                     <p className="text-[11px] text-slate-500 py-4 text-center italic">Aucun événement</p>
                   ) : (
                     homeEvents.map(ev => (
-                      <div key={ev.id} className="flex items-center justify-between bg-slate-900/80 px-2.5 py-1.5 rounded-xl text-xs">
+                      <div key={ev.id || `${ev.match_id}-${ev.minute}-${ev.player_id}`} className="flex items-center justify-between bg-slate-900/80 px-2.5 py-1.5 rounded-xl text-xs">
                         <div className="flex items-center gap-2 truncate">
                           <span className="font-mono text-slate-400 text-[10px] shrink-0">{ev.minute ? `${ev.minute}'` : "45'"}</span>
                           <span className="font-semibold text-white truncate">{ev.player_nom}</span>
@@ -3418,7 +3472,7 @@ export default function App() {
                     <p className="text-[11px] text-slate-500 py-4 text-center italic">Aucun événement</p>
                   ) : (
                     awayEvents.map(ev => (
-                      <div key={ev.id} className="flex items-center justify-between bg-slate-900/80 px-2.5 py-1.5 rounded-xl text-xs">
+                      <div key={ev.id || `${ev.match_id}-${ev.minute}-${ev.player_id}`} className="flex items-center justify-between bg-slate-900/80 px-2.5 py-1.5 rounded-xl text-xs">
                         <div className="flex items-center gap-2 truncate">
                           <span className="font-mono text-slate-400 text-[10px] shrink-0">{ev.minute ? `${ev.minute}'` : "45'"}</span>
                           <span className="font-semibold text-white truncate">{ev.player_nom}</span>
