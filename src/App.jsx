@@ -36,12 +36,8 @@ const POSITION_ORDER = {
 
 function formatMoney(amount) {
   const num = parseInt(amount, 10) || 0;
-  if (num >= 1000000) {
-    return `${(num / 1000000).toFixed(1)} M€`;
-  }
-  if (num >= 1000) {
-    return `${(num / 1000).toFixed(0)} k€`;
-  }
+  if (num >= 1000000) return `${(num / 1000000).toFixed(1)} M€`;
+  if (num >= 1000) return `${(num / 1000).toFixed(0)} k€`;
   return `${num} €`;
 }
 
@@ -101,20 +97,13 @@ function generateInjuryDuration() {
 function renderEventBadge(ev) {
   if (!ev) return null;
   switch (ev.type) {
-    case 'but':
-      return <span className="bg-amber-500/20 text-amber-300 font-bold px-2 py-0.5 rounded text-[10px] border border-amber-500/30">⚽ BUT</span>;
-    case 'passe':
-      return <span className="bg-indigo-500/20 text-indigo-300 font-bold px-2 py-0.5 rounded text-[10px] border border-indigo-500/30">🎯 PASSE</span>;
-    case 'carton_jaune':
-      return <span className="bg-yellow-500/20 text-yellow-300 font-bold px-2 py-0.5 rounded text-[10px] border border-yellow-500/30">🟨 JAUNE</span>;
-    case 'carton_rouge':
-      return <span className="bg-rose-500/20 text-rose-300 font-bold px-2 py-0.5 rounded text-[10px] border border-rose-500/30">🟥 ROUGE</span>;
-    case 'remplacement':
-      return <span className="bg-emerald-500/20 text-emerald-300 font-bold px-2 py-0.5 rounded text-[10px] border border-emerald-500/30">🔄 {ev.detail || 'Remplacement'}</span>;
-    case 'blessure':
-      return <span className="bg-red-500/20 text-red-300 font-bold px-2 py-0.5 rounded text-[10px] border border-red-500/30">🏥 {ev.detail || 'Blessure'}</span>;
-    default:
-      return null;
+    case 'but': return <span className="bg-amber-500/20 text-amber-300 font-bold px-2 py-0.5 rounded text-[10px] border border-amber-500/30">⚽ BUT</span>;
+    case 'passe': return <span className="bg-indigo-500/20 text-indigo-300 font-bold px-2 py-0.5 rounded text-[10px] border border-indigo-500/30">🎯 PASSE</span>;
+    case 'carton_jaune': return <span className="bg-yellow-500/20 text-yellow-300 font-bold px-2 py-0.5 rounded text-[10px] border border-yellow-500/30">🟨 JAUNE</span>;
+    case 'carton_rouge': return <span className="bg-rose-500/20 text-rose-300 font-bold px-2 py-0.5 rounded text-[10px] border border-rose-500/30">🟥 ROUGE</span>;
+    case 'remplacement': return <span className="bg-emerald-500/20 text-emerald-300 font-bold px-2 py-0.5 rounded text-[10px] border border-emerald-500/30">🔄 {ev.detail || 'Remplacement'}</span>;
+    case 'blessure': return <span className="bg-red-500/20 text-red-300 font-bold px-2 py-0.5 rounded text-[10px] border border-red-500/30">🏥 {ev.detail || 'Blessure'}</span>;
+    default: return null;
   }
 }
 
